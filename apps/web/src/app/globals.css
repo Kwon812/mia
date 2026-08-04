@@ -1,26 +1,61 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ── Project NA 디자인 토큰 ─────────────────────────────
+   계획서(docs/na-plan.html)의 에디토리얼 팔레트를 그대로 쓴다.
+   원칙: 캐릭터 대사만 세리프체. 메타데이터는 모노. 액센트는 한 색만. */
+@theme {
+  --color-paper: #edf0f2;
+  --color-card: #f7f9fa;
+  --color-ink: #141f28;
+  --color-sub: #5b6c79;
+  --color-faint: #8a9aa5;
+  --color-rule: #d2dae0;
+  --color-rule-hard: #a9b7c0;
+  --color-live: #b4671f;
+  --color-live-bg: #f6eadc;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: "Pretendard Variable", Pretendard, system-ui, sans-serif;
+  --font-serif: var(--font-gowun), "Gowun Batang", serif;
+  --font-mono: var(--font-plex-mono), "IBM Plex Mono", monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 캐릭터 아바타 애니메이션 */
+@keyframes na-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+@keyframes na-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.08);
+  }
+}
+.na-float {
+  animation: na-float 4.5s ease-in-out infinite;
+}
+.na-blink {
+  transform-origin: center;
+  animation: na-blink 5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .na-float,
+  .na-blink {
+    animation: none;
+  }
 }

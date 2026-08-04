@@ -17,7 +17,7 @@
 
 ```bash
 npm install
-cp .env.example .env.local        # Supabase 키 채우기
+cp .env.example ..env.local        # Supabase 키 채우기
 npx supabase start                # 로컬 DB (Docker) — 마이그레이션 자동 적용
 npm run dev                       # 사이트 http://localhost:3000
 npm run build -w @na/extension    # 확장 빌드 → apps/extension/dist 를 chrome://extensions 에 로드
