@@ -54,6 +54,11 @@ function registerAlarms(): void {
 
 async function registerExtensionKey(): Promise<void> {
   try {
+    // 이미 키가 있으면 절대 재발급하지 않는다 — onInstalled 는 확장 새로고침
+    // 때마다 발화하므로, 이 가드가 없으면 새로고침마다 새 유저(=캐릭터 리셋)가 된다.
+    const existing = await getExtensionKey();
+    if (existing) return;
+
     const res = await fetch(`${API_BASE}/api/register`, { method: 'POST' });
     if (!res.ok) return;
     const { extension_key } = (await res.json()) as { extension_key: string };
