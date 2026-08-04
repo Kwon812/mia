@@ -21,6 +21,19 @@ const experienceDialogueSchema = z.object({
   text: z.string().max(80), // dialogues.text 의 CHECK char_length <= 80 과 동일
 });
 
+// thread 부착 판정 — 세션 종료 시 Experience Engine 안에서 함께 결정한다
+// (계획서 11장 미결정 항목 확정: LLM 이 이미 컨텍스트를 보고 있어 호출이 늘지 않음).
+//   action='attach' → existing_thread_id 는 프롬프트에 넘긴 활성 thread 목록 중 하나.
+//                      LLM 환각으로 목록에 없는 id 를 낼 수 있으니 애플리케이션
+//                      레벨에서 재검증 후 아니면 new 로 강등한다(이 스키마는 형태만 검증).
+//   action='new'    → title 필수("Redis 캐싱 도입" 같은 작업명).
+export const experienceThreadSchema = z.object({
+  action: z.enum(['attach', 'new']),
+  existing_thread_id: z.uuid().nullable(),
+  title: z.string().min(1).nullable(),
+  completed: z.boolean(),
+});
+
 export const experienceOutputSchema = z.object({
   summary: z.string().min(1).max(100),
   detail: z.string().optional(),
@@ -29,6 +42,7 @@ export const experienceOutputSchema = z.object({
   is_first_time: z.boolean(),
   skills: z.array(experienceSkillSchema).max(10),
   dialogues: z.array(experienceDialogueSchema).min(3).max(4),
+  thread: experienceThreadSchema,
 });
 
 export type ExperienceOutput = z.infer<typeof experienceOutputSchema>;

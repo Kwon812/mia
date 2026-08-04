@@ -1,14 +1,24 @@
-// threads: 마지막 활동 시각 기준 30일간 무활동인 thread 를 abandoned 상태로 전이한다.
-// 이미 abandoned/closed 등 종료 상태인 thread 는 대상에서 제외.
-// TODO: 마지막 메시지/세션 시각 조회 -> 30일 초과 필터 -> status 업데이트 구현.
+// threads: 마지막 활동 시각 기준 30일간 무활동인 active thread 를 abandoned 상태로 전이한다.
+// 기억을 만들지 않는다 — abandoned 는 성격 축(완결형↔탐색형)의 입력일 뿐이다(계획서 03/06장).
+// 대상은 전체 유저의 active thread 중 정지 기준을 넘긴 것 — 이 잡은 특정 유저군으로
+// 좁힐 이유가 없는 "잡별 자연 대상"이다.
 
-import type { Db } from "@na/db";
+import { and, eq, lt } from 'drizzle-orm';
+import { threads, type Db } from '@na/db';
+
+const ABANDON_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function markAbandonedThreads(db: Db): Promise<void> {
-  console.log("[threads] start");
+  console.log('[threads] start');
 
-  // TODO: 30일 이상 무활동 thread 조회 (마지막 메시지/세션 시각 기준)
-  // TODO: status = 'abandoned' 로 일괄 업데이트
+  const cutoff = new Date(Date.now() - ABANDON_AFTER_MS);
 
-  console.log("[threads] done");
+  const abandoned = await db
+    .update(threads)
+    .set({ status: 'abandoned' })
+    .where(and(eq(threads.status, 'active'), lt(threads.lastActivityAt, cutoff)))
+    .returning({ id: threads.id });
+
+  console.log(`[threads] abandoned ${abandoned.length} thread(s) (cutoff=${cutoff.toISOString()})`);
+  console.log('[threads] done');
 }
