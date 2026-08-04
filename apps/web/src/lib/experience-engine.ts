@@ -42,11 +42,24 @@ const MODEL = 'claude-haiku-4-5';
 
 const TOOL_NAME = 'record_experience';
 
-// v1 — 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
-const SYSTEM_PROMPT_V1 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
+// v2 — compressed_log 에 검색 쿼리(queries)와 페이지 제목(segments[].title),
+// 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
+// (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
+// 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
+const SYSTEM_PROMPT_V2 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
+
+compressed_log 에는 구간(segments)마다 도메인·카테고리·시간 외에 그 구간에서 관측된
+페이지 제목(title)과 경로 예시(paths)가, 그리고 세션 전체의 검색어 목록(queries)이
+들어있다. 검색 쿼리는 사용자가 무엇을 궁금해했는지, 페이지 제목은 무엇을 읽었는지
+알려준다. 이걸 근거로 summary·detail·skills 를 "github.com 에 90분 머물렀다" 같은
+막연한 도메인 요약이 아니라 구체적인 내용으로 만들어라(예: 검색어가
+"redis cache invalidation" 이고 이어서 GitHub 이슈·MDN 페이지 제목이 보이면 "Redis
+캐시 무효화 방법을 찾아봤다"처럼). 단, title/paths 에 개인정보(이름·계좌번호·주문번호
+등으로 보이는 문자열)가 보이면 그 값을 요약·detail 에 그대로 옮기지 말고 일반화해서
+서술한다.
 
 기존 컨텍스트를 반드시 참고해서 다음 두 가지를 구분해야 한다.
   "TypeScript로 기능을 구현했다"   ← 기존 스킬 목록에 이미 있던 것 (늘 하던 것)
@@ -409,7 +422,7 @@ export async function processSession(sessionId: string, userId: string): Promise
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 1024,
-      system: SYSTEM_PROMPT_V1,
+      system: SYSTEM_PROMPT_V2,
       tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [
