@@ -1,0 +1,1 @@
+(()=>{if(location.pathname==="/connect")try{chrome.runtime.sendMessage({type:"GET_EXTENSION_KEY"},e=>{chrome.runtime.lastError||!e?.key||fetch("/api/connect",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({extension_key:e.key})}).then(t=>{t.ok&&(location.href="/")})})}catch{}})();

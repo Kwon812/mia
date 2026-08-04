@@ -56,6 +56,9 @@ async function registerExtensionKey(): Promise<void> {
     if (!res.ok) return;
     const { extension_key } = (await res.json()) as { extension_key: string };
     await db.meta.put({ key: 'extensionKey', value: extension_key });
+    // chrome.storage.local 에도 미러링 — 사이트 /connect 페이지의 수동 안내
+    // (콘솔에서 키 확인)가 Dexie 보다 훨씬 쉬워서다. 진실은 meta 쪽.
+    await chrome.storage.local.set({ extensionKey: extension_key });
   } catch {
     // 실패해도 죽지 않는다 — retry 알람 핸들러(handleRetry)가 미등록 상태를
     // 감지해 재시도하는 것으로 커버된다는 전제.
@@ -282,7 +285,16 @@ function domainOf(url: string | undefined): string {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // 사이트 자동 연결 — connect-content.ts(사이트의 /connect 페이지에만 주입)가
+  // 키를 요청하면 넘겨준다. 키는 Dexie meta 에 있어 content script 가 직접 못
+  // 읽는다(IndexedDB 는 오리진 격리). 받은 쪽은 same-origin POST /api/connect 로
+  // httpOnly 쿠키를 세팅한다 — localStorage 에 키를 두지 않는 이유는 XSS 방어.
+  if (message?.type === 'GET_EXTENSION_KEY') {
+    void getExtensionKey().then((key) => sendResponse({ key: key ?? null }));
+    return true; // 비동기 sendResponse 유지
+  }
+
   if (message?.type !== 'ACTIVITY') return;
 
   void db.rawEvents.add({

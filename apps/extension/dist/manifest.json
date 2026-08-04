@@ -13,6 +13,11 @@
       "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://localhost:3000/connect*"],
+      "js": ["connect-content.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {
