@@ -5,9 +5,14 @@
 // processSession(sessionId, userId) 를 조용히 호출한다. 실패해도 API 응답에는
 // 영향이 없고, sessions.processed_at 이 NULL 로 남아 재처리 대상이 된다
 // (계획서 05장 "Experience Engine").
+//
+// thread 부착도 이 안에서 함께 결정한다(계획서 11장 미결정 항목 확정) — LLM 이
+// 이미 세션 컨텍스트를 보고 있으니 "이 경험이 기존 작업의 연장인지" 판단에
+// 별도 호출이 필요 없다. 기억(memories) 생성은 LLM 호출 없이 규칙 기반이다.
 // ============================================================
 
 import 'server-only';
+import { randomUUID } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import {
@@ -18,11 +23,13 @@ import {
   experienceSkills,
   experiences,
   ingestFailures,
+  memories,
   sessions,
+  threads,
   userSkills,
   users,
 } from '@na/db';
-import { experienceOutputSchema, type ExperienceOutput } from '@na/shared';
+import { calculateLevel, experienceOutputSchema, type ExperienceOutput } from '@na/shared';
 import { db } from './db';
 import { calculateMemoryScore, type RecentExperienceSummary } from './memory-score';
 
@@ -39,7 +46,7 @@ const TOOL_NAME = 'record_experience';
 const SYSTEM_PROMPT_V1 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
-이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건)를 함께 받는다.
+이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
 
 기존 컨텍스트를 반드시 참고해서 다음 두 가지를 구분해야 한다.
   "TypeScript로 기능을 구현했다"   ← 기존 스킬 목록에 이미 있던 것 (늘 하던 것)
@@ -56,7 +63,12 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
   이름으로 만들어내지 않는다.
 - dialogues: 아침(morning)·오후(afternoon)·저녁(evening)·밤(night) 각 시간대에 캐릭터가
   사용자에게 건넬 반말 한 마디. 이번 세션 내용을 반영한 자연스러운 한국어 반말으로,
-  각 80자를 넘기지 않는다.`;
+  각 80자를 넘기지 않는다.
+- thread: 이 경험이 "진행 중인 작업 목록"에 있는 기존 작업의 연장이면
+  action="attach" 로 하고 existing_thread_id 에 그 목록에 있는 id 를 그대로 적는다
+  (목록에 없는 id 를 만들어내지 않는다). 새로운 작업이면 action="new" 로 하고
+  title 에 그 작업을 부르는 짧은 명사구를 적는다("Redis 캐싱 도입" 같은). completed 는
+  이번 경험으로 그 작업이 완결됐다고 볼 수 있으면 true — 애매하면 false.`;
 
 // strict: true 로 스키마 위반 자체를 막는다. 그래도 최종 검증은 항상
 // experienceOutputSchema.safeParse 로 한다 (weight 범위 등 strict 가 못 잡는 제약도 있다).
@@ -116,33 +128,53 @@ const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
           additionalProperties: false,
         },
       },
+      thread: {
+        type: 'object',
+        description:
+          '이 경험이 기존 진행 중 작업(thread)의 연장인지, 새 작업인지 판단한 결과.',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['attach', 'new'],
+            description:
+              'attach: "진행 중인 작업 목록"에 있는 기존 작업의 연장. new: 새로운 작업의 시작.',
+          },
+          existing_thread_id: {
+            anyOf: [{ type: 'string' }, { type: 'null' }],
+            description:
+              'action이 attach일 때 "진행 중인 작업 목록"에서 고른 thread의 id 를 그대로 적는다. new일 때는 null.',
+          },
+          title: {
+            anyOf: [{ type: 'string' }, { type: 'null' }],
+            description:
+              'action이 new일 때 이 작업을 부르는 짧은 명사구 제목("Redis 캐싱 도입" 같은). attach일 때는 null.',
+          },
+          completed: {
+            type: 'boolean',
+            description: '이 경험으로 그 작업이 완결됐다고 볼 수 있는가.',
+          },
+        },
+        required: ['action', 'existing_thread_id', 'title', 'completed'],
+        additionalProperties: false,
+      },
     },
-    required: ['summary', 'category', 'outcome', 'is_first_time', 'skills', 'dialogues'],
+    required: ['summary', 'category', 'outcome', 'is_first_time', 'skills', 'dialogues', 'thread'],
     additionalProperties: false,
   },
 };
 
 // ------------------------------------------------------------
-// 캐릭터 레벨 공식 — 계획서 06장
-//   레벨 = min(1 + floor(sqrt(경험 수 * 고유 스킬 수)), floor(가입 후 일수 / 3) + 1)
-//
-// 주의: 이 공식은 (아직 미구현인) 야간 배치의 레벨 재계산과 반드시 동일하게
-// 유지해야 한다. 한쪽만 고치면 세션 종료 시 레벨과 야간 배치 후 레벨이
-// 어긋난다. 상수·계수는 튜닝 대상이며, 바꿀 때는 두 곳을 함께 바꾼다.
+// Memory Engine — thread 완결과 별개로 memory_score 가 이 임계값을 넘으면
+// 'new_skill' 또는 'comeback' 트리거로 memories 를 하나 더 남긴다.
+// 어느 트리거인지는 breakdown 에서 어느 규칙이 발동했는지로 정한다.
 // ------------------------------------------------------------
-const LEVEL_BASE = 1;
-const LEVEL_SIGNUP_DIVISOR_DAYS = 3;
-const DAY_MS = 24 * 60 * 60 * 1000;
+const MEMORY_SCORE_THRESHOLD = 80;
 
-function calculateCharacterLevel(input: {
-  experienceCount: number;
-  uniqueSkillCount: number;
-  daysSinceSignup: number;
-}): number {
-  const byActivity = LEVEL_BASE + Math.floor(Math.sqrt(input.experienceCount * input.uniqueSkillCount));
-  const bySignupAge = Math.floor(input.daysSinceSignup / LEVEL_SIGNUP_DIVISOR_DAYS) + 1;
-  return Math.min(byActivity, bySignupAge);
+function clampImportance(score: number): number {
+  return Math.min(10, Math.max(1, Math.round(score / 10)));
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // ------------------------------------------------------------
 // category → user_skills.domain 간단 매핑. 애매하면 'life'.
@@ -230,10 +262,25 @@ interface RecentExperienceRow {
   outcome: string | null;
 }
 
+interface ActiveThreadRow {
+  id: string;
+  title: string;
+  category: string;
+  experienceCount: number;
+}
+
+function buildActiveThreadsList(activeThreads: ActiveThreadRow[]): string {
+  if (activeThreads.length === 0) return '(진행 중인 작업 없음)';
+  return activeThreads
+    .map((t, i) => `${i + 1}. id=${t.id} · "${t.title}" (카테고리: ${t.category}, 경험 ${t.experienceCount}건)`)
+    .join('\n');
+}
+
 function buildUserMessage(
   session: SessionRow,
   existingSkills: ExistingSkillRow[],
   recentExperiences: RecentExperienceRow[],
+  activeThreads: ActiveThreadRow[],
 ): string {
   const skillsList =
     existingSkills.length > 0
@@ -252,6 +299,9 @@ function buildUserMessage(
     '',
     '### 최근 경험 3건 (최신순)',
     recentList,
+    '',
+    '### 진행 중인 작업(thread) 목록 (최근 활동순, 최대 5개)',
+    buildActiveThreadsList(activeThreads),
     '',
     '## 이번 세션',
     `- 카테고리: ${session.primaryCategory}`,
@@ -333,6 +383,19 @@ export async function processSession(sessionId: string, userId: string): Promise
 
     const [userRow] = await db.select({ createdAt: users.createdAt }).from(users).where(eq(users.id, userId)).limit(1);
 
+    // 활성 thread 최대 5개 — "이 경험이 기존 진행 중 작업의 연장인지" 판단용 컨텍스트.
+    const activeThreadRows = await db
+      .select({
+        id: threads.id,
+        title: threads.title,
+        category: threads.category,
+        experienceCount: threads.experienceCount,
+      })
+      .from(threads)
+      .where(and(eq(threads.userId, userId), eq(threads.status, 'active')))
+      .orderBy(desc(threads.lastActivityAt))
+      .limit(5);
+
     // 3. LLM 1회 호출 — structured output 은 tool use(단일 툴 강제) 방식.
     const client = new Anthropic();
 
@@ -352,7 +415,7 @@ export async function processSession(sessionId: string, userId: string): Promise
       messages: [
         {
           role: 'user',
-          content: buildUserMessage(sessionForPrompt, existingSkillRows, recentExperienceRows),
+          content: buildUserMessage(sessionForPrompt, existingSkillRows, recentExperienceRows, activeThreadRows),
         },
       ],
     });
@@ -388,6 +451,21 @@ export async function processSession(sessionId: string, userId: string): Promise
     const hasNewSkill = dedupedSkills.some((s) => !existingSkillNames.has(s.name));
     const primarySkillName = dedupedSkills.length > 0 ? [...dedupedSkills].sort((a, b) => b.weight - a.weight)[0].name : null;
 
+    // thread 부착 판정 — LLM 환각 방어: 목록에 없는 existing_thread_id 면 new 로 강등.
+    const activeThreadsById = new Map(activeThreadRows.map((t) => [t.id, t]));
+    let threadAction: 'attach' | 'new' = output.thread.action;
+    let attachTargetId = output.thread.existing_thread_id;
+    if (threadAction === 'attach' && (!attachTargetId || !activeThreadsById.has(attachTargetId))) {
+      threadAction = 'new';
+      attachTargetId = null;
+    }
+
+    const threadId = threadAction === 'new' ? randomUUID() : attachTargetId!;
+    const threadTitle =
+      threadAction === 'new'
+        ? output.thread.title?.trim() || output.summary.slice(0, 100)
+        : (activeThreadsById.get(threadId)?.title ?? output.summary.slice(0, 100));
+
     // 6. Memory Engine 점수 (순수 함수, LLM 재호출 없음)
     const daysSinceLastExperience =
       recentExperienceRows.length > 0
@@ -399,7 +477,7 @@ export async function processSession(sessionId: string, userId: string): Promise
       primarySkillName: primarySkillByExperienceId.get(e.id) ?? null,
     }));
 
-    const memoryScore = calculateMemoryScore({
+    const memoryScoreResult = calculateMemoryScore({
       hasNewSkill,
       isFirstTime: output.is_first_time,
       daysSinceLastExperience,
@@ -415,23 +493,44 @@ export async function processSession(sessionId: string, userId: string): Promise
     const domain = mapCategoryToDomain(output.category);
 
     await db.transaction(async (tx) => {
+      // action='new' 인 thread 는 experiences.thread_id FK 때문에 experience insert 보다
+      // 먼저 만들어야 한다(참조 대상이 존재해야 FK 를 통과한다). 'attach' 는 기존 thread 를
+      // 그대로 참조하므로 여기서 할 일이 없고, 카운트 갱신은 insertedExperience 확인 후로 미룬다
+      // — 그래야 동시 처리로 experience insert 가 취소될 때 기존 thread 카운트가 잘못 증가하지 않는다.
+      if (threadAction === 'new') {
+        await tx.insert(threads).values({
+          id: threadId,
+          userId,
+          title: threadTitle,
+          category: output.category,
+          status: 'active',
+          startedAt: session.startedAt,
+          lastActivityAt: session.startedAt,
+          experienceCount: 1,
+        });
+      }
+
       const [insertedExperience] = await tx
         .insert(experiences)
         .values({
           userId,
           sessionId,
+          threadId, // insert 시점에 부착 — 이렇게 하면 "유일한 UPDATE 대상"이던 thread_id 에 대한 UPDATE 자체가 없어진다.
           occurredAt: session.startedAt,
           summary: output.summary,
           detail: output.detail ?? null,
           category: output.category,
           outcome: output.outcome,
           isFirstTime: output.is_first_time,
-          memoryScore,
+          memoryScore: memoryScoreResult.score,
         })
         .onConflictDoNothing({ target: experiences.sessionId })
         .returning({ id: experiences.id });
 
       // experiences.session_id 는 UNIQUE — 동시 처리로 이미 만들어졌다면 조용히 종료.
+      // (기억 생성, attach 갱신 등 아래 모든 부수효과는 여기서 함께 취소된다. action='new' 로
+      // 위에서 만든 thread 행은 이 드문 경합에서 고아로 남을 수 있지만, 매 세션마다 새
+      // thread 를 만드는 정상 경로에서는 발생하지 않는 감내 가능한 트레이드오프다.)
       if (!insertedExperience) return;
 
       if (dedupedSkills.length > 0) {
@@ -449,15 +548,25 @@ export async function processSession(sessionId: string, userId: string): Promise
               domain,
               points: skill.weight,
               useCount: 1,
-              firstUsedAt: now,
-              lastUsedAt: now,
+              // "사용자가 실제로 쓴 시각" 기준 — experiences.occurred_at 과 마찬가지로
+              // session.startedAt 을 쓴다(서버가 처리한 시각 `now` 가 아니다).
+              firstUsedAt: session.startedAt,
+              lastUsedAt: session.startedAt,
             })
             .onConflictDoUpdate({
               target: [userSkills.userId, userSkills.skillName],
               set: {
                 points: sql`${userSkills.points} + ${skill.weight}`,
                 useCount: sql`${userSkills.useCount} + 1`,
-                lastUsedAt: now,
+                // GREATEST 로 역행을 막는다 — 세션은 며칠 늦게 도착할 수 있어서
+                // (예: 8/1 세션이 8/4 에 뒤늦게 도착) startedAt 을 무조건 덮어쓰면
+                // 이미 8/3 으로 가 있던 lastUsedAt 이 8/1 로 되돌아간다.
+                // 이 값은 프롬프트 컨텍스트("마지막 사용: ...")와 감정 판정
+                // ("오래 안 쓴 스킬 재등장 → 그리움")에 그대로 쓰이므로 정확해야 한다.
+                // (sql 템플릿에 Date 객체를 그대로 넣으면 컬럼 직렬화를 안 거쳐서
+                // Date.toString() 형태로 바인딩되는 문제가 있어 ISO 문자열 + 명시적
+                // 캐스트로 넘긴다.)
+                lastUsedAt: sql`GREATEST(${userSkills.lastUsedAt}, ${session.startedAt.toISOString()}::timestamptz)`,
               },
             });
         }
@@ -475,24 +584,88 @@ export async function processSession(sessionId: string, userId: string): Promise
           });
       }
 
+      // thread 부착 — action='new' 는 위에서 이미 만들었으니, 'attach' 인 경우만
+      // 활동시각·경험수를 갱신한다.
+      if (threadAction === 'attach') {
+        await tx
+          .update(threads)
+          .set({
+            lastActivityAt: session.startedAt,
+            experienceCount: sql`${threads.experienceCount} + 1`,
+          })
+          .where(eq(threads.id, threadId));
+      }
+
+      // thread 완결 → status 전이 + 기억 생성. thread 완결과 별개로 memory_score
+      // 임계값을 넘으면 'new_skill'/'comeback' 기억을 하나 더 남긴다(둘 다 발생 가능).
+      let newMemoriesCount = 0;
+
+      if (output.thread.completed) {
+        await tx.update(threads).set({ status: 'completed', completedAt: now }).where(eq(threads.id, threadId));
+
+        await tx.insert(memories).values({
+          userId,
+          threadId,
+          experienceId: insertedExperience.id,
+          occurredAt: session.startedAt,
+          title: threadTitle,
+          body: output.detail ?? output.summary,
+          importance: clampImportance(memoryScoreResult.score),
+          trigger: 'thread_complete',
+        });
+        newMemoriesCount += 1;
+      }
+
+      if (memoryScoreResult.score >= MEMORY_SCORE_THRESHOLD) {
+        const trigger =
+          memoryScoreResult.breakdown.hasNewSkill || memoryScoreResult.breakdown.isFirstTime
+            ? 'new_skill'
+            : 'comeback';
+
+        await tx.insert(memories).values({
+          userId,
+          threadId,
+          experienceId: insertedExperience.id,
+          occurredAt: session.startedAt,
+          title: output.summary,
+          body: output.detail ?? output.summary,
+          importance: clampImportance(memoryScoreResult.score),
+          trigger,
+        });
+        newMemoriesCount += 1;
+      }
+
       const [{ count: skillCount }] = await tx
         .select({ count: sql<number>`count(*)::int` })
         .from(userSkills)
         .where(eq(userSkills.userId, userId));
 
       const [characterRow] = await tx
-        .select({ experienceCount: characters.experienceCount })
+        .select({
+          experienceCount: characters.experienceCount,
+          memoryCount: characters.memoryCount,
+          oldestMemoryAt: characters.oldestMemoryAt,
+        })
         .from(characters)
         .where(eq(characters.userId, userId))
         .for('update');
 
       const newExperienceCount = (characterRow?.experienceCount ?? 0) + 1;
       const daysSinceSignup = userRow ? Math.floor((now.getTime() - userRow.createdAt.getTime()) / DAY_MS) : 0;
-      const newLevel = calculateCharacterLevel({
+      const newLevel = calculateLevel({
         experienceCount: newExperienceCount,
-        uniqueSkillCount: skillCount,
-        daysSinceSignup,
+        skillCount,
+        daysSinceCreated: daysSinceSignup,
       });
+
+      const newMemoryCount = (characterRow?.memoryCount ?? 0) + newMemoriesCount;
+      const existingOldestMemoryAt = characterRow?.oldestMemoryAt ?? null;
+      const newOldestMemoryAt =
+        newMemoriesCount > 0
+          ? existingOldestMemoryAt && existingOldestMemoryAt < session.startedAt
+            ? existingOldestMemoryAt
+            : session.startedAt
+          : existingOldestMemoryAt;
 
       await tx
         .update(characters)
@@ -500,6 +673,8 @@ export async function processSession(sessionId: string, userId: string): Promise
           experienceCount: newExperienceCount,
           skillCount,
           level: newLevel,
+          memoryCount: newMemoryCount,
+          oldestMemoryAt: newOldestMemoryAt,
           lastComputedAt: now,
         })
         .where(eq(characters.userId, userId));

@@ -7,12 +7,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@na/db": "*",
     "@na/shared": "*",
     "tsx": "^4"
   },
   "devDependencies": {
-    "typescript": "^5",
-    "@types/node": "^20"
+    "@types/node": "^20",
+    "typescript": "^5"
   }
 }

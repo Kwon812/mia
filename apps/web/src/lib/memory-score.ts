@@ -9,11 +9,13 @@
 //   최근 experiences 3건과 category+주요 스킬이 모두 같음
 //     (같은 패턴 반복)                                     -30
 //
-// 여기서 반환하는 값은 experiences.memory_score 에 그대로 들어간다.
-// 임계값 판정(장기 기억으로 승격할지)과 memories 테이블 생성은
-// thread 의 상태 변화를 입력으로 하는 후속 작업이다 — "기억의 입력은
-// experience 가 아니라 thread의 상태 변화다"(계획서 05장). 이 파일은
-// 그 판정에 쓰일 원시 점수만 계산한다.
+// score 는 그대로 experiences.memory_score 에 들어간다.
+// breakdown 은 어떤 규칙이 발동했는지 내역이다 — thread 완결과 별개로
+// memory_score ≥ 80 일 때 그 신호가 "신규 스킬" 쪽인지 "3일 공백 복귀" 쪽인지
+// 호출자(experience-engine)가 판단해서 memories.trigger('new_skill' | 'comeback')
+// 를 고르는 데 쓴다. 임계값 판정과 memories 테이블 생성 자체는 thread 의 상태
+// 변화를 입력으로 하는 후속 작업이다 — "기억의 입력은 experience 가 아니라
+// thread의 상태 변화다"(계획서 05장). 이 파일은 원시 점수와 내역만 계산한다.
 // ============================================================
 
 /** 최근 experience 3건 중 하나 — 패턴 반복 판정에 필요한 최소 정보만 담는다. */
@@ -42,6 +44,25 @@ export interface MemoryScoreInput {
   recentExperiences: RecentExperienceSummary[];
 }
 
+/** 어떤 규칙이 발동했는지 내역. score 는 이 값들의 합(-30~+140)이다. */
+export interface MemoryScoreBreakdown {
+  /** +50 — 신규 스킬 등장 */
+  hasNewSkill: boolean;
+  /** +40 — 해당 스킬 첫 시도(is_first_time) */
+  isFirstTime: boolean;
+  /** +30 — 3일 이상 공백 후 복귀 */
+  comeback: boolean;
+  /** +20 — 세션 길이가 평소(최근 20개 평균)의 2배 이상 */
+  longSession: boolean;
+  /** -30 — 최근 3건과 category+주요 스킬이 모두 같은 반복 패턴 */
+  repeatingPattern: boolean;
+}
+
+export interface MemoryScoreResult {
+  score: number;
+  breakdown: MemoryScoreBreakdown;
+}
+
 function average(nums: number[]): number {
   if (nums.length === 0) return 0;
   return nums.reduce((sum, n) => sum + n, 0) / nums.length;
@@ -56,24 +77,28 @@ function isRepeatingPattern(input: MemoryScoreInput): boolean {
   );
 }
 
-export function calculateMemoryScore(input: MemoryScoreInput): number {
-  let score = 0;
-
-  if (input.hasNewSkill) score += 50;
-  if (input.isFirstTime) score += 40;
-
-  if (input.daysSinceLastExperience !== null && input.daysSinceLastExperience >= 3) {
-    score += 30;
-  }
+export function calculateMemoryScore(input: MemoryScoreInput): MemoryScoreResult {
+  const comeback = input.daysSinceLastExperience !== null && input.daysSinceLastExperience >= 3;
 
   const avgDuration = average(input.recentSessionDurations);
-  if (avgDuration > 0 && input.durationMin >= avgDuration * 2) {
-    score += 20;
-  }
+  const longSession = avgDuration > 0 && input.durationMin >= avgDuration * 2;
 
-  if (isRepeatingPattern(input)) {
-    score -= 30;
-  }
+  const repeatingPattern = isRepeatingPattern(input);
 
-  return score;
+  const breakdown: MemoryScoreBreakdown = {
+    hasNewSkill: input.hasNewSkill,
+    isFirstTime: input.isFirstTime,
+    comeback,
+    longSession,
+    repeatingPattern,
+  };
+
+  let score = 0;
+  if (breakdown.hasNewSkill) score += 50;
+  if (breakdown.isFirstTime) score += 40;
+  if (breakdown.comeback) score += 30;
+  if (breakdown.longSession) score += 20;
+  if (breakdown.repeatingPattern) score -= 30;
+
+  return { score, breakdown };
 }
