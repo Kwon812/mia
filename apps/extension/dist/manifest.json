@@ -15,7 +15,10 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["http://localhost:3000/connect*"],
+      "matches": [
+        "https://mia-web-nine.vercel.app/connect*",
+        "http://localhost:3000/connect*"
+      ],
       "js": ["connect-content.js"],
       "run_at": "document_idle"
     }
