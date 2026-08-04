@@ -42,10 +42,34 @@
       "namedRegex": "^/_not\\-found(?:/)?$"
     },
     {
+      "page": "/diary",
+      "regex": "^/diary(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/diary(?:/)?$"
+    },
+    {
       "page": "/favicon.ico",
       "regex": "^/favicon\\.ico(?:/)?$",
       "routeKeys": {},
       "namedRegex": "^/favicon\\.ico(?:/)?$"
+    },
+    {
+      "page": "/memories",
+      "regex": "^/memories(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/memories(?:/)?$"
+    },
+    {
+      "page": "/personality",
+      "regex": "^/personality(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/personality(?:/)?$"
+    },
+    {
+      "page": "/skills",
+      "regex": "^/skills(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/skills(?:/)?$"
     }
   ],
   "dataRoutes": [],

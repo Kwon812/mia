@@ -1,6 +1,10 @@
 {
   "/_global-error/page": "/_global-error",
   "/_not-found/page": "/_not-found",
+  "/diary/page": "/diary",
   "/favicon.ico/route": "/favicon.ico",
-  "/page": "/"
+  "/memories/page": "/memories",
+  "/page": "/",
+  "/personality/page": "/personality",
+  "/skills/page": "/skills"
 }

@@ -1,25 +1,68 @@
 [
   {
     "route": "/",
-    "firstLoadUncompressedJsBytes": 467104,
+    "firstLoadUncompressedJsBytes": 461302,
     "firstLoadChunkPaths": [
-      ".next/static/chunks/3fntmmi971322.js",
-      ".next/static/chunks/3pf0sat3z4mrq.js",
-      ".next/static/chunks/12aruqaur5huj.js",
-      ".next/static/chunks/0xpvskz-ar_4u.js",
-      ".next/static/chunks/4561u0v7ysn3r.js",
-      ".next/static/chunks/turbopack-006ya0efe5sjk.js"
+      ".next/static/chunks/0wroxxamrp698.js",
+      ".next/static/chunks/1u5zan5bs9a7v.js",
+      ".next/static/chunks/2yfh_cfzr1nyc.js",
+      ".next/static/chunks/08ttfj81-47mu.js",
+      ".next/static/chunks/turbopack-14a6dgwtnqhkj.js"
     ]
   },
   {
     "route": "/_not-found",
-    "firstLoadUncompressedJsBytes": 451549,
+    "firstLoadUncompressedJsBytes": 461302,
     "firstLoadChunkPaths": [
-      ".next/static/chunks/3fntmmi971322.js",
-      ".next/static/chunks/12aruqaur5huj.js",
-      ".next/static/chunks/0xpvskz-ar_4u.js",
-      ".next/static/chunks/4561u0v7ysn3r.js",
-      ".next/static/chunks/turbopack-006ya0efe5sjk.js"
+      ".next/static/chunks/0wroxxamrp698.js",
+      ".next/static/chunks/1u5zan5bs9a7v.js",
+      ".next/static/chunks/2yfh_cfzr1nyc.js",
+      ".next/static/chunks/08ttfj81-47mu.js",
+      ".next/static/chunks/turbopack-14a6dgwtnqhkj.js"
+    ]
+  },
+  {
+    "route": "/diary",
+    "firstLoadUncompressedJsBytes": 461302,
+    "firstLoadChunkPaths": [
+      ".next/static/chunks/0wroxxamrp698.js",
+      ".next/static/chunks/1u5zan5bs9a7v.js",
+      ".next/static/chunks/2yfh_cfzr1nyc.js",
+      ".next/static/chunks/08ttfj81-47mu.js",
+      ".next/static/chunks/turbopack-14a6dgwtnqhkj.js"
+    ]
+  },
+  {
+    "route": "/memories",
+    "firstLoadUncompressedJsBytes": 461302,
+    "firstLoadChunkPaths": [
+      ".next/static/chunks/0wroxxamrp698.js",
+      ".next/static/chunks/1u5zan5bs9a7v.js",
+      ".next/static/chunks/2yfh_cfzr1nyc.js",
+      ".next/static/chunks/08ttfj81-47mu.js",
+      ".next/static/chunks/turbopack-14a6dgwtnqhkj.js"
+    ]
+  },
+  {
+    "route": "/personality",
+    "firstLoadUncompressedJsBytes": 461302,
+    "firstLoadChunkPaths": [
+      ".next/static/chunks/0wroxxamrp698.js",
+      ".next/static/chunks/1u5zan5bs9a7v.js",
+      ".next/static/chunks/2yfh_cfzr1nyc.js",
+      ".next/static/chunks/08ttfj81-47mu.js",
+      ".next/static/chunks/turbopack-14a6dgwtnqhkj.js"
+    ]
+  },
+  {
+    "route": "/skills",
+    "firstLoadUncompressedJsBytes": 461302,
+    "firstLoadChunkPaths": [
+      ".next/static/chunks/0wroxxamrp698.js",
+      ".next/static/chunks/1u5zan5bs9a7v.js",
+      ".next/static/chunks/2yfh_cfzr1nyc.js",
+      ".next/static/chunks/08ttfj81-47mu.js",
+      ".next/static/chunks/turbopack-14a6dgwtnqhkj.js"
     ]
   }
 ]
