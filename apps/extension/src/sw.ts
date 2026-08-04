@@ -1,17 +1,28 @@
 import { API_BASE } from './config';
 import { db } from './db';
+import { close, continueDraft, ingest, isWorthSending, shouldClose } from './session';
+import type { SessionDraft, SessionPayloadLike } from './session';
 
 // 서비스 워커: manifest 에서 "type": "module" 이므로 정적 import 사용 가능.
 // 다만 이 파일은 vite 멀티 엔트리 빌드에서 content.ts 와 공유 청크를 만들지
-// 않도록 db.ts / config.ts 를 이 파일에서만 참조한다 (vite.config.ts 참고).
+// 않도록 db.ts / config.ts / session/* 를 이 파일에서만 참조한다 (vite.config.ts
+// 참고 — content.ts 는 이 모듈들을 import 하지 않으므로 청크 공유가 생기지 않는다).
 //
 // 절대 금지: setInterval, 전역 변수에 상태 저장.
-// 대체: chrome.alarms + IndexedDB(Dexie, db.ts).
+// 대체: chrome.alarms + IndexedDB(Dexie, db.ts). session/* 의 규칙 함수들도
+// 전부 순수 함수라 여기서 다루는 진행 중 세션(SessionDraft)은 항상 meta 테이블에
+// 저장된 값을 읽고 쓰는 식으로만 다룬다 — 서비스 워커가 도중에 죽어도 다음
+// 알람에서 그대로 이어갈 수 있다.
 
 const ALARM_SESSION_CHECK = 'sessionCheck';
 const ALARM_COMPRESS = 'compress';
 const ALARM_RETRY = 'retry';
 const ALARM_DIARY = 'diary';
+
+// handleRetry(10분 알람)에서 'sending' 상태가 이 시간 이상 멈춰 있으면 고아로
+// 보고 재전송한다 (계획서 03장 "전송 안정성" — 응답 대기 중 상태를 메모리가
+// 아니라 pending 레코드로 남겨야 서비스 워커가 죽어도 복구 가능).
+const STALE_SENDING_MS = 5 * 60 * 1000;
 
 // 다음 새벽 3시(로컬 타임)의 epoch ms 를 계산한다.
 function nextThreeAm(): number {
@@ -52,13 +63,121 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  // TODO: 브라우저 재시작 시 status: 'sending' 으로 남아있는 고아 pending
-  // 세션을 정리한다 (브라우저 종료로 전송 완료/실패 처리가 안 된 채 남은 것).
+  void handleStartup();
 });
 
+// ── meta 테이블 헬퍼 (currentSession draft, extensionKey) ──
+
+async function loadCurrentSession(): Promise<SessionDraft | null> {
+  const row = await db.meta.get('currentSession');
+  return (row?.value as SessionDraft | undefined) ?? null;
+}
+
+async function saveCurrentSession(draft: SessionDraft | null): Promise<void> {
+  if (draft) {
+    await db.meta.put({ key: 'currentSession', value: draft });
+  } else {
+    await db.meta.delete('currentSession');
+  }
+}
+
+async function getExtensionKey(): Promise<string | undefined> {
+  const row = await db.meta.get('extensionKey');
+  return row?.value as string | undefined;
+}
+
+/**
+ * 세션 전송 — 계획서 03장 "전송 안정성" 패턴 그대로, 단 'done' 상태는 두지
+ * 않는다(사용자 결정): pending 에 'sending' 기록 → fetch → 성공(202) 시
+ * 레코드를 즉시 delete, 실패 시 'failed' 로 남겨 재시도 대상이 되게 한다.
+ * 확장 IndexedDB 에는 실패/전송 대기 중인 것만 남는다.
+ * 서버는 같은 session_id 를 두 번 받아도 안전해야 한다는 전제(PK + upsert)라
+ * 여기서는 재시도를 두려워하지 않고 그냥 다시 부른다.
+ */
+async function flushSession(payload: SessionPayloadLike): Promise<void> {
+  await db.pending.put({
+    id: payload.id,
+    status: 'sending',
+    session: payload as unknown as Record<string, unknown>,
+    updatedAt: Date.now(),
+  });
+
+  try {
+    const extensionKey = await getExtensionKey();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (extensionKey) headers['X-Extension-Key'] = extensionKey;
+
+    const res = await fetch(`${API_BASE}/api/sessions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`전송 실패: HTTP ${res.status}`);
+
+    // 성공 — 'done' 으로 남기지 않고 바로 지운다.
+    await db.pending.delete(payload.id);
+  } catch {
+    await db.pending.put({
+      id: payload.id,
+      status: 'failed',
+      session: payload as unknown as Record<string, unknown>,
+      updatedAt: Date.now(),
+    });
+  }
+}
+
+/**
+ * 확정된(닫힌) 세션을 전송 필터에 통과시키고, 통과하면 flush 한다.
+ * 탈락하면 폐기 로그만 남기고 서버로 보내지 않는다 (계획서 04장 전송 필터).
+ */
+function dispatchClosedSession(payload: SessionPayloadLike): void {
+  if (isWorthSending(payload)) {
+    void flushSession(payload);
+  } else {
+    console.debug('[NA] 세션 폐기 (전송 기준 미달):', payload.id, {
+      duration_min: payload.duration_min,
+      activity_score: payload.activity_score,
+      primary_category: payload.primary_category,
+    });
+  }
+}
+
+/**
+ * sessionCheck 알람(1분) — 계획서 02장 아키텍처 다이어그램의 "Session builder".
+ * meta.currentSession 을 읽어 새 rawEvents 를 반영하고, shouldClose() 로 종료
+ * 여부를 판단한다. 종료면 확정→전송 판단, maxlen 이면 continued_from 으로 이어
+ * 붙인 새 draft 를 곧바로 시작한다. 그 외에는 갱신된 draft 만 저장해둔다.
+ */
 async function handleSessionCheck(): Promise<void> {
-  // TODO: meta.currentSession 을 읽어 shouldClose() 규칙(idle/switch/maxlen/day)
-  // 을 평가하고, 종료 조건이면 세션을 확정해 pending 에 기록한다.
+  const now = Date.now();
+  const [draft, rawEvents] = await Promise.all([loadCurrentSession(), db.rawEvents.toArray()]);
+
+  if (!draft && rawEvents.length === 0) return; // 아무 일도 없었다
+
+  const updated = ingest(draft, rawEvents, now);
+
+  // 반영이 끝난 rawEvents 는 지운다 — rawEvents 를 200~500건 수준으로 유지하는
+  // compress 알람과 별개로, 세션에 흡수된 원본은 더 이상 필요 없다.
+  const processedIds = rawEvents.map((e) => e.id).filter((id): id is number => id !== undefined);
+  if (processedIds.length > 0) await db.rawEvents.bulkDelete(processedIds);
+
+  const reason = shouldClose(updated, now);
+
+  if (!reason) {
+    await saveCurrentSession(updated);
+    return;
+  }
+
+  dispatchClosedSession(close(updated, reason, now));
+
+  if (reason === 'maxlen') {
+    // 4시간 절단 — 곧바로 다음 draft 를 이어 시작한다 (continued_from).
+    await saveCurrentSession(continueDraft(updated, now));
+  } else {
+    // idle / switch / day — 다음 활동이 도착할 때 handleSessionCheck 가
+    // draft=null 로 ingest() 를 호출해 새 세션을 새로 시작한다.
+    await saveCurrentSession(null);
+  }
 }
 
 async function handleCompress(): Promise<void> {
@@ -66,13 +185,53 @@ async function handleCompress(): Promise<void> {
   // rawEvents 에서 제거해 200~500건 수준으로 유지한다.
 }
 
+/**
+ * retry 알람(10분) — 'failed' 상태 전부와, 5분 이상 멈춰있는 'sending'(응답을
+ * 못 받고 서비스 워커가 죽은 경우) 을 재전송한다.
+ */
 async function handleRetry(): Promise<void> {
-  // TODO: pending 중 status: 'failed' 인 세션을 다시 전송한다.
-  // extensionKey 가 없으면 registerExtensionKey() 를 재시도한다.
+  const now = Date.now();
+
+  const extensionKey = await getExtensionKey();
+  if (!extensionKey) {
+    void registerExtensionKey();
+  }
+
+  const pendings = await db.pending.toArray();
+  for (const p of pendings) {
+    const staleSending = p.status === 'sending' && now - p.updatedAt > STALE_SENDING_MS;
+    if (p.status === 'failed' || staleSending) {
+      void flushSession(p.session as unknown as SessionPayloadLike);
+    }
+  }
 }
 
 async function handleDiary(): Promise<void> {
   // TODO: 하루치 세션을 모아 다이어리 생성 요청을 서버로 보낸다.
+}
+
+/**
+ * onStartup — 브라우저 재시작 시:
+ * 1) 'sending' 으로 멈춰있던 고아 pending 을 'failed' 로 강등 (retry 알람이
+ *    다음에 집어간다 — 응답 대기 중 상태를 메모리가 아니라 여기 남겨두는
+ *    이유가 바로 이 복구다).
+ * 2) 열린 draft(currentSession) 가 있으면 'shutdown' 사유로 즉시 마감한다
+ *    (브라우저 종료로 마지막 세션이 유실되는 것 방지 — 계획서 03장).
+ */
+async function handleStartup(): Promise<void> {
+  const pendings = await db.pending.toArray();
+  await Promise.all(
+    pendings
+      .filter((p) => p.status === 'sending')
+      .map((p) => db.pending.put({ ...p, status: 'failed', updatedAt: Date.now() })),
+  );
+
+  const draft = await loadCurrentSession();
+  if (draft) {
+    const now = Date.now();
+    dispatchClosedSession(close(draft, 'shutdown', now));
+    await saveCurrentSession(null);
+  }
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -112,6 +271,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       scrolls: message.scrolls,
       clicks: message.clicks,
       keys: message.keys,
+      // content.ts 의 document.visibilityState 기반 플래그 — 예외 C
+      // (백그라운드 재생) 판정의 isActiveTab 근거가 된다 (session/builder.ts
+      // normalizeEvent 참고).
+      visible: message.visible,
     },
   });
 });
@@ -134,6 +297,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     at: Date.now(),
     kind: 'tab_updated',
     domain: domainOf(tab.url),
-    payload: { tabId, url: tab.url },
+    // tab.active 를 그대로 실어보낸다 — 예외 C(백그라운드 재생) 판정에 쓰인다.
+    payload: { tabId, url: tab.url, active: tab.active },
   });
 });

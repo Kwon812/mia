@@ -13,7 +13,9 @@ export interface RawEvent {
 
 export interface PendingSession {
   id: string; // session id
-  status: 'sending' | 'failed' | 'done';
+  // 'done' 상태는 두지 않는다 — 전송 성공(202) 시 레코드를 즉시 delete 한다.
+  // IndexedDB 에는 실패/전송 중(재시도 대상)인 것만 남는다.
+  status: 'sending' | 'failed';
   session: Record<string, unknown>;
   updatedAt: number;
 }
