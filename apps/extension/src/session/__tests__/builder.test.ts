@@ -100,8 +100,10 @@ describe('close — 전송 페이로드', () => {
 
     expect(payload.id).toBe(draft.id);
     expect(payload.started_at).toBe(new Date(ANCHOR).toISOString());
-    expect(payload.ended_at).toBe(new Date(now).toISOString());
-    expect(payload.duration_min).toBe(25);
+    // 세션의 끝은 닫힌 시각(now)이 아니라 마지막 활동 시각이다 — idle 대기
+    // 30분이 세션 길이에 포함되면 10분 전송 필터가 무력화된다 (close 주석 참고).
+    expect(payload.ended_at).toBe(new Date(ANCHOR + 20 * MIN).toISOString());
+    expect(payload.duration_min).toBe(20);
     expect(payload.close_reason).toBe('idle');
     expect(payload.continued_from).toBeNull();
     expect(payload.primary_category).toBe('dev');

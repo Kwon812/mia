@@ -289,11 +289,16 @@ export interface SessionPayloadLike {
 
 /** draft 를 종료 사유와 함께 전송 페이로드로 확정한다. */
 export function close(draft: SessionDraft, reason: FinalCloseReason, now: number): SessionPayloadLike {
+  // 세션의 끝은 "닫힌 시각(now)"이 아니라 "마지막 활동 시각"이다.
+  // idle 은 마지막 활동 후 30분을 기다렸다 발동하므로 now 를 쓰면 그 30분이,
+  // shutdown 은 브라우저를 껐던 몇 시간이 통째로 세션 길이에 들어가 버린다 —
+  // 그러면 5분짜리 세션이 35분으로 계산돼 10분 전송 필터가 무력화된다.
+  const endedAt = Math.max(draft.startedAt, Math.min(draft.lastActivityAt, now));
   return {
     id: draft.id,
     started_at: new Date(draft.startedAt).toISOString(),
-    ended_at: new Date(now).toISOString(),
-    duration_min: Math.max(0, Math.round((now - draft.startedAt) / 60000)),
+    ended_at: new Date(endedAt).toISOString(),
+    duration_min: Math.max(0, Math.round((endedAt - draft.startedAt) / 60000)),
     close_reason: reason,
     continued_from: draft.continuedFrom ?? null,
     primary_category: draft.primaryCategory,
