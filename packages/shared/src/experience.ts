@@ -41,7 +41,10 @@ export const experienceOutputSchema = z.object({
   outcome: z.enum(EXPERIENCE_OUTCOMES),
   is_first_time: z.boolean(),
   skills: z.array(experienceSkillSchema).max(10),
-  dialogues: z.array(experienceDialogueSchema).min(3).max(4),
+  // 프롬프트는 4개(슬롯당 1개)를 요구하지만 검증은 1개부터 받는다 — 대사는
+  // 캐시일 뿐이라, 개수 미달로 경험 전체를 버리는 것(llm_output_invalid)이
+  // 더 큰 손실이다. 부족한 슬롯은 이전 대사가 남아있으면 그걸로 버틴다.
+  dialogues: z.array(experienceDialogueSchema).min(1).max(4),
   thread: experienceThreadSchema,
 });
 

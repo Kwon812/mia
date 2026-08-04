@@ -74,9 +74,10 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
 - skills: 이번에 사용하거나 습득한 스킬과 비중(weight, 1~10). 기존 스킬 목록과 이름이
   겹치면 반드시 동일한 표기를 재사용한다 — "TS"·"타입스크립트"처럼 같은 스킬을 다른
   이름으로 만들어내지 않는다.
-- dialogues: 아침(morning)·오후(afternoon)·저녁(evening)·밤(night) 각 시간대에 캐릭터가
-  사용자에게 건넬 반말 한 마디. 이번 세션 내용을 반영한 자연스러운 한국어 반말으로,
-  각 80자를 넘기지 않는다.
+- dialogues: **반드시 4개** — morning, afternoon, evening, night 슬롯당 정확히 하나씩.
+  하나라도 빠뜨리면 안 된다. 각각 이번 세션 내용을 반영해 캐릭터가 사용자에게 건네는
+  자연스러운 한국어 반말 한 마디, 80자 이내. 시간대에 맞는 어감으로 쓴다
+  (아침이면 하루를 여는 톤, 밤이면 하루를 돌아보는 톤).
 - thread: 이 경험이 "진행 중인 작업 목록"에 있는 기존 작업의 연장이면
   action="attach" 로 하고 existing_thread_id 에 그 목록에 있는 id 를 그대로 적는다
   (목록에 없는 id 를 만들어내지 않는다). 새로운 작업이면 action="new" 로 하고
@@ -130,7 +131,8 @@ const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
       },
       dialogues: {
         type: 'array',
-        description: '시간대별(morning/afternoon/evening/night) 반말 대사. 각 80자 이내. 3~4개.',
+        description:
+          '반드시 4개 — morning/afternoon/evening/night 슬롯당 정확히 하나씩. 각 80자 이내 반말.',
         items: {
           type: 'object',
           properties: {
