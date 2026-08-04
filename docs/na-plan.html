@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project NA — 설계 계획서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+  :root{
+    --paper:#EDF0F2;
+    --card:#F7F9FA;
+    --ink:#141F28;
+    --sub:#5B6C79;
+    --faint:#8A9AA5;
+    --rule:#D2DAE0;
+    --rule-hard:#A9B7C0;
+    --live:#B4671F;
+    --live-bg:#F6EADC;
+    --sans:'Pretendard Variable',Pretendard,system-ui,sans-serif;
+    --serif:'Gowun Batang',serif;
+    --mono:'IBM Plex Mono','Pretendard Variable',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);color:var(--ink);
+    font-family:var(--sans);font-size:15.5px;line-height:1.75;
+    -webkit-font-smoothing:antialiased;
+    padding:0 24px 120px;
+  }
+  .wrap{max-width:780px;margin:0 auto}
+
+  /* ── 표지 ── */
+  header{padding:88px 0 40px;border-bottom:2px solid var(--ink)}
+  .kicker{
+    font-family:var(--mono);font-size:11px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--live);margin-bottom:22px;
+  }
+  h1{font-size:46px;font-weight:600;letter-spacing:-.02em;line-height:1.05}
+  .tagline{
+    font-family:var(--serif);font-size:19px;color:var(--sub);
+    margin-top:14px;line-height:1.6;
+  }
+  .meta{
+    display:flex;gap:26px;flex-wrap:wrap;margin-top:30px;
+    font-family:var(--mono);font-size:11.5px;color:var(--faint);
+    letter-spacing:.05em;
+  }
+  .meta b{color:var(--sub);font-weight:400}
+
+  /* ── 목차 ── */
+  nav{padding:26px 0;border-bottom:1px solid var(--rule)}
+  nav ol{list-style:none;columns:2;column-gap:40px}
+  nav li{margin-bottom:5px;break-inside:avoid}
+  nav a{
+    color:var(--sub);text-decoration:none;font-size:13.5px;
+    display:flex;gap:10px;
+  }
+  nav a:hover{color:var(--live)}
+  nav .n{font-family:var(--mono);font-size:11px;color:var(--faint);width:18px;flex:none;padding-top:2px}
+
+  /* ── 섹션 ── */
+  section{padding-top:56px}
+  .sec-num{
+    font-family:var(--mono);font-size:11px;letter-spacing:.16em;
+    color:var(--live);margin-bottom:8px;
+  }
+  h2{font-size:27px;font-weight:600;letter-spacing:-.015em;line-height:1.2;margin-bottom:20px}
+  h3{
+    font-size:16.5px;font-weight:600;margin:34px 0 12px;
+    padding-top:14px;border-top:1px solid var(--rule);
+  }
+  h4{font-size:14.5px;font-weight:600;margin:22px 0 8px;color:var(--sub)}
+  p{margin-bottom:14px}
+  p+ul,p+ol{margin-top:-4px}
+  ul,ol{margin:0 0 16px 20px}
+  li{margin-bottom:5px}
+  strong{font-weight:600}
+  code{
+    font-family:var(--mono);font-size:.87em;
+    background:#E2E7EA;padding:1.5px 5px;border-radius:3px;
+  }
+
+  /* ── 코드블록 ── */
+  pre{
+    background:var(--ink);color:#C9D6DE;
+    font-family:var(--mono);font-size:12.5px;line-height:1.65;
+    padding:18px 20px;border-radius:4px;overflow-x:auto;
+    margin:16px 0 20px;
+  }
+  pre code{background:none;padding:0;font-size:inherit;color:inherit}
+  pre .c{color:#6C808D}
+  pre .k{color:#E8A55C}
+
+  /* ── 표 ── */
+  table{width:100%;border-collapse:collapse;margin:16px 0 22px;font-size:14px}
+  th{
+    text-align:left;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.11em;text-transform:uppercase;color:var(--faint);
+    font-weight:400;padding:0 12px 8px 0;border-bottom:1px solid var(--rule-hard);
+  }
+  td{padding:9px 12px 9px 0;border-bottom:1px solid var(--rule);vertical-align:top}
+  td:last-child,th:last-child{padding-right:0}
+  tbody tr:last-child td{border-bottom:none}
+
+  /* ── 변경 블록 (시그니처) ── */
+  .change{
+    background:var(--card);border-left:3px solid var(--live);
+    padding:16px 20px;margin:20px 0;border-radius:0;
+  }
+  .change .tag{
+    font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--live);margin-bottom:10px;
+  }
+  .change .row{display:flex;gap:14px;font-size:14px;margin-bottom:6px;align-items:baseline}
+  .change .row .lbl{
+    font-family:var(--mono);font-size:10.5px;color:var(--faint);
+    width:46px;flex:none;letter-spacing:.06em;
+  }
+  .change .row.was{color:var(--faint);text-decoration:line-through;text-decoration-thickness:1px}
+  .change .why{font-size:13.5px;color:var(--sub);margin-top:10px;line-height:1.6}
+
+  /* ── 원칙 인용 ── */
+  .maxim{
+    font-family:var(--serif);font-size:18.5px;line-height:1.7;
+    color:var(--ink);padding:2px 0 2px 22px;
+    border-left:2px solid var(--rule-hard);margin:22px 0;
+  }
+
+  /* ── 주의 ── */
+  .note{
+    background:var(--live-bg);padding:14px 18px;border-radius:4px;
+    font-size:14px;margin:18px 0;line-height:1.65;
+  }
+  .note b{color:var(--live)}
+
+  /* ── 미결정 ── */
+  .open{
+    font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+    color:#fff;background:var(--rule-hard);padding:2px 7px;
+    border-radius:3px;text-transform:uppercase;vertical-align:2px;
+  }
+
+  footer{
+    margin-top:80px;padding-top:26px;border-top:2px solid var(--ink);
+    font-family:var(--mono);font-size:11px;color:var(--faint);
+    letter-spacing:.05em;
+  }
+
+  @media (max-width:640px){
+    header{padding-top:56px}
+    h1{font-size:33px}
+    h2{font-size:22px}
+    nav ol{columns:1}
+    body{font-size:15px;padding:0 18px 80px}
+  }
+  @media print{
+    body{background:#fff;padding:0}
+    pre{background:#F0F0F0;color:#000;border:1px solid #CCC}
+    section{page-break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">설계 계획서 · 확정 단계</div>
+  <h1>Project NA</h1>
+  <p class="tagline">현실의 나를 통해 성장하는 AI 육성 게임</p>
+  <div class="meta">
+    <span>작성 <b>2026-08-04</b></span>
+    <span>대상 <b>기획 문서 v1 기반 기술 설계</b></span>
+    <span>상태 <b>스키마 확정 · 구현 착수 전</b></span>
+  </div>
+</header>
+
+<nav>
+  <ol>
+    <li><a href="#s1"><span class="n">01</span> 핵심 결정 요약</a></li>
+    <li><a href="#s2"><span class="n">02</span> 아키텍처</a></li>
+    <li><a href="#s3"><span class="n">03</span> 확장 프로그램</a></li>
+    <li><a href="#s4"><span class="n">04</span> 세션 판단 규칙</a></li>
+    <li><a href="#s5"><span class="n">05</span> 서버 파이프라인</a></li>
+    <li><a href="#s6"><span class="n">06</span> 캐릭터 시스템</a></li>
+    <li><a href="#s7"><span class="n">07</span> 레벨별 기능 언락</a></li>
+    <li><a href="#s8"><span class="n">08</span> 인증</a></li>
+    <li><a href="#s9"><span class="n">09</span> 프론트엔드</a></li>
+    <li><a href="#s10"><span class="n">10</span> 데이터 모델</a></li>
+    <li><a href="#s11"><span class="n">11</span> 미결정 · 리스크</a></li>
+    <li><a href="#s12"><span class="n">12</span> 다음 단계</a></li>
+  </ol>
+</nav>
+
+<!-- ══ 01 ══ -->
+<section id="s1">
+  <div class="sec-num">01</div>
+  <h2>핵심 결정 요약</h2>
+  <p>기획 문서가 “무엇을 만들 것인가”라면 이 문서는 “어떻게 만들 것인가”다. 기획 대비 변경된 결정은 별도 블록으로 표시했다.</p>
+
+  <table>
+    <thead><tr><th>항목</th><th>결정</th><th>근거</th></tr></thead>
+    <tbody>
+      <tr><td>데이터 수집</td><td>크롬 확장 프로그램</td><td>웹사이트는 타 사이트 행동을 볼 수 없음</td></tr>
+      <tr><td>저장소</td><td>PostgreSQL + IndexedDB</td><td>서버·클라이언트 역할 분담</td></tr>
+      <tr><td>압축 위치</td><td>확장 내부</td><td>트래픽 세 자릿수 차이</td></tr>
+      <tr><td>LLM 호출</td><td>세션 종료 시 1회</td><td>진입 시 호출 금지</td></tr>
+      <tr><td>1차 접점</td><td>웹사이트</td><td>새 탭 교체는 v2</td></tr>
+      <tr><td>인증</td><td>익명 시작 → Lv.5 계정 연결</td><td>온보딩 마찰 제거</td></tr>
+      <tr><td>프라이버시</td><td>전량 서버 전송</td><td>스토어 심사 리스크 인지함</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══ 02 ══ -->
+<section id="s2">
+  <div class="sec-num">02</div>
+  <h2>아키텍처</h2>
+
+<pre><code><span class="c">[확장 프로그램]                      [서버]</span>
+  content script
+    └ 10초 단위 활동 신호
+  service worker
+    ├ Raw events        → IndexedDB
+    ├ Compression       <span class="c">(5분 알람)</span>
+    └ Session builder   <span class="c">(1분 알람)</span>
+         │
+         └─ POST /api/sessions ────→ Experience Engine <span class="c">(LLM 1회)</span>
+                                        ├ experiences 저장
+                                        ├ Memory Engine <span class="c">(점수 선별)</span>
+                                        ├ 감정 갱신
+                                        └ 대사 3~4개 생성
+                                            │
+<span class="c">[웹사이트] ←──── GET /api/state ─────────┘</span></code></pre>
+
+  <div class="change">
+    <div class="tag">기획 #15에서 변경</div>
+    <div class="row was"><span class="lbl">기획</span><span>Extension → API → PostgreSQL (raw event 전량 전송)</span></div>
+    <div class="row"><span class="lbl">결정</span><span>압축·세션화를 확장 내부에서 완료 후 전송</span></div>
+    <div class="why">압축 없이 전송하면 하루 수만 건 × 사용자 수. 압축 후에는 하루 5~10건. 세 자릿수 차이다. 압축과 세션화는 규칙 기반 결정적 작업이라 LLM도 서버도 필요 없다.</div>
+  </div>
+
+  <h3>사이트가 확장 데이터를 직접 못 읽는다</h3>
+  <p><code>chrome.storage.local</code>과 확장 IndexedDB는 확장 전용 샌드박스다. 일반 웹페이지에서 접근할 수 없다. 따라서 사이트는 반드시 <strong>서버 API를 경유</strong>한다.</p>
+  <p>진행 중 세션 같은 실시간 데이터가 필요해지면 <code>externally_connectable</code>로 다리를 놓을 수 있으나 <strong>v1 제외</strong>.</p>
+</section>
+
+<!-- ══ 03 ══ -->
+<section id="s3">
+  <div class="sec-num">03</div>
+  <h2>확장 프로그램</h2>
+
+  <h3>MV3 핵심 제약</h3>
+  <div class="maxim">서비스 워커는 30초 놀면 죽는다. 메모리에 아무것도 남기지 마라.</div>
+  <p>이 원칙 하나에서 아래 규칙이 전부 파생된다.</p>
+  <table>
+    <thead><tr><th>금지</th><th>대체</th></tr></thead>
+    <tbody>
+      <tr><td><code>setInterval</code></td><td><code>chrome.alarms</code></td></tr>
+      <tr><td>전역 변수 버퍼</td><td>IndexedDB / <code>chrome.storage.local</code></td></tr>
+      <tr><td>응답 대기 중 상태 유지</td><td>pending 기록 + 재시도 알람</td></tr>
+    </tbody>
+  </table>
+
+  <h3>알람 주기</h3>
+  <table>
+    <thead><tr><th>알람</th><th>주기</th><th>근거</th></tr></thead>
+    <tbody>
+      <tr><td><code>sessionCheck</code></td><td>1분</td><td>5분이면 종료 판정이 30~35분에서 흔들림</td></tr>
+      <tr><td><code>compress</code></td><td>5분</td><td>미압축 원본을 200~500건으로 유지</td></tr>
+      <tr><td><code>retry</code></td><td>10분</td><td>더 짧으면 서버 다운 시 복구 방해</td></tr>
+      <tr><td><code>diary</code></td><td>1일 · 새벽 3시</td><td>자정은 사용자가 활동 중일 수 있음</td></tr>
+    </tbody>
+  </table>
+  <p>content script의 활동 보고는 <code>setInterval</code> 10초 — 페이지 컨텍스트라 죽지 않는다.</p>
+
+  <h3>이벤트 수집</h3>
+  <p>탭 전환·URL 변경은 서비스 워커에서 <code>chrome.tabs</code>로 직접 잡지만, 클릭·스크롤·키 입력은 content script가 필요하다. 원본 이벤트를 보내지 않고 <strong>“10초 동안 살아있었다”는 신호</strong>만 보고한다.</p>
+<pre><code>let count = 0;
+document.addEventListener('scroll', () => count++, { passive: true });
+
+setInterval(() => {
+  if (count > 0) {
+    chrome.runtime.sendMessage({ type: 'ACTIVITY', scrolls: count });
+    count = 0;
+  }
+}, 10000);</code></pre>
+
+  <h3>전송 안정성</h3>
+<pre><code>async function flushSession(session) {
+  await db.put('pending', { id: session.id, status: 'sending' });
+  try {
+    await fetch(API, { method: 'POST', body: JSON.stringify(session) });
+    await db.put('pending', { id: session.id, status: 'done' });
+  } catch {
+    await db.put('pending', { id: session.id, status: 'failed' });
+  }
+}</code></pre>
+  <ul>
+    <li>서버는 같은 <code>session_id</code>를 두 번 받아도 안전해야 한다 (PK + upsert)</li>
+    <li><code>chrome.runtime.onStartup</code>에서 고아 세션 정리 — 브라우저 종료 시 마지막 세션 유실 방지</li>
+    <li>세션 종료 시각 ≠ 전송 시각. 서버는 <code>received_at</code>이 아니라 <code>started_at</code>으로 정렬한다</li>
+  </ul>
+
+  <h3>manifest</h3>
+<pre><code>{
+  "manifest_version": 3,
+  "permissions": ["storage", "alarms", "tabs", "idle", "topSites"],
+  "host_permissions": ["&lt;all_urls&gt;"],
+  "background": { "service_worker": "sw.js", "type": "module" }
+}</code></pre>
+  <div class="note"><b>심사 주의</b> — <code>&lt;all_urls&gt;</code>는 Chrome Web Store 심사에서 가장 까다로운 항목이다. 정당화 문구를 사전에 준비할 것.</div>
+</section>
+
+<!-- ══ 04 ══ -->
+<section id="s4">
+  <div class="sec-num">04</div>
+  <h2>세션 판단 규칙</h2>
+
+  <div class="maxim">이 세션 하나가 LLM에게 “무슨 일을 했다” 한 문장으로 요약될 수 있는가.</div>
+  <p>규칙을 더 늘릴지 말지는 이 질문으로 결정한다.</p>
+
+  <h3>종료 조건 네 가지</h3>
+<pre><code>function shouldClose(s, now) {
+  if (now - s.lastActivity &gt; 30*60*1000)  return 'idle';
+  if (contextSwitched(s, now))            return 'switch';
+  if (now - s.startedAt &gt; 4*60*60*1000)   return 'maxlen';
+  if (dayBoundaryCrossed(s, now))         return 'day';
+  return null;
+}</code></pre>
+  <table>
+    <thead><tr><th>조건</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td>idle 30분</td><td>기본 조건</td></tr>
+      <tr><td>maxlen 4시간</td><td>상한이 없으면 8시간 코딩이 세션 하나가 되어 요약이 뭉개진다. <code>continued_from</code>을 남겨 서버가 이어붙인다</td></tr>
+      <tr><td>day 새벽 4시</td><td>자정 기준이면 새벽 작업이 이틀로 쪼개진다</td></tr>
+    </tbody>
+  </table>
+
+  <h3>맥락 전환</h3>
+<pre><code>function contextSwitched(s, now) {
+  const recent = s.events.filter(e =&gt; now - e.at &lt; 10*60*1000);
+  if (recent.length === 0) return false;
+
+  const newCat = dominantCategory(recent);
+  if (newCat === s.primaryCategory) return false;
+
+  const drift = now - firstEventOfCategory(recent, newCat).at;
+  return drift &gt;= 10*60*1000;
+}</code></pre>
+  <p>최근 10분이 계속 다른 카테고리면 전환. 10분 유예는 잠깐 이탈했다 돌아오는 것을 안 끊기 위함이다.</p>
+
+  <h4>예외 A — 보조 도메인 흡수</h4>
+<pre><code>const COMPANION = ['google.com', 'stackoverflow.com', 'chatgpt.com',
+                   'claude.ai', 'developer.mozilla.org'];</code></pre>
+  <p>검색·문서·AI 도구는 앞선 맥락에 흡수시켜 카테고리 판정에서 제외한다. 기획 #8의 <code>GitHub + ChatGPT + Redis Docs → "Redis 캐싱 구현"</code> 예시가 이 규칙 덕에 성립한다. 없으면 세 개로 쪼개진다.</p>
+
+  <h4>예외 B — 왕복은 끊지 말고 태그</h4>
+<pre><code>if (s.switchCount &gt;= 3 &amp;&amp; s.durationMin &lt; 60) {
+  s.tag = 'scattered';
+  return false;   <span class="c">// 끊지 않음</span>
+}</code></pre>
+  <p>GitHub↔YouTube 왕복을 네 개로 쪼개는 대신 <code>scattered</code> 태그를 붙인다. LLM이 “집중이 잘 안 되는 날”로 요약할 수 있고, <strong>성격 축(몰입형↔산만형)의 입력</strong>이 된다. 버그를 데이터로 바꾸는 지점.</p>
+
+  <h4>예외 C — 백그라운드 재생</h4>
+  <p><code>music.youtube.com</code>, <code>spotify.com</code>은 활성 탭이 아니면 카테고리 판정에서 제외한다. 안 그러면 모든 코딩 세션이 음악 세션이 된다.</p>
+
+  <h3>전송 필터</h3>
+<pre><code>function isWorthSending(s) {
+  if (s.durationMin &lt; 10)   return false;
+  if (s.activityScore &lt; 50) return false;
+  if (s.uniqueDomains === 1 &amp;&amp; s.category === 'entertainment'
+      &amp;&amp; s.activityScore &lt; 150) return false;
+  return true;
+}</code></pre>
+  <p>세 번째는 영상 필터다. 다만 점수 150 이상은 통과시켜 진짜 강의 시청은 살린다.</p>
+  <p><strong>결과</strong> — 하루 세션 20~30개 발생 → 전송 5~10개 → LLM 호출 3~5회.</p>
+
+  <h3>검증 방법</h3>
+  <div class="note"><b>규칙을 더 늘리기 전에</b> 본인 브라우징 하루치를 IndexedDB에 쌓고, LLM 없이 규칙만 돌려 세션 분할 결과를 표로 확인한다. 하루치만 봐도 예외가 두세 개 더 나온다. 지금 앉아서 규칙 스무 개를 만드는 것보다 다섯 개로 시작해 실제 데이터로 튜닝하는 게 빠르다.</div>
+</section>
+
+<!-- ══ 05 ══ -->
+<section id="s5">
+  <div class="sec-num">05</div>
+  <h2>서버 파이프라인</h2>
+
+  <h3>세션 ≠ 경험</h3>
+  <p>세션은 <strong>관측 단위</strong>(규칙으로 자동 도출), 경험은 <strong>의미 단위</strong>(LLM 판단)다. 대부분 1:1이지만 정확히는 N:M이다.</p>
+  <ul>
+    <li>한 경험이 여러 세션에 걸침 — 점심 전후로 이어지는 작업. <code>maxlen</code> 절단은 정의상 경험 하나를 둘로 쪼갠다</li>
+    <li>한 세션에 여러 경험 — 같은 카테고리 안에서 프로젝트가 바뀌는 경우</li>
+  </ul>
+
+  <div class="change">
+    <div class="tag">저장 방식 결정</div>
+    <div class="row was"><span class="lbl">기각</span><span>하루 동안 갱신하다 자정에 저장</span></div>
+    <div class="row"><span class="lbl">결정</span><span>세션 종료 시 즉시 저장, 요약은 계층으로 쌓음</span></div>
+    <div class="why">자정 방식은 감정 실시간이 깨지고, 오늘 데이터를 못 보며, 결정적으로 <strong>늦게 도착하는 세션을 넣을 곳이 없다</strong>. 세션은 며칠 뒤에 도착할 수 있으므로 시간 기반 저장은 전송 모델과 구조적으로 맞지 않는다.</div>
+  </div>
+
+<pre><code>sessions      확장이 만듦, 규칙 기반      하루 20~30개 (5~10개 전송)
+   ↓
+experiences   세션 종료 시 즉시 저장       하루 3~5개   <span class="k">← 원자 단위, 불변</span>
+   ↓
+threads       같은 작업끼리 묶음           며칠~몇 주
+   ↓
+memories      점수 넘은 것만               드물게</code></pre>
+
+  <h3>Experience Engine</h3>
+  <p>세션 종료 시 LLM 1회 호출. <strong>기존 컨텍스트 주입이 필수다.</strong> 없으면 아래를 구분하지 못한다.</p>
+<pre><code>"TypeScript로 기능을 구현했다"     <span class="c">← 늘 하던 것</span>
+"처음으로 TypeScript를 써봤다"     <span class="c">← 신규 스킬 획득</span></code></pre>
+  <p>프롬프트에 현재 스킬 목록과 최근 경험 3건을 함께 넣는다. 파이프라인이 단방향이면 안 되고 Memory → Experience 역방향 연결이 필요하다.</p>
+  <p><strong>출력 제약</strong> — 대사는 40자 이내 두 문장. 초과 시 서버에서 절단. 세 줄이 넘으면 화면이 무너진다.</p>
+
+  <h3>Memory Engine</h3>
+  <p>LLM 재호출 금지. 규칙 점수로 선별한다.</p>
+<pre><code>신규 스킬 등장          +50
+해당 스킬 첫 시도        +40
+3일 이상 공백 후 복귀     +30
+세션 길이 평소의 2배      +20
+같은 패턴 반복           -30
+
+임계값 초과 → 장기 기억</code></pre>
+  <p>기억의 입력은 experience가 아니라 <strong>thread의 상태 변화</strong>다. 기획 #10의 “첫 출시”는 세션 하나가 아니라 몇 주짜리 thread의 완결이다. experience 단위로 기억을 만들면 “Unity 빌드 설정을 수정했다” 같은 게 장기 기억이 된다.</p>
+
+  <h3>주기</h3>
+  <table>
+    <thead><tr><th>시점</th><th>처리</th></tr></thead>
+    <tbody>
+      <tr><td>세션 종료 시</td><td>Experience Engine, 감정 갱신, 대사 생성, thread 부착</td></tr>
+      <tr><td>야간 · 새벽 3시</td><td>일기 생성, 성격 축 재계산, 레벨 갱신</td></tr>
+    </tbody>
+  </table>
+  <p>성격은 세션 하나로 바뀌면 안 된다. <strong>최소 2주 이동평균</strong>.</p>
+</section>
+
+<!-- ══ 06 ══ -->
+<section id="s6">
+  <div class="sec-num">06</div>
+  <h2>캐릭터 시스템</h2>
+
+  <h3>성격</h3>
+  <div class="change">
+    <div class="tag">기획 #11에서 변경</div>
+    <div class="row was"><span class="lbl">기획</span><span>코딩 → 분석형, 운동 → 활동형</span></div>
+    <div class="row"><span class="lbl">결정</span><span>스킬 = 무엇을 했는가 / 성격 = 어떻게 했는가</span></div>
+    <div class="why">기획의 규칙은 스킬 분포의 결정적 함수다. 스킬이 같은 두 사용자는 성격이 같을 수밖에 없어 별도 정보가 아니다. 개념은 둘인데 변수는 하나였다.</div>
+  </div>
+  <table>
+    <thead><tr><th>관측값</th><th>성격 축</th></tr></thead>
+    <tbody>
+      <tr><td>세션 평균 길이, scattered 비율</td><td>몰입형 ↔ 산만형</td></tr>
+      <tr><td>세션당 unique 도메인 수</td><td>집중형 ↔ 멀티형</td></tr>
+      <tr><td>thread completed / (completed + abandoned)</td><td>완결형 ↔ 탐색형</td></tr>
+      <tr><td><code>is_first_time</code> 비율</td><td>개척형 ↔ 숙련형</td></tr>
+      <tr><td>세션 시작 시간대 분포</td><td>새벽형 ↔ 아침형</td></tr>
+    </tbody>
+  </table>
+  <p>이제 TypeScript 82로 동일한 두 사람이 완전히 다른 성격을 가질 수 있다.</p>
+
+  <h3>감정 — 실시간 파생값</h3>
+<pre><code>새 스킬 첫 등장        → 흥분
+같은 에러 3세션 반복    → 답답
+3일 공백 후 복귀        → 반가움
+세션 길이 평소의 2배    → 몰두
+오래 안 쓴 스킬 재등장  → 그리움</code></pre>
+  <p><code>emotions</code> 테이블을 만들지 않는다. 최근 경험 N건에서 매번 계산하는 파생값이며 시간에 따라 감쇠한다. 저장하면 “3주 전의 기쁨”이 남아 이상해진다.</p>
+
+  <h3>레벨</h3>
+<pre><code>레벨 = min( f(경험 수, 고유 스킬 수),  가입 후 일수 / 3 )</code></pre>
+  <p>학습량이 레벨을 올리고, 일수는 하루 몰아치기를 막는 브레이크로만 쓴다. 일수가 단독 변수면 방치 계정이 Lv.60 “동료 AI”가 되어 정의가 깨진다.</p>
+  <table>
+    <thead><tr><th>레벨</th><th>도달</th><th>레벨</th><th>도달</th></tr></thead>
+    <tbody>
+      <tr><td>Lv.5</td><td>3일</td><td>Lv.30</td><td>90일</td></tr>
+      <tr><td>Lv.10</td><td>14일</td><td>Lv.50</td><td>180일</td></tr>
+      <tr><td>Lv.20</td><td>45일</td><td>Lv.100</td><td>3년+</td></tr>
+    </tbody>
+  </table>
+  <p>초반은 가파르게, 뒤로 갈수록 완만하게. Lv.5(하루 요약)를 사흘 안에 도달시켜 초반 이탈을 막는다.</p>
+</section>
+
+<!-- ══ 07 ══ -->
+<section id="s7">
+  <div class="sec-num">07</div>
+  <h2>레벨별 기능 언락</h2>
+  <p>레벨업 = <strong>Prompt Builder가 LLM에게 넘기는 툴 목록이 늘어나는 것</strong>. 시스템 프롬프트는 고정, 툴만 교체한다.</p>
+
+  <table>
+    <thead><tr><th>Lv</th><th>기능</th><th>툴</th><th>데이터 조건</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>관찰 기록만</td><td>—</td><td>—</td></tr>
+      <tr><td>5</td><td>하루 요약</td><td><code>getTodayExperiences()</code></td><td>경험 5건+</td></tr>
+      <tr><td>10</td><td>습관 분석</td><td><code>getWeeklyPattern()</code></td><td>활동일 14일+</td></tr>
+      <tr><td>20</td><td>장기 목표 제안</td><td><code>getSkillTrend()</code></td><td>스킬 3종+, 활동일 30일+</td></tr>
+      <tr><td>30</td><td>과거 기억 연결</td><td><code>searchMemory()</code></td><td>기억 20건+, 최고령 60일+</td></tr>
+      <tr><td>50</td><td>성장 패턴 이해</td><td><code>compareSnapshot()</code></td><td>스냅샷 2개+, 간격 90일+</td></tr>
+      <tr><td>60</td><td>선제 개입</td><td>알림 발송 권한</td><td>—</td></tr>
+      <tr><td>80</td><td>망각</td><td>저참조 기억 정리</td><td>기억 300건+</td></tr>
+      <tr><td>100</td><td>툴 조합</td><td>다중 툴 동시 호출</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <h3>레벨 AND 데이터 조건</h3>
+  <p>레벨만으로 게이팅하면 깨진다. 하루 12시간씩 몰아친 사용자가 30일 만에 Lv.30이 되면 <code>searchMemory()</code>가 켜지는데 연결할 과거가 없다.</p>
+  <div class="note"><b>LLM은 툴이 있으면 부르고, 결과가 빈약해도 지어낸다.</b> 조건 미달이면 툴을 아예 빼야 한다. “데이터 부족” 응답을 돌려주면 그 상태로도 말하려 든다.</div>
+<pre><code>function buildTools(level, stats) {
+  const tools = [];
+  if (level &gt;= 5  &amp;&amp; stats.experienceCount &gt;= 5)   tools.push(getTodayExperiences);
+  if (level &gt;= 10 &amp;&amp; stats.activeDays &gt;= 14)       tools.push(getWeeklyPattern);
+  if (level &gt;= 30 &amp;&amp; stats.memoryCount &gt;= 20
+                  &amp;&amp; stats.oldestMemoryDays &gt;= 60) tools.push(searchMemory);
+  return tools;
+}</code></pre>
+
+  <h3>언락 연출</h3>
+  <p>새 기능을 즉시 한 번 써서 보여준다. “습관 분석 해금!”보다 훨씬 강하다.</p>
+<pre><code>Lv.10
+
+이제 네 습관이 보이기 시작했어.
+너 화요일 밤에 제일 많이 코딩하더라.</code></pre>
+
+  <div class="note"><b>비용 주의</b> — 레벨이 오를수록 툴과 컨텍스트가 커진다. Lv.50 사용자 1회 호출이 Lv.5의 5~10배가 될 수 있다. 오래 쓴 사용자가 가장 비싼 사용자가 되는 구조이므로 툴 결과에 <code>LIMIT</code>이 필수다.</div>
+</section>
+
+<!-- ══ 08 ══ -->
+<section id="s8">
+  <div class="sec-num">08</div>
+  <h2>인증</h2>
+
+  <h3>익명으로 시작한다</h3>
+  <p>확장 설치 시 익명 키를 발급받고 그것만으로 식별한다. 회원가입 화면도 비밀번호도 없다.</p>
+<pre><code>chrome.runtime.onInstalled.addListener(async () =&gt; {
+  const { key } = await fetch(API + '/register', { method: 'POST' })
+                        .then(r =&gt; r.json());
+  await chrome.storage.local.set({ extensionKey: key });
+});</code></pre>
+  <p>온보딩 마찰이 0이고, “AI가 태어났다”는 연출과도 맞는다. 가입 폼부터 뜨면 그 감각이 깨진다. Day 0에 사용자가 하는 행동은 <strong>이름 입력 하나뿐</strong>이어야 한다.</p>
+
+  <h3>그대로 두면 DB를 둔 이유가 사라진다</h3>
+  <p>키가 <code>chrome.storage.local</code>에만 있으면 재설치·PC 교체·프로필 초기화에서 전부 유실된다. 서버에 데이터가 살아있어도 찾아올 방법이 없다. <strong>“캐릭터 유실 방지”가 DB 도입의 근거였는데 그게 무효화된다.</strong></p>
+  <p>사이트를 본체로 삼기로 했으므로 사이트가 사용자를 알아볼 방법도 필요하다.</p>
+
+  <h3>계정 연결을 레벨 언락처럼 다룬다</h3>
+<pre><code>Day 0    설치 → 익명 키 발급 → 바로 시작
+         AI: "..."  → 이름 지어주기
+
+Lv.5쯤   AI: "나 이제 하루를 기억할 수 있어.
+              근데 이 브라우저를 벗어나면 다 잊어버려."
+         [ 계정 연결하기 ]</code></pre>
+  <p>첫날 가입 폼을 들이밀면 이탈하지만, 사흘 키운 캐릭터를 잃기 싫어지는 시점에는 사용자가 자발적으로 누른다. 이 요청이 캐릭터의 대사로 나오면 UI가 아니라 서사가 된다.</p>
+  <p>인증은 <strong>구글 OAuth 하나만</strong>. 비밀번호 관리·재설정 메일·해싱이 전부 사라지고, 크롬 사용자면 클릭 한 번이다.</p>
+
+  <h3>기기 분리</h3>
+  <p>기기가 여러 대면 키도 여러 개다. 개발자가 주 사용자라면 노트북과 데스크톱 두 대는 기본이므로 실질적으로 필요하다.</p>
+<pre><code>CREATE TABLE devices (
+  extension_key  TEXT PRIMARY KEY,
+  user_id        UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  label          TEXT,              <span class="c">-- '회사 노트북'</span>
+  last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);</code></pre>
+  <p>이러면 두 기기의 세션이 같은 캐릭터로 합쳐진다. 기획에는 없던 항목이다.</p>
+
+  <div class="note"><b>구현 순서</b> — v1은 익명만 구현하고 계정 연결은 Lv.5 언락으로 붙인다. 다만 <code>users</code> 테이블은 <strong>지금부터</strong> 계정 컬럼(<code>google_id</code>, <code>email</code>, <code>linked_at</code>)을 갖고 있어야 나중에 마이그레이션이 없다.</div>
+</section>
+
+<!-- ══ 09 ══ -->
+<section id="s9">
+  <div class="sec-num">09</div>
+  <h2>프론트엔드</h2>
+
+  <h3>v1 — 웹사이트</h3>
+  <table>
+    <thead><tr><th>화면</th><th>내용</th></tr></thead>
+    <tbody>
+      <tr><td>홈</td><td>캐릭터, 오늘의 대사, 오늘 세션 요약</td></tr>
+      <tr><td>기억</td><td>memories 타임라인 — 이 프로젝트의 진짜 자산</td></tr>
+      <tr><td>일기</td><td>날짜별 일기</td></tr>
+      <tr><td>스킬</td><td>스킬 트리, 성장 그래프</td></tr>
+      <tr><td>성격</td><td>2주 단위 축 이동 추이</td></tr>
+    </tbody>
+  </table>
+  <p>기억 아카이브가 핵심이다. 몇 년 치가 쌓였을 때 “2026년 8월”을 눌러 읽는 경험이 기획 #21의 감정을 만든다. 새 탭 한 줄로는 나오지 않는다.</p>
+
+  <h3>접점 문제</h3>
+  <p>사이트는 사용자가 기억해서 찾아와야 한다. 이것이 유일한 약점이며, 당장의 해결책은 확장 아이콘 배지다.</p>
+<pre><code>chrome.action.setBadgeText({ text: '1' });
+chrome.action.onClicked.addListener(() =&gt;
+  chrome.tabs.create({ url: 'https://내사이트.com' })
+);</code></pre>
+
+  <h3>v2 — 새 탭 교체 (보류)</h3>
+  <p>보류하되 폐기하지 않는다. 사이트를 먼저 만들면 API가 이미 있어 붙이기 쉽다.</p>
+  <ul>
+    <li>레벨·이름은 우측 상단 구석 — 하루 40번 보는 화면이라 중앙에 크게 두면 사흘이면 질린다</li>
+    <li>캐릭터와 대사가 정중앙, <strong>대사만 세리프체</strong> — 말하는 존재만 서체가 다르면 “UI가 아니라 누구”가 된다</li>
+    <li>검색창 필수 유지, 단 대사 아래 배치</li>
+    <li><code>chrome.topSites</code>로 자주 가는 사이트 복원 — 없으면 “원래 있던 게 사라졌다”고 느낀다</li>
+  </ul>
+<pre><code>document.querySelector('input').focus();            <span class="c">// 최우선</span>
+chrome.storage.local.get('dialogue').then(render);  <span class="c">// 그 다음</span></code></pre>
+  <p><code>Ctrl+T</code> 직후 타이핑하는 사용자가 첫 글자를 놓치면 안 된다.</p>
+
+  <h3>대사 캐싱</h3>
+  <p>사이트든 새 탭이든 <strong>진입 시 LLM 호출 금지</strong>.</p>
+  <table>
+    <thead><tr><th></th><th>호출 수</th><th>일일 토큰</th></tr></thead>
+    <tbody>
+      <tr><td>세션 종료 시</td><td>8회</td><td>~26,000</td></tr>
+      <tr><td>진입 시마다</td><td>40회</td><td>~128,000</td></tr>
+    </tbody>
+  </table>
+  <p>비용 5배 차이보다 심각한 문제가 둘 있다. <strong>대사가 매번 바뀌면</strong> 같은 하루인데 말이 달라져 기억이 있는 존재로 느껴지지 않는다. 그리고 <strong>1~3초 로딩 스피너</strong>가 보이는 순간 사용자가 이탈한다.</p>
+  <p>세션 종료 시 시간대별 대사 3~4개를 미리 생성해두면 호출 1회로 하루 종일 살아있는 것처럼 보인다.</p>
+</section>
+
+<!-- ══ 10 ══ -->
+<section id="s10">
+  <div class="sec-num">10</div>
+  <h2>데이터 모델</h2>
+
+  <div class="maxim">experiences는 절대 UPDATE 하지 않는다.</div>
+  <p>나머지는 전부 여기서 재계산 가능한 파생 테이블로 둔다. 그러면 나중에 규칙이나 프롬프트를 바꿔도 되돌릴 수 있다. <code>thread_id</code> 부착 1회만 예외다.</p>
+
+  <table>
+    <thead><tr><th>테이블</th><th>성격</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td><code>users</code> / <code>devices</code></td><td>원본</td><td>익명 키 + 구글 계정</td></tr>
+      <tr><td><code>characters</code></td><td>파생 캐시</td><td>툴 게이팅이 JOIN 없이 한 행만 읽도록</td></tr>
+      <tr><td><code>sessions</code></td><td>원본</td><td>PK = 클라이언트 UUID</td></tr>
+      <tr><td><code>experiences</code></td><td>원본 · 불변</td><td>모든 파생의 근원</td></tr>
+      <tr><td><code>experience_skills</code></td><td>원본</td><td>조인 테이블</td></tr>
+      <tr><td><code>user_skills</code></td><td>파생 캐시</td><td>재계산 가능</td></tr>
+      <tr><td><code>threads</code></td><td>파생</td><td>status 전이가 기억 트리거</td></tr>
+      <tr><td><code>memories</code></td><td>파생</td><td><code>forgotten_at</code> 마킹, 삭제 안 함</td></tr>
+      <tr><td><code>personality_snapshots</code></td><td>파생 · append</td><td>갱신 아님</td></tr>
+      <tr><td><code>daily_logs</code></td><td>파생</td><td><code>prompt_version</code>으로 재생성</td></tr>
+      <tr><td><code>dialogues</code></td><td>캐시</td><td>길이 CHECK 제약</td></tr>
+    </tbody>
+  </table>
+
+  <h3>설명이 필요한 결정</h3>
+  <p><strong><code>sessions.id</code>를 클라이언트가 만든다.</strong> 서버 생성 UUID면 재시도 시 같은 세션이 두 번 들어간다. 클라이언트 UUID를 PK로 두면 <code>ON CONFLICT DO NOTHING</code> 한 줄로 멱등성이 끝난다.</p>
+  <p><strong><code>emotion</code> 컬럼 대신 <code>experiences.outcome</code>.</strong> <code>success / partial / stuck / explore</code> 네 개가 감정의 재료다. <code>stuck</code> 3연속이면 답답, <code>success</code>면 성취. 감정 자체는 조회 시점에 계산한다.</p>
+  <p><strong><code>memories.forgotten_at</code>은 삭제가 아니라 마킹.</strong> Lv.80 망각이 켜져도 데이터는 남고 검색 결과에서만 빠진다. 성능 최적화가 서사와 일치하는 드문 지점이다.</p>
+  <p><strong><code>daily_logs.prompt_version</code>이 숨은 핵심.</strong> 일기 프롬프트를 개선하면 과거 일기를 전부 재생성할 수 있다. experiences를 불변으로 둔 덕분에 가능하다.</p>
+</section>
+
+<!-- ══ 11 ══ -->
+<section id="s11">
+  <div class="sec-num">11</div>
+  <h2>미결정 · 리스크</h2>
+
+  <h3>미결정 <span class="open">open</span></h3>
+  <table>
+    <thead><tr><th>항목</th><th>선택지</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td>대화 방향성</td><td>단방향 / 양방향</td><td>양방향이면 Relationship이 의미를 갖지만 “그냥 챗봇”과 경계가 흐려진다. 절충: 답장은 되되 AI가 먼저 묻지 않음</td></tr>
+      <tr><td>스킬 이름 정규화</td><td>enum 제한 / <code>skill_catalog</code> 테이블</td><td>LLM이 자유롭게 뱉으면 <code>TS</code>·<code>타입스크립트</code>·<code>TypeScript</code>가 각각 다른 행이 된다</td></tr>
+      <tr><td>도메인 → 카테고리 사전</td><td>수동 50~500개</td><td>본인 브라우징으로 시작</td></tr>
+      <tr><td>Activity Score 가중치</td><td>기획 #7 기준값</td><td>실데이터로 튜닝</td></tr>
+      <tr><td>thread 부착 시점</td><td>야간 배치 / 세션 종료 시</td><td>후자는 LLM이 이미 최근 경험을 보고 있어 호출이 안 늘어난다</td></tr>
+    </tbody>
+  </table>
+
+  <h3>리스크</h3>
+  <p><strong>스토어 심사.</strong> 방문 기록 전체를 외부 전송하는 확장은 Chrome Web Store Limited Use 정책 대상이다. <code>&lt;all_urls&gt;</code> 권한과 겹쳐 심사 난이도가 높다. 공개 배포 시 개인정보처리방침 필수.</p>
+  <p><strong>품질 리스크(프라이버시와 별개).</strong> 은행·의료·DM·비밀번호 입력창의 이벤트는 경험으로 쓸모가 없으면서 LLM 토큰만 소모한다. 최소 도메인 blocklist는 <strong>비용 절감 장치</strong>로 권장한다.</p>
+  <p><strong>초반 이탈.</strong> Lv.1은 말도 못 하고 보여줄 것도 없다. 레벨 커브를 앞으로 당겨 Lv.5를 사흘 안에 도달시키는 것으로 대응한다.</p>
+  <p><strong>LLM 환각.</strong> 데이터가 빈약해도 그럴듯하게 지어낸다. 툴 게이팅과 출력 스키마 검증으로 대응한다.</p>
+</section>
+
+<!-- ══ 12 ══ -->
+<section id="s12">
+  <div class="sec-num">12</div>
+  <h2>다음 단계</h2>
+  <ol>
+    <li><strong>세션 분할 로직 단독 구현 + 본인 데이터 검증</strong> — LLM 없이 규칙만. 여기서 예외 규칙과 카테고리 사전이 나온다</li>
+    <li><strong>경험 압축 프롬프트 + 출력 스키마</strong> — 결과물의 모양이 정해져야 스킬 이름 정규화도 결정된다</li>
+    <li><strong>DB 마이그레이션 작성</strong></li>
+    <li><strong>API 스펙 확정</strong> — <code>POST /api/sessions</code>, <code>GET /api/state</code>, <code>POST /api/register</code></li>
+    <li><strong>확장 <code>sw.js</code> 구현</strong></li>
+    <li><strong>사이트 v1</strong></li>
+  </ol>
+
+  <h3>핵심 원칙</h3>
+  <div class="maxim">AI는 시간을 학습하지 않는다. 경험을 학습한다.</div>
+  <div class="maxim">로그를 저장하지 않는다. 의미 있는 경험을 저장한다.</div>
+  <div class="maxim">LLM은 AI가 아니다. LLM은 말을 만드는 엔진이고, 진짜 AI는 Memory Engine이다.</div>
+  <div class="maxim">서비스 워커는 언제든 죽는다. 메모리에 아무것도 남기지 마라.</div>
+  <div class="maxim">규칙은 다섯 개로 시작해서 실제 데이터로 늘린다.</div>
+</section>
+
+<footer>
+  Project NA · 설계 계획서 · 2026-08-04 · 기획 문서 v1 기반
+</footer>
+
+</div>
+</body>
+</html>
