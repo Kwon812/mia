@@ -53,6 +53,7 @@ export function normalizeEvent(raw: RawEvent): ActivityEvent {
     clicks: Number(payload.clicks) || 0,
     keys: Number(payload.keys) || 0,
     tabSwitch: raw.kind === 'tab_activated',
+    playing: Boolean(payload.playing),
   };
 }
 
@@ -194,7 +195,8 @@ export function close(draft: SessionDraft, reason: FinalCloseReason, now: number
     close_reason: reason,
     continued_from: draft.continuedFrom ?? null,
     primary_category: draft.primaryCategory,
-    activity_score: draft.activityScore,
+    // playingTick(0.5) 때문에 소수가 될 수 있다 — 서버 스키마는 int.
+    activity_score: Math.round(draft.activityScore),
     unique_domains: Object.keys(draft.domains).length,
     switch_count: draft.switchCount,
     tags: draft.tags,

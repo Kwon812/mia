@@ -305,6 +305,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       scrolls: message.scrolls,
       clicks: message.clicks,
       keys: message.keys,
+      // 보이는 탭에서 미디어 재생 중 — 입력 0 이어도 시청을 활동으로 인정
+      playing: message.playing,
       // content.ts 의 document.visibilityState 기반 플래그 — 예외 C
       // (백그라운드 재생) 판정의 isActiveTab 근거가 된다 (session/builder.ts
       // normalizeEvent 참고).

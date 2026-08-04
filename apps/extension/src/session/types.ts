@@ -31,6 +31,12 @@ export interface ActivityEvent {
   keys: number;
   /** 탭 전환(tab_activated) 이벤트인지 — activityScore 가중치용 */
   tabSwitch: boolean;
+  /**
+   * 보이는 탭에서 미디어(video/audio)가 재생 중이었는가 — 입력이 0이어도
+   * 강의·영상 시청이 무활동(idle)으로 오인되지 않게 하는 신호.
+   * 비활성 탭 재생은 content script 가 신호 자체를 보내지 않는다 (예외 C 유지).
+   */
+  playing: boolean;
 }
 
 /** shouldClose() 가 실제로 판정하는 종료 사유 (계획서 04장 우선순위 순서) */

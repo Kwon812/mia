@@ -5,6 +5,8 @@ import {
   dayBoundaryCrossed,
   dominantCategory,
   isScattered,
+  eventScore,
+  ACTIVITY_WEIGHTS,
   isWorthSending,
   shouldClose,
 } from '../rules';
@@ -26,6 +28,7 @@ function ev(overrides: Partial<ActivityEvent> & { at: number; domain: string }):
     clicks: 0,
     keys: 0,
     tabSwitch: false,
+    playing: false,
     ...overrides,
   };
 }
@@ -253,5 +256,38 @@ describe('isWorthSending — 전송 필터', () => {
 
   it('조건을 모두 만족하면 통과', () => {
     expect(isWorthSending(base)).toBe(true);
+  });
+});
+
+describe('미디어 재생 신호 (playing) — 수동 시청을 활동으로 인정', () => {
+  it('입력이 0 이어도 playing 틱은 playingTick 가중치만큼 점수가 쌓인다', () => {
+    const e = ev({ at: ANCHOR, domain: 'youtube.com', scrolls: 0, clicks: 0, keys: 0, playing: true });
+    expect(eventScore(e)).toBe(ACTIVITY_WEIGHTS.playingTick);
+  });
+
+  it('1시간 수동 시청(10초 틱 360개)은 엔터테인먼트 150 컷을 넘는다', () => {
+    // 360틱 × 0.5 = 180점 — "진짜 강의 시청은 살린다" (계획서 04장)
+    const score = Math.round(360 * ACTIVITY_WEIGHTS.playingTick);
+    expect(
+      isWorthSending({
+        duration_min: 60,
+        activity_score: score,
+        unique_domains: 1,
+        primary_category: 'entertainment',
+      }),
+    ).toBe(true);
+  });
+
+  it('20분 방치 시청(120틱)은 여전히 컷', () => {
+    // 120틱 × 0.5 = 60점 — 50점 컷은 넘지만 엔터테인먼트 150 컷에 걸린다
+    const score = Math.round(120 * ACTIVITY_WEIGHTS.playingTick);
+    expect(
+      isWorthSending({
+        duration_min: 20,
+        activity_score: score,
+        unique_domains: 1,
+        primary_category: 'entertainment',
+      }),
+    ).toBe(false);
   });
 });

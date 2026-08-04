@@ -22,6 +22,9 @@ export const ACTIVITY_WEIGHTS = {
   click: 2,
   key: 1,
   tabSwitch: 5,
+  // 10초 틱당 0.5 → 시청 1시간 ≈ 180점. 전송 필터의 엔터테인먼트 컷(150)을
+  // "50분 이상 진득한 시청"만 넘도록 잡은 값 — 실데이터 튜닝 대상.
+  playingTick: 0.5,
 } as const;
 
 export function eventScore(e: ActivityEvent): number {
@@ -29,7 +32,8 @@ export function eventScore(e: ActivityEvent): number {
     e.scrolls * ACTIVITY_WEIGHTS.scroll +
     e.clicks * ACTIVITY_WEIGHTS.click +
     e.keys * ACTIVITY_WEIGHTS.key +
-    (e.tabSwitch ? ACTIVITY_WEIGHTS.tabSwitch : 0)
+    (e.tabSwitch ? ACTIVITY_WEIGHTS.tabSwitch : 0) +
+    (e.playing ? ACTIVITY_WEIGHTS.playingTick : 0)
   );
 }
 
