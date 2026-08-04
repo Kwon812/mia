@@ -25,10 +25,22 @@ export interface MetaRow {
   value: unknown;
 }
 
+// 닫힌 세션의 로컬 사본 — 3일 보관 후 자동 삭제 (사용자 결정).
+// 전송 필터에 걸러진 세션까지 전부 남겨, DB 의 LLM 출력과 대조하며
+// 세션 분할·필터 기준을 실데이터로 튜닝하는 용도다 (계획서 04장 검증 방법).
+export interface ArchivedSession {
+  id: string; // session id
+  closedAt: number; // epoch ms — 보관 기한 판정 기준
+  sent: boolean; // 서버 202 확인 여부
+  skipReason: string | null; // 전송 필터 탈락 사유 (통과면 null)
+  session: Record<string, unknown>;
+}
+
 export class NaDb extends Dexie {
   rawEvents!: EntityTable<RawEvent, 'id'>;
   pending!: EntityTable<PendingSession, 'id'>;
   meta!: EntityTable<MetaRow, 'key'>;
+  archive!: EntityTable<ArchivedSession, 'id'>;
 
   constructor() {
     super('na-extension');
@@ -36,6 +48,7 @@ export class NaDb extends Dexie {
       rawEvents: '++id, at',
       pending: 'id, status',
       meta: 'key',
+      archive: 'id, closedAt',
     });
   }
 }

@@ -178,14 +178,19 @@ export interface SendableSession {
  *    (영상 필터. 150 이상이면 강의 시청 등 진짜 몰입으로 보고 통과시킨다)
  */
 export function isWorthSending(final: SendableSession): boolean {
-  if (final.duration_min < 10) return false;
-  if (final.activity_score < 50) return false;
+  return sendSkipReason(final) === null;
+}
+
+/** 전송 필터 탈락 사유. 통과면 null. archive(3일 보관) 튜닝 기록용. */
+export function sendSkipReason(final: SendableSession): string | null {
+  if (final.duration_min < 10) return 'too_short';
+  if (final.activity_score < 50) return 'low_activity';
   if (
     final.unique_domains === 1 &&
     final.primary_category === 'entertainment' &&
     final.activity_score < 150
   ) {
-    return false;
+    return 'single_domain_entertainment';
   }
-  return true;
+  return null;
 }

@@ -1,6 +1,6 @@
 import { API_BASE } from './config';
 import { db } from './db';
-import { close, continueDraft, ingest, isWorthSending, shouldClose } from './session';
+import { close, continueDraft, ingest, sendSkipReason, shouldClose } from './session';
 import type { SessionDraft, SessionPayloadLike } from './session';
 
 // 서비스 워커: manifest 에서 "type": "module" 이므로 정적 import 사용 가능.
@@ -23,6 +23,11 @@ const ALARM_DIARY = 'diary';
 // 보고 재전송한다 (계획서 03장 "전송 안정성" — 응답 대기 중 상태를 메모리가
 // 아니라 pending 레코드로 남겨야 서비스 워커가 죽어도 복구 가능).
 const STALE_SENDING_MS = 5 * 60 * 1000;
+
+// archive(닫힌 세션 로컬 사본) 보관 기간 — 3일 (사용자 결정).
+// DB 의 LLM 출력과 대조해 세션 분할·필터 기준을 튜닝하는 용도라
+// 초반 튜닝 기간에 특히 중요하다. retry 알람에서 기한 지난 것을 지운다.
+const ARCHIVE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 
 // 다음 새벽 3시(로컬 타임)의 epoch ms 를 계산한다.
 function nextThreeAm(): number {
@@ -114,8 +119,9 @@ async function flushSession(payload: SessionPayloadLike): Promise<void> {
     });
     if (!res.ok) throw new Error(`전송 실패: HTTP ${res.status}`);
 
-    // 성공 — 'done' 으로 남기지 않고 바로 지운다.
+    // 성공 — 'done' 으로 남기지 않고 바로 지운다. archive 사본에만 전송 확인 마킹.
     await db.pending.delete(payload.id);
+    await db.archive.update(payload.id, { sent: true });
   } catch {
     await db.pending.put({
       id: payload.id,
@@ -127,14 +133,27 @@ async function flushSession(payload: SessionPayloadLike): Promise<void> {
 }
 
 /**
- * 확정된(닫힌) 세션을 전송 필터에 통과시키고, 통과하면 flush 한다.
- * 탈락하면 폐기 로그만 남기고 서버로 보내지 않는다 (계획서 04장 전송 필터).
+ * 확정된(닫힌) 세션 처리.
+ * 1) 전송 여부와 무관하게 archive 에 3일 보관 — 필터에 걸러진 세션까지 남겨야
+ *    LLM 출력과 대조하며 분할·필터 기준을 튜닝할 수 있다 (사용자 결정).
+ * 2) 전송 필터(계획서 04장) 통과 시에만 서버로 flush.
  */
-function dispatchClosedSession(payload: SessionPayloadLike): void {
-  if (isWorthSending(payload)) {
+async function dispatchClosedSession(payload: SessionPayloadLike): Promise<void> {
+  const skipReason = sendSkipReason(payload);
+
+  await db.archive.put({
+    id: payload.id,
+    closedAt: Date.now(),
+    sent: false,
+    skipReason,
+    session: payload as unknown as Record<string, unknown>,
+  });
+
+  if (skipReason === null) {
     void flushSession(payload);
   } else {
-    console.debug('[NA] 세션 폐기 (전송 기준 미달):', payload.id, {
+    console.debug('[NA] 세션 미전송 (전송 기준 미달):', payload.id, {
+      skipReason,
       duration_min: payload.duration_min,
       activity_score: payload.activity_score,
       primary_category: payload.primary_category,
@@ -168,7 +187,7 @@ async function handleSessionCheck(): Promise<void> {
     return;
   }
 
-  dispatchClosedSession(close(updated, reason, now));
+  await dispatchClosedSession(close(updated, reason, now));
 
   if (reason === 'maxlen') {
     // 4시간 절단 — 곧바로 다음 draft 를 이어 시작한다 (continued_from).
@@ -191,6 +210,9 @@ async function handleCompress(): Promise<void> {
  */
 async function handleRetry(): Promise<void> {
   const now = Date.now();
+
+  // archive 보관 기한(3일) 지난 세션 사본 정리.
+  await db.archive.where('closedAt').below(now - ARCHIVE_RETENTION_MS).delete();
 
   const extensionKey = await getExtensionKey();
   if (!extensionKey) {
