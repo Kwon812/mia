@@ -1,0 +1,18 @@
+{
+  "name": "@na/batch",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@na/db": "*",
+    "@na/shared": "*",
+    "tsx": "^4"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "@types/node": "^20"
+  }
+}

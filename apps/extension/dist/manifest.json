@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Project NA",
+  "version": "0.0.1",
+  "permissions": ["storage", "alarms", "tabs", "idle", "topSites"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "sw.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Project NA"
+  }
+}

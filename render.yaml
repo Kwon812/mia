@@ -1,0 +1,13 @@
+services:
+  - type: cron
+    name: na-nightly-batch
+    runtime: node
+    plan: starter
+    schedule: "0 18 * * *" # UTC 18:00 = KST 03:00
+    buildCommand: npm ci
+    startCommand: npm start -w @na/batch
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

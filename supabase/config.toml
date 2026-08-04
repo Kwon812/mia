@@ -412,3 +412,13 @@ enabled = true
 # declarative_schema_path = "./database"
 # JSON string passed through to pg-delta SQL formatting.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
+
+# Project NA — 구글 OAuth (Lv.5 계정 연결).
+# v1 은 익명 키만 쓰므로 비활성. 계정 연결 구현 시 true 로 바꾸고
+# .env 에 SUPABASE_AUTH_EXTERNAL_GOOGLE_* 를 채운다.
+[auth.external.google]
+enabled = false
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
+# 로컬 환경에서 구글 로그인 테스트 시 필요
+skip_nonce_check = true

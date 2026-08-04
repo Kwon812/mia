@@ -1,0 +1,383 @@
+// ============================================================
+// Project NA — Drizzle 스키마 (쿼리 레이어 전용)
+//
+// 마이그레이션의 유일한 진실은
+//   supabase/migrations/20260804000001_init.sql
+// 이다. 이 파일은 그 DDL 을 타입 안전하게 다시 표현한 것일 뿐,
+// drizzle-kit generate/push 로 이 파일에서 마이그레이션을 만들지 않는다.
+// (컬럼을 고치고 싶으면 새 Supabase SQL 마이그레이션을 먼저 쓰고
+//  이 파일을 그에 맞춰 손으로 동기화한다.)
+// ============================================================
+
+import { sql } from 'drizzle-orm';
+import {
+  bigserial,
+  boolean,
+  check,
+  date,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  smallint,
+  text,
+  timestamp,
+  uuid,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
+
+// ------------------------------------------------------------
+// 공용 enum 유니온 타입
+// DB 에는 네이티브 enum 이 아니라 TEXT + CHECK 로만 존재하므로
+// drizzle 컬럼도 pgEnum 이 아닌 text({ enum: [...] }) 로 맞춘다.
+// ------------------------------------------------------------
+
+export const CLOSE_REASONS = ['idle', 'switch', 'maxlen', 'day', 'shutdown'] as const;
+export type CloseReason = (typeof CLOSE_REASONS)[number];
+
+export const THREAD_STATUSES = ['active', 'completed', 'abandoned'] as const;
+export type ThreadStatus = (typeof THREAD_STATUSES)[number];
+
+export const EXPERIENCE_OUTCOMES = ['success', 'partial', 'stuck', 'explore'] as const;
+export type ExperienceOutcome = (typeof EXPERIENCE_OUTCOMES)[number];
+
+export const DIALOGUE_SLOTS = ['morning', 'afternoon', 'evening', 'night'] as const;
+export type DialogueSlot = (typeof DIALOGUE_SLOTS)[number];
+
+// ============================================================
+// 1. 사용자 / 캐릭터
+// ============================================================
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  extensionKey: text('extension_key').notNull().unique(), // 확장이 발급받는 익명 키
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const characters = pgTable('characters', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name'), // 사용자가 지어준 이름. NULL = 아직 없음
+  namedAt: timestamp('named_at', { withTimezone: true }),
+
+  // 아래는 전부 파생 캐시. 야간 배치에서 재계산한다.
+  level: smallint('level').notNull().default(1),
+  experienceCount: integer('experience_count').notNull().default(0),
+  skillCount: integer('skill_count').notNull().default(0),
+  activeDays: integer('active_days').notNull().default(0),
+  memoryCount: integer('memory_count').notNull().default(0),
+  oldestMemoryAt: timestamp('oldest_memory_at', { withTimezone: true }), // Lv.30 툴 게이팅 조건
+
+  lastComputedAt: timestamp('last_computed_at', { withTimezone: true }),
+});
+
+// ============================================================
+// 2. 세션 — 확장이 보낸 관측 단위
+// ============================================================
+
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').primaryKey(), // 클라이언트 생성 UUID. DB 기본값 없음(defaultRandom 금지)
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    endedAt: timestamp('ended_at', { withTimezone: true }).notNull(),
+    durationMin: integer('duration_min').notNull(),
+
+    closeReason: text('close_reason', { enum: CLOSE_REASONS }).notNull(),
+    continuedFrom: uuid('continued_from').references((): AnyPgColumn => sessions.id), // maxlen 절단 시 이전 세션
+
+    primaryCategory: text('primary_category').notNull(),
+    activityScore: integer('activity_score').notNull(),
+    uniqueDomains: smallint('unique_domains').notNull(),
+    switchCount: smallint('switch_count').notNull().default(0),
+    tags: text('tags').array().default([]), // 'scattered' 등
+
+    compressedLog: jsonb('compressed_log').notNull().$type<unknown>(), // LLM 입력 원본
+    domains: jsonb('domains').notNull().$type<Record<string, number>>(), // { "github.com": 320, ... }
+
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp('processed_at', { withTimezone: true }), // NULL = LLM 미처리
+  },
+  (t) => [
+    // PK 가 클라이언트 UUID 라서 재시도 중복이 자동으로 막힌다.
+    // 서버는 ON CONFLICT DO NOTHING 으로 받으면 끝.
+    index('idx_sessions_unprocessed')
+      .on(t.userId, t.receivedAt)
+      .where(sql`${t.processedAt} is null`),
+    index('idx_sessions_user_time').on(t.userId, t.startedAt.desc()),
+    // text({ enum }) 은 TS 타입만 좁힌다. DB 레벨 CHECK 도 명시적으로 남긴다.
+    check('sessions_close_reason_check', sql`${t.closeReason} in ('idle','switch','maxlen','day','shutdown')`),
+  ],
+);
+
+// ============================================================
+// 3. 스레드 — 여러 경험에 걸친 하나의 작업
+//    (experiences 가 참조하므로 먼저 정의)
+// ============================================================
+
+export const threads = pgTable(
+  'threads',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+
+    title: text('title').notNull(), // "Redis 캐싱 도입"
+    category: text('category').notNull(),
+    status: text('status', { enum: THREAD_STATUSES }).notNull().default('active'),
+
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    lastActivityAt: timestamp('last_activity_at', { withTimezone: true }).notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    experienceCount: integer('experience_count').notNull().default(1),
+  },
+  (t) => [
+    index('idx_threads_active').on(t.userId, t.lastActivityAt.desc()).where(sql`${t.status} = 'active'`),
+    check('threads_status_check', sql`${t.status} in ('active','completed','abandoned')`),
+  ],
+);
+
+// status 전이가 곧 기억 생성 트리거다.
+//   started            → "Unity 시작"
+//   active → completed → "첫 게임 출시"
+//   30일 무활동        → abandoned (기억 아님. 성격 축 '완결형↔탐색형' 입력)
+
+// ============================================================
+// 4. 경험 — 의미 단위. 불변.
+// ============================================================
+
+export const experiences = pgTable(
+  'experiences',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id')
+      .notNull()
+      .unique()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    threadId: uuid('thread_id').references(() => threads.id), // 나중에 부착. 유일한 UPDATE 대상
+
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(), // session.started_at. 정렬은 항상 이걸로
+    summary: text('summary').notNull(), // "Redis 캐싱 구현 성공"
+    detail: text('detail'), // 2~3문장. 일기 생성용
+    category: text('category').notNull(),
+
+    outcome: text('outcome', { enum: EXPERIENCE_OUTCOMES }),
+    isFirstTime: boolean('is_first_time').notNull().default(false), // 신규 스킬 포함 여부
+    memoryScore: integer('memory_score').notNull().default(0), // Memory Engine 점수
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('idx_exp_user_time').on(t.userId, t.occurredAt.desc()),
+    index('idx_exp_thread').on(t.threadId).where(sql`${t.threadId} is not null`),
+    index('idx_exp_unthreaded').on(t.userId, t.occurredAt).where(sql`${t.threadId} is null`),
+    check('experiences_outcome_check', sql`${t.outcome} in ('success','partial','stuck','explore')`),
+  ],
+);
+
+// outcome 이 감정의 재료다.
+//   stuck 3연속  → 답답
+//   success      → 성취
+//   explore      → 호기심
+// emotion 컬럼을 두지 않는 이유: 감정은 시점에 따라 달라지는 파생값이다.
+
+// ============================================================
+// 5. 스킬
+// ============================================================
+
+export const experienceSkills = pgTable(
+  'experience_skills',
+  {
+    experienceId: uuid('experience_id')
+      .notNull()
+      .references(() => experiences.id, { onDelete: 'cascade' }),
+    skillName: text('skill_name').notNull(), // 'TypeScript', 'Unity'
+    weight: smallint('weight').notNull().default(1),
+  },
+  (t) => [
+    primaryKey({ columns: [t.experienceId, t.skillName] }),
+    index('idx_expskill_name').on(t.skillName),
+  ],
+);
+
+// 파생 캐시. experience_skills 에서 언제든 재계산 가능.
+export const userSkills = pgTable(
+  'user_skills',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    skillName: text('skill_name').notNull(),
+    domain: text('domain').notNull(), // 'programming' | 'art' | 'life' — DB 제약 없는 자유 텍스트
+    points: integer('points').notNull().default(0),
+    useCount: integer('use_count').notNull().default(0),
+    firstUsedAt: timestamp('first_used_at', { withTimezone: true }).notNull(), // is_first_time 판정 기준
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull(), // "오래 안 쓴 스킬 재등장" 판정
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.skillName] }),
+    index('idx_userskill_recent').on(t.userId, t.lastUsedAt.desc()),
+  ],
+);
+
+// ============================================================
+// 6. 장기 기억
+// ============================================================
+
+export const memories = pgTable(
+  'memories',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+
+    threadId: uuid('thread_id').references(() => threads.id),
+    experienceId: uuid('experience_id').references(() => experiences.id),
+
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    title: text('title').notNull(), // "첫 게임 출시"
+    body: text('body').notNull(),
+    importance: smallint('importance').notNull(),
+    trigger: text('trigger').notNull(), // 'new_skill' | 'thread_complete' | 'comeback'
+
+    refCount: integer('ref_count').notNull().default(0), // searchMemory 로 불려간 횟수
+    lastReferencedAt: timestamp('last_referenced_at', { withTimezone: true }),
+    forgottenAt: timestamp('forgotten_at', { withTimezone: true }), // Lv.80 망각. 삭제하지 않고 마킹
+  },
+  (t) => [
+    index('idx_mem_user_time').on(t.userId, t.occurredAt.desc()).where(sql`${t.forgottenAt} is null`),
+    // GIN 전문검색 인덱스. title || ' ' || body 표현식에 대한 함수형 인덱스.
+    index('idx_mem_search').using('gin', sql`to_tsvector('simple', ${t.title} || ' ' || ${t.body})`),
+  ],
+);
+
+// 망각 기준: importance 낮음 + ref_count 0 + 180일 경과
+// 삭제가 아니라 forgotten_at 마킹. searchMemory 결과에서만 빠진다.
+// 성능 최적화가 서사와 일치하는 지점.
+
+// ============================================================
+// 7. 성격 — 스냅샷
+// ============================================================
+
+export const personalitySnapshots = pgTable(
+  'personality_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull(),
+    windowStart: timestamp('window_start', { withTimezone: true }).notNull(), // 2주 이동평균 구간
+    windowEnd: timestamp('window_end', { withTimezone: true }).notNull(),
+
+    // 각 축 -100 ~ +100 (범위는 CHECK 로 강제하지 않음. 원본 DDL 도 강제하지 않는다)
+    focusScatter: smallint('focus_scatter').notNull(), // 몰입형(+) ↔ 산만형(-)
+    depthBreadth: smallint('depth_breadth').notNull(), // 집중형(+) ↔ 멀티형(-)
+    finishExplore: smallint('finish_explore').notNull(), // 완결형(+) ↔ 탐색형(-)
+    pioneerMaster: smallint('pioneer_master').notNull(), // 개척형(+) ↔ 숙련형(-)
+    nightMorning: smallint('night_morning').notNull(), // 새벽형(+) ↔ 아침형(-)
+
+    sampleSize: integer('sample_size').notNull(), // 근거 세션 수. 적으면 신뢰도 낮음
+  },
+  (t) => [index('idx_persona_user').on(t.userId, t.computedAt.desc())],
+);
+
+// 갱신이 아니라 append. compareSnapshot(t1, t2) 가 Lv.50 툴이다.
+// 축 산출은 전부 sessions 에서 나온다. experiences 를 안 봐도 된다.
+//   focus_scatter  = f(세션 평균 길이, scattered 태그 비율)
+//   depth_breadth  = f(세션당 unique_domains)
+//   finish_explore = f(threads completed / (completed + abandoned))
+//   pioneer_master = f(is_first_time 비율)
+//   night_morning  = f(started_at 시간대 분포)
+
+// ============================================================
+// 8. 일기 — 파생 테이블
+// ============================================================
+
+export const dailyLogs = pgTable(
+  'daily_logs',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    logDate: date('log_date').notNull(), // DATE. 새벽 4시 기준 하루 (문자열 모드 — 아래 주석 참고)
+    summary: text('summary').notNull(),
+    learned: text('learned').array().default([]),
+    emotion: text('emotion'),
+    experienceIds: uuid('experience_ids').array().notNull(), // 재생성 근거
+    generatedAt: timestamp('generated_at', { withTimezone: true }).notNull().defaultNow(),
+    promptVersion: smallint('prompt_version').notNull().default(1),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.logDate] })],
+);
+
+// date() 는 기본값(모드 미지정)이 문자열 모드다. "YYYY-MM-DD" 문자열로
+// 주고받아 "새벽 4시 기준 하루"라는 서버 로컬 규칙에 타임존 변환이
+// 끼어들지 않게 한다. SQL 컬럼 타입은 DDL 그대로 DATE.
+//
+// prompt_version 이 핵심. 프롬프트를 개선하면 과거 일기를 전부
+// 재생성할 수 있다. experiences 가 불변이라 가능한 일.
+
+// ============================================================
+// 9. 대사 캐시
+// ============================================================
+
+export const dialogues = pgTable(
+  'dialogues',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    slot: text('slot', { enum: DIALOGUE_SLOTS }).notNull(),
+    text: text('text').notNull(), // CHECK char_length(text) <= 80 — 주석 참고
+    sourceSessionId: uuid('source_session_id').references(() => sessions.id),
+    generatedAt: timestamp('generated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.slot] }),
+    check('dialogues_slot_check', sql`${t.slot} in ('morning','afternoon','evening','night')`),
+    check('dialogues_text_length_check', sql`char_length(${t.text}) <= 80`),
+  ],
+);
+
+// 사이트/새 탭 진입 시 이 4행만 읽는다. LLM 호출 없음.
+// CHECK 로 길이를 강제한다. 화면이 무너지는 것을 DB 레벨에서 막는 편이
+// 프롬프트로 부탁하는 것보다 확실하다.
+
+// ============================================================
+// 10. 전송 실패 추적
+// ============================================================
+
+export const ingestFailures = pgTable('ingest_failures', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  sessionId: uuid('session_id'),
+  reason: text('reason').notNull(),
+  payload: jsonb('payload').$type<unknown>(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// LLM 응답이 스키마 검증에 실패하면 여기 남긴다.
+// 세션은 processed_at NULL 로 남아 재처리 대상이 된다.
+
+// ------------------------------------------------------------
+// CHECK 제약 표현 방식 정리
+//   sessions.close_reason / threads.status / experiences.outcome / dialogues.slot
+//     → text({ enum: [...] }) 로 TS 유니온 타입까지 좁히고, check() 로 동일한
+//       값 목록을 DB 레벨 제약으로도 남겼다 (이중 표현이지만 의도적).
+//   dialogues.text 길이(<=80)
+//     → check() 로 char_length 표현식을 그대로 옮겼다.
+//   그 외 마이그레이션에 있는 CHECK 는 전부 위 목록으로 커버된다.
+// ------------------------------------------------------------
