@@ -12,4 +12,4 @@ npm run build -w @na/extension
 
 ## 알람 구조
 
-`sessionCheck`(1분) · `compress`(5분) · `retry`(10분) · `diary`(매일 새벽 3시) — 서비스 워커는 30초 유휴 시 종료되므로 `setInterval` 대신 `chrome.alarms` + IndexedDB(Dexie)로 상태를 유지한다.
+`sessionCheck`(1분) · `retry`(10분) · `diary`(매일 새벽 3시) — 서비스 워커는 30초 유휴 시 종료되므로 `setInterval` 대신 `chrome.alarms` + IndexedDB(Dexie)로 상태를 유지한다.

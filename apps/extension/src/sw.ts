@@ -15,7 +15,6 @@ import type { SessionDraft, SessionPayloadLike } from './session';
 // 알람에서 그대로 이어갈 수 있다.
 
 const ALARM_SESSION_CHECK = 'sessionCheck';
-const ALARM_COMPRESS = 'compress';
 const ALARM_RETRY = 'retry';
 const ALARM_DIARY = 'diary';
 
@@ -41,8 +40,11 @@ function nextThreeAm(): number {
 }
 
 function registerAlarms(): void {
+  // 계획서 03장의 compress(5분) 알람은 없다 — 1차 압축은 content script 의
+  // 10초 집계가, 2차 압축은 sessionCheck(1분)의 draft 흡수가 이미 담당한다.
+  // rawEvents 는 흡수 즉시 삭제되므로 별도 압축 단계가 필요 없어졌다.
+  void chrome.alarms.clear('compress'); // 구버전이 등록해둔 잔재 정리
   chrome.alarms.create(ALARM_SESSION_CHECK, { periodInMinutes: 1 });
-  chrome.alarms.create(ALARM_COMPRESS, { periodInMinutes: 5 });
   chrome.alarms.create(ALARM_RETRY, { periodInMinutes: 10 });
   chrome.alarms.create(ALARM_DIARY, {
     when: nextThreeAm(),
@@ -178,8 +180,8 @@ async function handleSessionCheck(): Promise<void> {
 
   const updated = ingest(draft, rawEvents, now);
 
-  // 반영이 끝난 rawEvents 는 지운다 — rawEvents 를 200~500건 수준으로 유지하는
-  // compress 알람과 별개로, 세션에 흡수된 원본은 더 이상 필요 없다.
+  // 반영이 끝난 rawEvents 는 즉시 지운다 — draft 흡수가 곧 압축이므로
+  // 세션에 반영된 원본은 더 이상 필요 없다 (rawEvents 수명 = 최대 1분).
   const processedIds = rawEvents.map((e) => e.id).filter((id): id is number => id !== undefined);
   if (processedIds.length > 0) await db.rawEvents.bulkDelete(processedIds);
 
@@ -200,11 +202,6 @@ async function handleSessionCheck(): Promise<void> {
     // draft=null 로 ingest() 를 호출해 새 세션을 새로 시작한다.
     await saveCurrentSession(null);
   }
-}
-
-async function handleCompress(): Promise<void> {
-  // TODO: rawEvents 를 시간 순으로 묶어 세션 단위로 압축하고, 압축된 원본은
-  // rawEvents 에서 제거해 200~500건 수준으로 유지한다.
 }
 
 /**
@@ -263,9 +260,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   switch (alarm.name) {
     case ALARM_SESSION_CHECK:
       void handleSessionCheck();
-      break;
-    case ALARM_COMPRESS:
-      void handleCompress();
       break;
     case ALARM_RETRY:
       void handleRetry();
