@@ -305,3 +305,27 @@ describe('blocked 도메인 — sw 필터를 우회해 들어와도 세션에서
     expect(d.domains).not.toHaveProperty('kbstar.com');
   });
 });
+
+describe('primaryCategory — etc 잠정값 승격', () => {
+  it('구글(COMPANION) 새 탭에서 시작해도 실제 카테고리가 나타나면 승격된다', () => {
+    // 시작: 구글만 — COMPANION 은 투표권이 없어 잠정 'etc'
+    const first = ingest(null, [raw({ at: ANCHOR, domain: 'google.com', payload: { scrolls: 2 } })], ANCHOR);
+    expect(first.primaryCategory).toBe('etc');
+
+    // 깃허브 활동이 나타나는 순간 dev 로 승격 — 가짜 switch 절단 방지
+    const second = ingest(
+      first,
+      [raw({ at: ANCHOR + 2 * MIN, domain: 'github.com', payload: { scrolls: 3, keys: 10 } })],
+      ANCHOR + 2 * MIN,
+    );
+    expect(second.primaryCategory).toBe('dev');
+
+    // 한 번 실제 카테고리로 굳으면 이후에는 고정
+    const third = ingest(
+      second,
+      [raw({ at: ANCHOR + 4 * MIN, domain: 'youtube.com', payload: { scrolls: 1 } })],
+      ANCHOR + 4 * MIN,
+    );
+    expect(third.primaryCategory).toBe('dev');
+  });
+});

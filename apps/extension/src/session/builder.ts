@@ -119,8 +119,15 @@ export function ingest(
     startedAt,
   );
 
-  // primaryCategory 는 세션 시작 시 1회 확정, 이후 draft 생존 동안 고정.
-  const primaryCategory = draft?.primaryCategory ?? pickDominantCategory(events) ?? 'etc';
+  // primaryCategory 는 실제 카테고리로 확정되면 고정이지만, 'etc' 는 잠정값으로
+  // 취급한다 — 새 탭(구글)에서 세션이 시작되면 COMPANION 제외 규칙 때문에 투표할
+  // 이벤트가 없어 'etc' 로 굳고, 이후 깃허브에서 2시간을 보내도 'etc' 인 채로
+  // recent(dev) vs primary(etc) 불일치 → 가짜 switch 절단이 나기 때문이다.
+  // 실제 카테고리가 나타나는 순간 승격하고 그때부터 고정.
+  let primaryCategory = draft?.primaryCategory ?? pickDominantCategory(events) ?? 'etc';
+  if (primaryCategory === 'etc') {
+    primaryCategory = pickDominantCategory(events) ?? 'etc';
+  }
 
   const base: SessionDraft = {
     id: draft?.id ?? newId(),
