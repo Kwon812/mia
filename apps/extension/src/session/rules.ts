@@ -57,19 +57,23 @@ export function dominantCategory(events: ActivityEvent[]): string | undefined {
   const relevant = events.filter(isRelevantForCategory);
   if (relevant.length === 0) return undefined;
 
-  const counts = new Map<string, number>();
+  // 개수가 아니라 활동 점수 가중 투표 — playing 틱(0.5)은 10초마다 꼬박꼬박
+  // 오기 때문에 개수로 세면 듀얼 모니터에서 보이기만 하는 유튜브가 실제 작업
+  // 카테고리를 뺏을 수 있다. 점수 기준이면 입력이 있는 작업이 압도하고,
+  // 순수 시청 세션(입력 0)은 경쟁자가 없어 여전히 시청이 우세로 잡힌다.
+  const scores = new Map<string, number>();
   const order: string[] = [];
   for (const e of relevant) {
-    if (!counts.has(e.category)) {
-      counts.set(e.category, 0);
+    if (!scores.has(e.category)) {
+      scores.set(e.category, 0);
       order.push(e.category);
     }
-    counts.set(e.category, counts.get(e.category)! + 1);
+    scores.set(e.category, scores.get(e.category)! + eventScore(e));
   }
 
   let best = order[0];
   for (const cat of order) {
-    if (counts.get(cat)! > counts.get(best)!) best = cat;
+    if (scores.get(cat)! > scores.get(best)!) best = cat;
   }
   return best;
 }

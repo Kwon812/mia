@@ -291,3 +291,27 @@ describe('미디어 재생 신호 (playing) — 수동 시청을 활동으로 �
     ).toBe(false);
   });
 });
+
+describe('dominantCategory — 점수 가중 투표', () => {
+  it('듀얼 모니터: 보이기만 하는 유튜브(playing 틱)가 실제 작업 카테고리를 뺏지 못한다', () => {
+    const events: ActivityEvent[] = [];
+    // 10초마다 번갈아: 작업 탭(입력 있음) vs 유튜브(playing 만) — 개수는 동일
+    for (let i = 0; i < 12; i++) {
+      events.push(ev({ at: ANCHOR + i * 10_000, domain: 'github.com', scrolls: 2, keys: 5 }));
+      events.push(
+        ev({ at: ANCHOR + i * 10_000 + 5_000, domain: 'youtube.com', scrolls: 0, clicks: 0, keys: 0, playing: true }),
+      );
+    }
+    expect(dominantCategory(events)).toBe('dev');
+  });
+
+  it('순수 시청(입력 0)은 여전히 시청 카테고리가 우세로 잡힌다', () => {
+    const events: ActivityEvent[] = [];
+    for (let i = 0; i < 12; i++) {
+      events.push(
+        ev({ at: ANCHOR + i * 10_000, domain: 'youtube.com', scrolls: 0, clicks: 0, keys: 0, playing: true }),
+      );
+    }
+    expect(dominantCategory(events)).toBe('entertainment');
+  });
+});
