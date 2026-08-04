@@ -1,6 +1,6 @@
 import { API_BASE } from './config';
 import { db } from './db';
-import { close, continueDraft, ingest, sendSkipReason, shouldClose } from './session';
+import { close, continueDraft, ingest, isBlockedDomain, sendSkipReason, shouldClose } from './session';
 import type { SessionDraft, SessionPayloadLike } from './session';
 
 // 서비스 워커: manifest 에서 "type": "module" 이므로 정적 import 사용 가능.
@@ -291,10 +291,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type !== 'ACTIVITY') return;
 
+  const domain = message.url ?? domainOf(sender.tab?.url);
+  // 방어적 필터 — content script 가 blocked 도메인이면 이미 신호 자체를 보내지
+  // 않지만, 혹시 모를 우회(구버전 content script, 수동 메시지 등)에 대비해
+  // 서비스 워커에서도 한 번 더 걸러 rawEvents 에 아예 남기지 않는다.
+  if (isBlockedDomain(domain)) return;
+
   void db.rawEvents.add({
     at: Date.now(),
     kind: 'activity',
-    domain: message.url ?? domainOf(sender.tab?.url),
+    domain,
     payload: {
       scrolls: message.scrolls,
       clicks: message.clicks,
@@ -305,17 +311,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // (백그라운드 재생) 판정의 isActiveTab 근거가 된다 (session/builder.ts
       // normalizeEvent 참고).
       visible: message.visible,
+      // 의도 컨텍스트 — session/builder.ts normalizeEvent 에서 ActivityEvent 로 매핑된다.
+      title: message.title,
+      path: message.path,
+      query: message.query,
     },
   });
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   void chrome.tabs.get(activeInfo.tabId, (tab) => {
+    const domain = domainOf(tab?.url);
+    if (isBlockedDomain(domain)) return; // 방어적 필터 — blocked 도메인은 tabs 이벤트도 기록하지 않는다
+
     void db.rawEvents.add({
       at: Date.now(),
       kind: 'tab_activated',
-      domain: domainOf(tab?.url),
-      payload: { tabId: activeInfo.tabId, windowId: activeInfo.windowId },
+      domain,
+      // tabs 권한으로 얻는 tab.title 도 의도 컨텍스트로 함께 저장한다.
+      payload: { tabId: activeInfo.tabId, windowId: activeInfo.windowId, title: tab?.title },
     });
   });
 });
@@ -323,11 +337,15 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
 
+  const domain = domainOf(tab.url);
+  if (isBlockedDomain(domain)) return; // 방어적 필터
+
   void db.rawEvents.add({
     at: Date.now(),
     kind: 'tab_updated',
-    domain: domainOf(tab.url),
+    domain,
     // tab.active 를 그대로 실어보낸다 — 예외 C(백그라운드 재생) 판정에 쓰인다.
-    payload: { tabId, url: tab.url, active: tab.active },
+    // tab.title 도 함께 저장 — normalizeEvent 가 title 로 매핑한다.
+    payload: { tabId, url: tab.url, active: tab.active, title: tab.title },
   });
 });

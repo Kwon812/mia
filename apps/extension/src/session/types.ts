@@ -37,6 +37,22 @@ export interface ActivityEvent {
    * 비활성 탭 재생은 content script 가 신호 자체를 보내지 않는다 (예외 C 유지).
    */
   playing: boolean;
+  /**
+   * "의도가 드러나는 텍스트 컨텍스트" — document.title (200자 절단).
+   * 키 입력 내용·입력 필드 값은 절대 수집하지 않는다(키로거 금지). 이건 어디까지나
+   * 페이지가 이미 공개적으로 내건 제목일 뿐이다.
+   */
+  title?: string;
+  /**
+   * location.pathname (200자 절단). 쿼리스트링·해시는 제외 — 토큰·세션ID 등
+   * URL 파라미터에 실릴 수 있는 값의 유출을 막기 위함. 검색어는 아래 query 로만 받는다.
+   */
+  path?: string;
+  /**
+   * 검색 엔진 화이트리스트 파라미터에서만 추출한 검색어 (content.ts 의
+   * SEARCH_QUERY_PARAMS 참고). DOM 입력 필드 값을 직접 읽지 않는다.
+   */
+  query?: string;
 }
 
 /** shouldClose() 가 실제로 판정하는 종료 사유 (계획서 04장 우선순위 순서) */

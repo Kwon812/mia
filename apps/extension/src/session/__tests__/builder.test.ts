@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { RawEvent } from '../../db';
-import { close, continueDraft, ingest, normalizeEvent } from '../builder';
+import { isBlockedDomain } from '../categories';
+import { buildCompressedLog, close, continueDraft, ingest, MAX_QUERIES, MAX_TITLE_LEN, normalizeEvent } from '../builder';
 import { shouldClose } from '../rules';
+import type { SessionDraft } from '../types';
 
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
@@ -178,5 +180,126 @@ describe('예외 B — scattered 는 실제 ingest 틱을 거쳐도 누적된다
     expect(draft.tags).toContain('scattered');
     // scattered 로 흡수되어 idle/switch/maxlen/day 어느 것으로도 끊기지 않는다.
     expect(shouldClose(draft, finalNow)).toBeNull();
+  });
+});
+
+describe('normalizeEvent — 의도 컨텍스트(title/path/query) 매핑', () => {
+  it('payload 의 title/path/query 를 그대로 옮긴다', () => {
+    const e = normalizeEvent(
+      raw({
+        at: 0,
+        domain: 'google.com',
+        kind: 'activity',
+        payload: { scrolls: 1, title: 'redis cache invalidation - Google 검색', path: '/search', query: 'redis cache invalidation' },
+      }),
+    );
+    expect(e.title).toBe('redis cache invalidation - Google 검색');
+    expect(e.path).toBe('/search');
+    expect(e.query).toBe('redis cache invalidation');
+  });
+
+  it('title/path 는 MAX_TITLE_LEN 을 넘으면 절단된다', () => {
+    const longTitle = 'a'.repeat(300);
+    const e = normalizeEvent(raw({ at: 0, domain: 'github.com', payload: { title: longTitle } }));
+    expect(e.title).toHaveLength(MAX_TITLE_LEN);
+  });
+
+  it('필드가 없으면 undefined 로 남는다(전송하지 않은 것으로 취급)', () => {
+    const e = normalizeEvent(raw({ at: 0, domain: 'github.com', payload: {} }));
+    expect(e.title).toBeUndefined();
+    expect(e.path).toBeUndefined();
+    expect(e.query).toBeUndefined();
+  });
+
+  it('tab_activated/tab_updated 도 payload.title(tabs 권한)을 옮긴다', () => {
+    const e = normalizeEvent(
+      raw({ at: 0, domain: 'github.com', kind: 'tab_activated', payload: { title: 'GitHub · repo' } }),
+    );
+    expect(e.title).toBe('GitHub · repo');
+  });
+});
+
+describe('buildCompressedLog — 상한·중복 제거', () => {
+  function draftWithEvents(events: SessionDraft['events']): SessionDraft {
+    return {
+      id: 'd1',
+      startedAt: events[0]?.at ?? 0,
+      lastActivityAt: events[events.length - 1]?.at ?? 0,
+      primaryCategory: 'dev',
+      events,
+      switchCount: 0,
+      tags: [],
+      domains: {},
+      activityScore: 0,
+    };
+  }
+
+  it('구간별 title 대표값 — 가장 많이 등장한 것을 고른다', () => {
+    const events = [
+      normalizeEvent(raw({ at: 0, domain: 'github.com', payload: { title: 'Issue #1' } })),
+      normalizeEvent(raw({ at: MIN, domain: 'github.com', payload: { title: 'Issue #2' } })),
+      normalizeEvent(raw({ at: 2 * MIN, domain: 'github.com', payload: { title: 'Issue #1' } })),
+    ];
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.segments).toHaveLength(1);
+    expect(log.segments[0].title).toBe('Issue #1');
+  });
+
+  it('구간별 path 예시를 등장 순서대로, 중복 없이 모은다', () => {
+    const events = [
+      normalizeEvent(raw({ at: 0, domain: 'github.com', payload: { path: '/a' } })),
+      normalizeEvent(raw({ at: MIN, domain: 'github.com', payload: { path: '/b' } })),
+      normalizeEvent(raw({ at: 2 * MIN, domain: 'github.com', payload: { path: '/a' } })),
+    ];
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.segments[0].paths).toEqual(['/a', '/b']);
+  });
+
+  it('segments 가 MAX_SEGMENTS(20) 를 넘으면 최신 구간만 남긴다', () => {
+    const events = Array.from({ length: 25 }, (_, i) =>
+      normalizeEvent(raw({ at: i * MIN, domain: `site${i}.com` })),
+    );
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.segments).toHaveLength(20);
+    // 가장 오래된 5개(site0~site4)는 잘리고 최신 20개만 남는다.
+    expect(log.segments[0].domain).toBe('site5.com');
+    expect(log.segments.at(-1)?.domain).toBe('site24.com');
+  });
+
+  it('queries 는 세션 전체에서 중복 제거되고 MAX_QUERIES(15) 개로 상한이 걸린다', () => {
+    const events = Array.from({ length: 20 }, (_, i) =>
+      normalizeEvent(raw({ at: i * MIN, domain: 'google.com', payload: { query: `q${i % 10}` } })),
+    );
+    const log = buildCompressedLog(draftWithEvents(events));
+    // q0~q9 만 실제로 존재(중복 제거) — 10개, MAX_QUERIES(15) 이내라 그대로.
+    expect(log.queries).toHaveLength(10);
+    expect(new Set(log.queries).size).toBe(log.queries.length);
+    expect(log.queries.length).toBeLessThanOrEqual(MAX_QUERIES);
+  });
+
+  it('queries 가 MAX_QUERIES 를 넘는 고유값이면 앞에서부터 15개로 잘린다', () => {
+    const events = Array.from({ length: 20 }, (_, i) =>
+      normalizeEvent(raw({ at: i * MIN, domain: 'google.com', payload: { query: `unique-${i}` } })),
+    );
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.queries).toHaveLength(MAX_QUERIES);
+    expect(log.queries[0]).toBe('unique-0');
+  });
+});
+
+describe('blocked 도메인 — sw 필터를 우회해 들어와도 세션에서 제외된다', () => {
+  it('isBlockedDomain 은 은행 도메인에 true 를 반환한다 (방어선 확인)', () => {
+    expect(isBlockedDomain('kbstar.com')).toBe(true);
+  });
+
+  it('ingest 에 blocked 도메인 rawEvent 가 섞여 들어와도 draft.events 에서 제외된다', () => {
+    const events = [
+      raw({ at: ANCHOR, domain: 'github.com' }),
+      raw({ at: ANCHOR + MIN, domain: 'kbstar.com' }), // sw 필터를 우회해 들어온 것으로 가정
+      raw({ at: ANCHOR + 2 * MIN, domain: 'github.com' }),
+    ];
+    const d = ingest(null, events, ANCHOR + 2 * MIN);
+    expect(d.events.map((e) => e.domain)).toEqual(['github.com', 'github.com']);
+    expect(d.domains).not.toHaveProperty('kbstar.com');
   });
 });

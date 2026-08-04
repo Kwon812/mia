@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { categorize } from '../categories';
+import { categorize, isBlockedDomain } from '../categories';
 import {
   contextSwitched,
   dayBoundaryCrossed,
@@ -57,6 +57,31 @@ describe('categorize', () => {
 
   it('미등록 도메인은 etc', () => {
     expect(categorize('some-random-blog.example')).toBe('etc');
+  });
+});
+
+describe('isBlockedDomain — 프라이버시 blocklist', () => {
+  it('한국 주요 은행 도메인은 blocked', () => {
+    expect(isBlockedDomain('kbstar.com')).toBe(true);
+    expect(isBlockedDomain('shinhan.com')).toBe(true);
+    expect(isBlockedDomain('tossbank.com')).toBe(true);
+  });
+
+  it('서브도메인도 longest-suffix 로 매칭된다', () => {
+    expect(isBlockedDomain('m.kbstar.com')).toBe(true);
+    expect(isBlockedDomain('online.wooribank.com')).toBe(true);
+    expect(isBlockedDomain('accounts.gov.kr')).toBe(true);
+  });
+
+  it('메일/DM 도메인도 blocked', () => {
+    expect(isBlockedDomain('mail.google.com')).toBe(true);
+    expect(isBlockedDomain('web.whatsapp.com')).toBe(true);
+  });
+
+  it('일반 도메인은 blocked 아님', () => {
+    expect(isBlockedDomain('github.com')).toBe(false);
+    expect(isBlockedDomain('youtube.com')).toBe(false);
+    expect(isBlockedDomain('some-random-blog.example')).toBe(false);
   });
 });
 

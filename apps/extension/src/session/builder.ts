@@ -4,7 +4,7 @@
 // 인자로 받는다. 유일한 예외는 crypto.randomUUID() 로 만드는 세션 id인데,
 // 이는 "규칙 결과"가 아니라 "새 세션의 식별자 발급"이라 결정성이 필요 없다.
 
-import { categorize } from './categories';
+import { categorize, isBlockedDomain } from './categories';
 import {
   eventScore,
   isScattered as isScatteredNow,
@@ -20,8 +20,24 @@ import type { ActivityEvent, FinalCloseReason, RawEvent, SessionDraft } from './
 // 실데이터 튜닝 대상 (계획서 11장).
 const MAX_DOMAIN_GAP_MS = 10 * 60 * 1000;
 
+// ── LLM 토큰 비용 상한 (계획서 11장) ──
+// compressed_log 는 세션 종료 시 experience-engine 프롬프트에 그대로 들어간다.
+// title/path/query 를 그대로 다 실으면 세션이 길어질수록 토큰이 무한정
+// 늘어나므로 상수로 상한을 두고 관리한다.
+export const MAX_TITLE_LEN = 200; // title/path 절단 길이 (content.ts 의 MAX_TEXT_LEN 과 동일)
+export const MAX_SEGMENTS = 20; // compressed_log.segments 최대 개수 — 넘으면 최신 구간만 남긴다
+const MAX_SEGMENT_PATHS = 3; // 구간별 path 예시 최대 개수
+export const MAX_QUERIES = 15; // 세션 전체 검색 쿼리 최대 개수 (중복 제거 후)
+
 function newId(): string {
   return crypto.randomUUID();
+}
+
+/** payload 의 문자열 필드를 안전하게 꺼내고 절단한다. 비어있으면 undefined. */
+function readTextField(payload: Record<string, unknown>, key: string, maxLen: number): string | undefined {
+  const value = payload[key];
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  return value.slice(0, maxLen);
 }
 
 /** RawEvent(db.ts) → ActivityEvent(session/types.ts) 정규화. */
@@ -54,6 +70,11 @@ export function normalizeEvent(raw: RawEvent): ActivityEvent {
     keys: Number(payload.keys) || 0,
     tabSwitch: raw.kind === 'tab_activated',
     playing: Boolean(payload.playing),
+    // 의도 컨텍스트 — tab_activated/tab_updated 는 payload.title(tabs 권한),
+    // activity 는 payload.title/path/query(content script) 에서 온다.
+    title: readTextField(payload, 'title', MAX_TITLE_LEN),
+    path: readTextField(payload, 'path', MAX_TITLE_LEN),
+    query: readTextField(payload, 'query', MAX_TITLE_LEN),
   };
 }
 
@@ -80,7 +101,13 @@ export function ingest(
   rawEvents: RawEvent[],
   now: number,
 ): SessionDraft {
-  const newEvents = [...rawEvents].map(normalizeEvent).sort((a, b) => a.at - b.at);
+  // 3중 방어 — content script(신호 미전송) → sw.ts(메시지/tabs 필터) → 여기(세션
+  // 반영 직전 최종 필터). 어떤 경로로든 blocked 도메인 rawEvent 가 여기까지
+  // 넘어와도 세션(따라서 compressed_log·LLM 프롬프트)에는 절대 포함되지 않는다.
+  const newEvents = [...rawEvents]
+    .map(normalizeEvent)
+    .filter((e) => !isBlockedDomain(e.domain))
+    .sort((a, b) => a.at - b.at);
 
   const events = draft ? [...draft.events, ...newEvents] : newEvents;
   events.sort((a, b) => a.at - b.at);
@@ -139,32 +166,107 @@ interface CompressedSegment {
   category: string;
   start: string;
   end: string;
+  /** 이 구간에서 관측된 title 대표값 — 가장 많이 등장한 것, 동률이면 더 나중에 등장한 것. */
+  title?: string;
+  /** 이 구간에서 관측된 path 예시(등장 순서, 중복 제거, 최대 MAX_SEGMENT_PATHS 개). */
+  paths?: string[];
 }
 
-function buildCompressedLog(draft: SessionDraft): { segments: CompressedSegment[]; tags: string[] } {
-  const segments: CompressedSegment[] = [];
-  let cur: { domain: string; category: string; startAt: number; endAt: number } | null = null;
+/** buildCompressedLog 내부 누적용 — 아직 CompressedSegment 로 확정되기 전 상태. */
+interface RawSegment {
+  domain: string;
+  category: string;
+  startAt: number;
+  endAt: number;
+  titleCounts: Map<string, number>;
+  titleLastAt: Map<string, number>;
+  paths: string[];
+}
+
+function newRawSegment(e: ActivityEvent): RawSegment {
+  return {
+    domain: e.domain,
+    category: e.category,
+    startAt: e.at,
+    endAt: e.at,
+    titleCounts: new Map(),
+    titleLastAt: new Map(),
+    paths: [],
+  };
+}
+
+function absorbEvent(seg: RawSegment, e: ActivityEvent): void {
+  seg.endAt = e.at;
+  if (e.title) {
+    seg.titleCounts.set(e.title, (seg.titleCounts.get(e.title) ?? 0) + 1);
+    seg.titleLastAt.set(e.title, e.at);
+  }
+  if (e.path && seg.paths.length < MAX_SEGMENT_PATHS && !seg.paths.includes(e.path)) {
+    seg.paths.push(e.path);
+  }
+}
+
+/** close() 내부에서 쓰지만, 상한·중복제거 로직을 직접 검증하기 위해 export 한다. */
+export function buildCompressedLog(
+  draft: SessionDraft,
+): { segments: CompressedSegment[]; tags: string[]; queries: string[] } {
+  const rawSegments: RawSegment[] = [];
+  let cur: RawSegment | null = null;
 
   for (const e of draft.events) {
     if (cur && cur.domain === e.domain) {
-      cur.endAt = e.at;
+      absorbEvent(cur, e);
     } else {
-      if (cur) segments.push(toSegment(cur));
-      cur = { domain: e.domain, category: e.category, startAt: e.at, endAt: e.at };
+      if (cur) rawSegments.push(cur);
+      cur = newRawSegment(e);
+      absorbEvent(cur, e);
     }
   }
-  if (cur) segments.push(toSegment(cur));
+  if (cur) rawSegments.push(cur);
 
-  return { segments, tags: draft.tags };
+  // 토큰 상한 — 구간이 MAX_SEGMENTS 를 넘으면 최신 구간 위주로 남긴다
+  // (LLM 이 요약에 쓰기엔 오래된 구간보다 최근 구간이 더 유용하다는 전제).
+  const trimmed = rawSegments.length > MAX_SEGMENTS ? rawSegments.slice(-MAX_SEGMENTS) : rawSegments;
+  const segments = trimmed.map(toSegment);
+
+  // 세션 전체 검색 쿼리 — 등장 순서 유지, 중복 제거, 최대 MAX_QUERIES 개.
+  const queries: string[] = [];
+  for (const e of draft.events) {
+    if (e.query && !queries.includes(e.query)) {
+      queries.push(e.query);
+      if (queries.length >= MAX_QUERIES) break;
+    }
+  }
+
+  return { segments, tags: draft.tags, queries };
 }
 
-function toSegment(cur: { domain: string; category: string; startAt: number; endAt: number }): CompressedSegment {
-  return {
-    domain: cur.domain,
-    category: cur.category,
-    start: new Date(cur.startAt).toISOString(),
-    end: new Date(cur.endAt).toISOString(),
+function toSegment(seg: RawSegment): CompressedSegment {
+  const result: CompressedSegment = {
+    domain: seg.domain,
+    category: seg.category,
+    start: new Date(seg.startAt).toISOString(),
+    end: new Date(seg.endAt).toISOString(),
   };
+
+  if (seg.titleCounts.size > 0) {
+    let bestTitle: string | undefined;
+    let bestCount = -1;
+    let bestLastAt = -1;
+    for (const [title, count] of seg.titleCounts) {
+      const lastAt = seg.titleLastAt.get(title)!;
+      if (count > bestCount || (count === bestCount && lastAt > bestLastAt)) {
+        bestTitle = title;
+        bestCount = count;
+        bestLastAt = lastAt;
+      }
+    }
+    result.title = bestTitle;
+  }
+
+  if (seg.paths.length > 0) result.paths = seg.paths;
+
+  return result;
 }
 
 /** close() 가 만드는 전송 페이로드. packages/shared 의 sessionPayloadSchema 와

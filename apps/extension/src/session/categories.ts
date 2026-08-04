@@ -163,6 +163,56 @@ export const BACKGROUND_AUDIO: readonly string[] = [
 ];
 
 /**
+ * 수집 자체를 막는 blocklist (계획서 11장 "프라이버시 + 비용").
+ * 이 목록에 걸리면 content script 는 아무 신호도 보내지 않는다 — 활동
+ * 카운트(scrolls/clicks/keys)조차 전송하지 않는다(도메인 자체를 기록하지
+ * 않기 위함). sw.ts 는 tabs 이벤트로 들어오는 도메인에 대해 한 번 더
+ * 방어적으로 이 목록을 확인한다.
+ *
+ * ⚠️ content.ts 는 import 를 쓸 수 없는 classic script 라 이 목록을 자급자족
+ * 복제해서 갖고 있다(content.ts 상단 주석 참고). 이 배열을 수정하면 반드시
+ * content.ts 의 사본도 함께 갱신할 것.
+ */
+export const BLOCKED_DOMAINS: readonly string[] = [
+  // ── 은행 (한국 주요 은행) ──
+  'kbstar.com', // KB국민은행
+  'shinhan.com', // 신한은행
+  'wooribank.com', // 우리은행
+  'nonghyup.com', // NH농협은행
+  'nhbank.com', // NH농협은행(별칭 도메인)
+  'hanabank.com', // 하나은행
+  'ibk.co.kr', // IBK기업은행
+  'kakaobank.com', // 카카오뱅크
+  'tossbank.com', // 토스뱅크
+  'sc.co.kr', // SC제일은행
+
+  // ── 증권 ──
+  'kiwoom.com', // 키움증권
+  'miraeasset.com', // 미래에셋증권
+  'koreainvestment.com', // 한국투자증권
+  'samsungpop.com', // 삼성증권
+
+  // ── 의료/병원 예약 ──
+  'goodoc.co.kr', // 굿닥(병원 예약)
+  'nhis.or.kr', // 국민건강보험공단
+  'hidoc.co.kr', // 하이닥(병원/건강 정보)
+
+  // ── 정부 민원 ──
+  'gov.kr', // 정부24 등 정부 포털
+  'hometax.go.kr', // 국세청 홈택스
+
+  // ── 성인 사이트 (대표 도메인) ──
+  'pornhub.com',
+  'xvideos.com',
+
+  // ── 메일/DM (사적 대화·메일 내용 유출 방지) ──
+  'mail.google.com', // Gmail
+  'mail.naver.com', // 네이버 메일
+  'web.whatsapp.com', // WhatsApp 웹
+  'web.telegram.org', // Telegram 웹
+];
+
+/**
  * hostname 이 set 에 있는 도메인의 서브도메인인지(자기 자신 포함) longest-suffix
  * 로 확인한다. 예: isDomainInSet('open.spotify.com', BACKGROUND_AUDIO) === true
  */
@@ -181,6 +231,11 @@ export function isCompanionDomain(hostname: string): boolean {
 
 export function isBackgroundAudioDomain(hostname: string): boolean {
   return isDomainInSet(hostname, BACKGROUND_AUDIO);
+}
+
+/** hostname 이 BLOCKED_DOMAINS 에 걸리는지(서브도메인 포함) longest-suffix 로 확인한다. */
+export function isBlockedDomain(hostname: string): boolean {
+  return isDomainInSet(hostname, BLOCKED_DOMAINS);
 }
 
 /**
