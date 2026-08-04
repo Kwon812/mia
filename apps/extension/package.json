@@ -11,8 +11,9 @@
     "dexie": "^4"
   },
   "devDependencies": {
-    "vite": "^7",
+    "@types/chrome": "latest",
     "typescript": "^5",
-    "@types/chrome": "latest"
+    "vite": "^7",
+    "vitest": "^4.1.10"
   }
 }

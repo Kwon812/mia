@@ -1,7 +1,0 @@
-{
-  "/diary/page": "app/diary/page.js",
-  "/memories/page": "app/memories/page.js",
-  "/page": "app/page.js",
-  "/personality/page": "app/personality/page.js",
-  "/skills/page": "app/skills/page.js"
-}
