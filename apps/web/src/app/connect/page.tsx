@@ -13,7 +13,7 @@ export default async function ConnectPage() {
       <PageHeader
         kicker="CONNECT"
         title="아직 연결되지 않았어"
-        desc="확장이 발급한 키를 붙여넣으면 이 브라우저에서도 캐릭터를 볼 수 있어."
+        desc="확장이 설치돼 있으면 잠시 후 자동으로 연결돼. 안 되면 아래에서 키를 직접 붙여넣으면 돼."
       />
 
       <div className="flex flex-col gap-6">

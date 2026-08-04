@@ -22,6 +22,7 @@ export default defineConfig({
       input: {
         sw: 'src/sw.ts',
         content: 'src/content.ts',
+        'connect-content': 'src/connect-content.ts',
       },
       output: {
         entryFileNames: '[name].js',
