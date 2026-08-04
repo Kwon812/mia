@@ -6,12 +6,13 @@
 // onConflictDoNothing 으로 중복을 그냥 흡수한다.
 // ============================================================
 
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { ingestFailures, sessions } from '@na/db';
 import { sessionPayloadSchema, type SessionPayload } from '@na/shared';
 import { db } from '@/lib/db';
 import { getUserByExtensionKey } from '@/lib/api-auth';
+import { processSession } from '@/lib/experience-engine';
 
 // postgres 패키지가 던지는 에러의 최소 형태. FK 위반은 code '23503'.
 // drizzle-orm(postgres-js) 은 원본 PostgresError 를 그대로 던지지 않고
@@ -95,7 +96,14 @@ export async function POST(req: Request) {
         .onConflictDoNothing({ target: sessions.id })
         .returning({ id: sessions.id });
 
-      return NextResponse.json({ accepted: true, duplicate: inserted.length === 0 }, { status: 202 });
+      const duplicate = inserted.length === 0;
+      if (!duplicate) {
+        // 저장 성공 && 중복 아님 — 응답에 영향 주지 않고 조용히 Experience Engine 을 돌린다.
+        // 실패해도 sessions.processed_at 이 NULL 로 남아 재처리 대상이 될 뿐이다.
+        after(() => processSession(payload.id, user.id));
+      }
+
+      return NextResponse.json({ accepted: true, duplicate }, { status: 202 });
     } catch (err) {
       // continued_from 이 FK 다. maxlen 절단 시 이전 세션을 가리키는데
       // 그 이전 세션이 (아직) 존재하지 않으면 FK 위반이 난다.
@@ -114,10 +122,12 @@ export async function POST(req: Request) {
           .onConflictDoNothing({ target: sessions.id })
           .returning({ id: sessions.id });
 
-        return NextResponse.json(
-          { accepted: true, duplicate: retried.length === 0 },
-          { status: 202 },
-        );
+        const duplicate = retried.length === 0;
+        if (!duplicate) {
+          after(() => processSession(payload.id, user.id));
+        }
+
+        return NextResponse.json({ accepted: true, duplicate }, { status: 202 });
       }
 
       throw err;
