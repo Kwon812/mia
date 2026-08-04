@@ -22,6 +22,9 @@
         clicks,
         keys,
         url: location.hostname,
+        // 예외 C(백그라운드 재생) 판정용: 이 탭이 지금 보이는 탭인지.
+        // 백그라운드에서 음악만 틀어놓고 다른 탭에서 작업 중이면 false가 된다.
+        visible: document.visibilityState === 'visible',
       });
     } catch {
       // chrome.runtime 부재 또는 확장 컨텍스트 무효화(reload 등) 시 무시한다.
