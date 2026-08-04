@@ -256,7 +256,14 @@ async function handleStartup(): Promise<void> {
   const draft = await loadCurrentSession();
   if (draft) {
     const now = Date.now();
-    dispatchClosedSession(close(draft, 'shutdown', now));
+    // 마지막 활동에서 30분(idle 기준)이 안 지났으면 세션을 끊지 않고 이어간다 —
+    // 크롬 업데이트·실수 종료 후 바로 다시 켜는 경우, 하나의 작업이 둘로
+    // 쪼개져 뒤쪽 조각이 10분 필터에 버려지는 것을 막는다. 30분 이상 지났으면
+    // idle 과 같은 논리로 shutdown 마감한다.
+    if (now - draft.lastActivityAt < 30 * 60 * 1000) {
+      return; // draft 유지 — 다음 sessionCheck 가 자연스럽게 이어붙인다
+    }
+    await dispatchClosedSession(close(draft, 'shutdown', now));
     await saveCurrentSession(null);
   }
 }
