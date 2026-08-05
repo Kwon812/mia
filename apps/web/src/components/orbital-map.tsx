@@ -255,8 +255,11 @@ export function OrbitalMap({
     // 관측하려면 멈춰야 한다. 실용적으로도 중요하다: 가장 중요한 대상(기억)이
     // 가장 빨리 움직여서 누르기 어려우면 안 된다.
     let simT = 0;
+    // 위성(경험)은 시간축이 따로다. 아래 tScale 참고.
+    let satT = 0;
     let lastNow = 0;
     let tScale = 1;
+    let satScale = 1;
     let crashed = false;
     const hit = new Map<string, { x: number; y: number; r: number; kind: string }>();
 
@@ -392,13 +395,21 @@ export function OrbitalMap({
     function step(now: number) {
       const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
       lastNow = now;
-      // 겨누고 있거나, 기억 하나에 붙어 있으면 계가 멈춘다.
-      // 포커스는 "읽는 상태"라 움직이면 안 된다 — 근거를 짚어보는 동안
-      // 위성이 돌아다니면 겨눌 수가 없다.
+      // 시간축이 둘이다.
+      //   simT — 계 전체(기억). 겨누고 있거나 기억 하나에 붙어 있으면 멈춘다.
+      //          포커스 중에 뒤에서 계속 돌면 빠져나왔을 때 자리가 달라져 있어
+      //          "어디서 들어왔는지"를 잃는다.
+      //   satT — 포커스 안의 위성(경험). 겨누고 있을 때만 멈춘다.
+      // 예전에는 하나였다. 그래서 포커스에 들어가는 순간 위성까지 같이 얼어
+      // 근거가 도는 게 아니라 박혀 있었다 — 멈춰야 하는 건 배경이지 대상이 아니다.
       const scaleTarget = hovered || focusRef.current ? 0 : 1;
       tScale += (scaleTarget - tScale) * 0.16;
       simT += dt * tScale;
+      const satTarget = hovered ? 0 : 1;
+      satScale += (satTarget - satScale) * 0.16;
+      satT += dt * satScale;
       const t = reduced ? 0 : simT;
+      const ts = reduced ? 0 : satT;
 
       const target = focusRef.current ? 1 : 0;
       ft += (target - ft) * 0.08;
@@ -544,7 +555,7 @@ export function OrbitalMap({
           const ecc = ECC[b.outcome ?? ""] ?? 0.3;
 
           const speed = 0.16 / Math.pow(ra / R, 1.5);
-          const th = phaseOf(b.id) * Math.PI * 2 + t * speed;
+          const th = phaseOf(b.id) * Math.PI * 2 + ts * speed;
           const rr = (ra * (1 - ecc * ecc)) / (1 + ecc * Math.cos(th - omega));
           const lx = Math.cos(th) * rr;
           const ly = Math.sin(th) * rr * FLATTEN;
