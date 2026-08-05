@@ -137,6 +137,12 @@ async function flushSession(payload: SessionPayloadLike): Promise<void> {
     updatedAt: Date.now(),
   });
 
+  // 재시도해도 소용없는 실패인가. 4xx 는 페이로드가 문제라 몇 번을 보내도
+  // 같은 답이 온다 — 그런데 서버는 받을 때마다 ingest_failures 에 행을 하나씩
+  // 쌓는다. 확장 큐와 서버 테이블이 동시에 무한 증식하던 경로다.
+  // 429(과부하)만은 시간이 지나면 풀리므로 재시도 대상으로 남긴다.
+  let rejected: string | null = null;
+
   try {
     const extensionKey = await getExtensionKey();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -147,27 +153,44 @@ async function flushSession(payload: SessionPayloadLike): Promise<void> {
       headers,
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(`전송 실패: HTTP ${res.status}`);
 
-    // 성공 — 'done' 으로 남기지 않고 바로 지운다. archive 사본에만 전송 확인 마킹.
-    await db.pending.delete(payload.id);
-    await db.archive.update(payload.id, { sent: true });
+    if (res.ok) {
+      // 성공 — 'done' 으로 남기지 않고 바로 지운다. archive 사본에만 전송 확인 마킹.
+      await db.pending.delete(payload.id);
+      await db.archive.update(payload.id, { sent: true });
+      return;
+    }
+    if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+      rejected = `HTTP ${res.status}`;
+    }
   } catch {
+    // 네트워크 오류 — 재시도 대상이다.
+  }
+
+  if (rejected) {
+    await db.pending.delete(payload.id);
+    await db.archive.update(payload.id, { skipReason: `rejected:${rejected}` });
+    console.error('[NA] 서버가 거부해 재시도를 중단한다', payload.id, rejected);
+    return;
+  }
+
+  // 실패 기록 — 다만 **이미 지워진 레코드를 되살리지 않는다.**
+  // 같은 세션에 flush 가 둘 겹칠 수 있다(retry 가 5분 넘은 'sending' 을 고아로
+  // 보고 재전송하는데 원래 fetch 가 아직 살아있을 수 있다). 늦게 끝난 쪽이
+  // 무조건 put 하면, 먼저 성공해서 지운 레코드가 'failed' 로 부활해 10분마다
+  // 다시 전송된다 — 서버에 이미 저장된 세션인데도.
+  await db.transaction('rw', db.pending, async () => {
+    const still = await db.pending.get(payload.id);
+    if (!still) return;
     await db.pending.put({
       id: payload.id,
       status: 'failed',
       session: payload as unknown as Record<string, unknown>,
       updatedAt: Date.now(),
     });
-  }
+  });
 }
 
-/**
- * 확정된(닫힌) 세션 처리.
- * 1) 전송 여부와 무관하게 archive 에 3일 보관 — 필터에 걸러진 세션까지 남겨야
- *    LLM 출력과 대조하며 분할·필터 기준을 튜닝할 수 있다 (사용자 결정).
- * 2) 전송 필터(계획서 04장) 통과 시에만 서버로 flush.
- */
 /** 마감된 세션의 로컬 사본을 남긴다. 이게 유일한 내구성 기록이므로 반드시
  *  draft 정리보다 **먼저** 성공해야 한다 — 순서가 뒤면 draft 와 rawEvents 는
  *  지워졌는데 사본이 없어 세션이 통째로 사라진다(복구 경로 없음).
