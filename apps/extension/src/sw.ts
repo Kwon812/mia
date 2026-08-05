@@ -82,7 +82,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onStartup.addListener(() => {
   registerAlarms();
-  void handleStartup();
+  void handleStartup().catch((err) => console.error('[NA] startup 실패', err));
 });
 
 // 워커가 깨어날 때마다 알람이 살아 있는지 확인한다.
@@ -168,6 +168,22 @@ async function flushSession(payload: SessionPayloadLike): Promise<void> {
  *    LLM 출력과 대조하며 분할·필터 기준을 튜닝할 수 있다 (사용자 결정).
  * 2) 전송 필터(계획서 04장) 통과 시에만 서버로 flush.
  */
+/** 마감된 세션의 로컬 사본을 남긴다. 이게 유일한 내구성 기록이므로 반드시
+ *  draft 정리보다 **먼저** 성공해야 한다 — 순서가 뒤면 draft 와 rawEvents 는
+ *  지워졌는데 사본이 없어 세션이 통째로 사라진다(복구 경로 없음).
+ *  같은 id 로 다시 불려도 put 이라 덮어쓸 뿐 중복이 안 생긴다. */
+async function archiveClosed(payload: SessionPayloadLike): Promise<string | null> {
+  const skipReason = sendSkipReason(payload);
+  await db.archive.put({
+    id: payload.id,
+    closedAt: Date.now(),
+    sent: false,
+    skipReason,
+    session: payload as unknown as Record<string, unknown>,
+  });
+  return skipReason;
+}
+
 async function dispatchClosedSession(payload: SessionPayloadLike): Promise<void> {
   const skipReason = sendSkipReason(payload);
 
@@ -209,8 +225,13 @@ async function handleSessionCheck(): Promise<void> {
   // 판정으로는 안 보인다 — 깨어나자마자 들어온 이벤트가 lastActivityAt 을
   // 갱신해버리기 때문이다. 그러면 밤 10시와 아침 9시가 한 세션이 된다.
   if (draft && rawEvents.length > 0) {
-    const firstAt = Math.min(...rawEvents.map((e) => e.at));
-    if (idleGapBefore(draft, firstAt)) {
+    // 이미 흡수된 잔재는 빼고 본다. "저장 먼저, 삭제 나중" 순서 때문에
+    // 흡수는 됐지만 아직 안 지워진 rawEvent 가 남을 수 있는데, 그 옛 시각이
+    // 최소값으로 잡히면 공백이 0 으로 보여 감지가 통째로 무력화된다.
+    // lastActivityAt 이후의 이벤트만이 새 활동이다.
+    const fresh = rawEvents.filter((e) => e.at > draft!.lastActivityAt);
+    const firstAt = fresh.length > 0 ? Math.min(...fresh.map((e) => e.at)) : null;
+    if (firstAt !== null && idleGapBefore(draft, firstAt)) {
       const stale = draft;
       draft = null;
       await saveCurrentSession(null);
@@ -252,6 +273,17 @@ async function handleSessionCheck(): Promise<void> {
     return;
   }
 
+  // 마감 순서: **archive 먼저, draft 정리 나중, 전송 맨 마지막.**
+  //
+  // archive 가 유일한 내구성 기록이다. draft 를 먼저 지우고 archive 에서 죽으면
+  // (quota 초과 등) 그 세션은 archive 에도 pending 에도 없고 draft 와 rawEvents
+  // 까지 사라져 복구 경로가 하나도 없다. maxlen 이면 더 나쁘다 — 이어받은
+  // draft 의 continued_from 이 존재하지 않는 세션을 가리킨다.
+  // archive 가 먼저면 여기서 죽어도 draft 가 살아 있어 다음 틱에 다시 마감되고,
+  // archive.put 은 같은 id 를 덮어쓸 뿐이라 중복이 안 생긴다.
+  const payload = close(updated, reason, now);
+  const skipReason = await archiveClosed(payload);
+
   if (reason === 'maxlen') {
     // 4시간 절단 — 곧바로 다음 draft 를 이어 시작한다 (continued_from).
     await saveCurrentSession(continueDraft(updated, now));
@@ -262,9 +294,8 @@ async function handleSessionCheck(): Promise<void> {
   }
   if (processedIds.length > 0) await db.rawEvents.bulkDelete(processedIds);
 
-  // 마감 전송은 draft 정리가 끝난 뒤에. 여기서 죽어도 draft 는 이미 비워졌고
-  // 마감된 세션만 잃는다 — 살아있는 세션이 두 번 마감되는 것보다 낫다.
-  await dispatchClosedSession(close(updated, reason, now));
+  // 전송은 기다리지 않는다. 실패해도 archive 에 남아 있고 retry 알람이 맡는다.
+  if (skipReason === null) void flushSession(payload);
 }
 
 /**
@@ -387,12 +418,17 @@ async function buildSessionSnapshot(now: number): Promise<SessionSnapshot> {
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  // 실패를 반드시 남긴다. void 로만 던지면 unhandled rejection 이라 워커 콘솔에
+  // 스택만 찍히고 어느 단계에서 죽었는지 알 수 없다 — handleSessionCheck 은
+  // archive.put(quota 초과 가능)까지 await 하므로 조용히 죽을 수 있다.
+  // 다음 알람이 1분 뒤 다시 돌아 자체 복구되지만, 반복되면 알아야 한다.
+  const report = (name: string) => (err: unknown) => console.error(`[NA] ${name} 실패`, err);
   switch (alarm.name) {
     case ALARM_SESSION_CHECK:
-      void handleSessionCheck();
+      void handleSessionCheck().catch(report('sessionCheck'));
       break;
     case ALARM_RETRY:
-      void handleRetry();
+      void handleRetry().catch(report('retry'));
       break;
   }
 });
@@ -434,7 +470,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type !== 'ACTIVITY') return;
 
-  const domain = message.url ?? domainOf(sender.tab?.url);
+  // ?? 는 빈 문자열을 안 걸러낸다. content.ts 는 location.hostname 을 보내는데
+  // file:// 같은 페이지에서는 '' 이고, 그러면 builder 의 `raw.domain || 'etc'`
+  // 를 타 'etc' 도메인으로 둔갑해 unique_domains 를 부풀린다.
+  const domain = message.url || domainOf(sender.tab?.url);
+  if (!domain) return;
   // 방어적 필터 — content script 가 blocked 도메인이면 이미 신호 자체를 보내지
   // 않지만, 혹시 모를 우회(구버전 content script, 수동 메시지 등)에 대비해
   // 서비스 워커에서도 한 번 더 걸러 rawEvents 에 아예 남기지 않는다.

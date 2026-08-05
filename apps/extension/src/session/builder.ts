@@ -90,8 +90,15 @@ function computeDomainSeconds(events: ActivityEvent[]): Record<string, number> {
   // 기준은 유휴 시계와 같은 eventScore > 0 이다. 탭 전환(5)과 영상 재생 틱(0.5)은
   // 남고, 로드 완료(tab_updated, 0)만 빠진다. 빠진 이벤트의 구간은 그 앞의
   // 주의 이벤트가 이어서 먹는다 — 그게 실제로 사람이 있던 곳이다.
-  const attended = events.filter((e) => eventScore(e) > 0);
+  // 방문 사실 자체는 점수와 무관하게 남긴다. 키를 지우면 unique_domains 가
+  // "방문한 도메인 수"가 아니라 "주의를 준 도메인 수"로 뜻이 바뀌어,
+  // 단일 도메인 영상 필터(unique_domains === 1)가 예전보다 훨씬 잘 걸린다 —
+  // 배경 탭 몇 개가 로드만 된 시청 세션이 통째로 버려진다.
+  // 바꾸려던 것은 시간 귀속이지 도메인 집합이 아니다.
   const domains: Record<string, number> = {};
+  for (const e of events) domains[e.domain] ??= 0;
+
+  const attended = events.filter((e) => eventScore(e) > 0);
   for (let i = 0; i < attended.length; i++) {
     const cur = attended[i];
     const next = attended[i + 1];

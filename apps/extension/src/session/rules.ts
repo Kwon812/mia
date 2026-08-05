@@ -198,12 +198,21 @@ export function shouldClose(draft: SessionDraft, now: number): CloseReason | nul
   return null;
 }
 
-/** 다음 새벽 4시 경계의 epoch ms. dayBucket 과 같은 로컬 시각 기준을 쓴다. */
+/** 다음 새벽 4시 경계의 epoch ms. dayBucket 과 **같은 KST 고정 기준**을 쓴다.
+ *  dayBucket 만 KST 로 바꾸고 여기를 로컬로 두면 팝업의 남은 시간이 거짓말을
+ *  한다 — KST 가 아닌 머신에서 "16시간 남음"이라 띄우고 실제로는 3시간 뒤에
+ *  잘린다. */
 function nextDayBoundary(now: number): number {
-  const d = new Date(now);
-  const boundary = new Date(d.getFullYear(), d.getMonth(), d.getDate(), DAY_BOUNDARY_HOUR, 0, 0, 0);
-  if (d.getTime() >= boundary.getTime()) boundary.setDate(boundary.getDate() + 1);
-  return boundary.getTime();
+  const kstMs = now + KST_OFFSET_MS;
+  const d = new Date(kstMs);
+  const boundary = Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    DAY_BOUNDARY_HOUR,
+  );
+  const next = kstMs >= boundary ? boundary + 24 * 60 * 60 * 1000 : boundary;
+  return next - KST_OFFSET_MS;
 }
 
 /** 시한부 종료 조건까지 남은 시간(ms). 이미 조건을 넘겼으면 0. */

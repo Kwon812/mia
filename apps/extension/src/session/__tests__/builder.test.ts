@@ -83,9 +83,13 @@ describe('ingest — 기본 동작', () => {
       raw({ at: ANCHOR + 9 * MIN, domain: 'github.com', payload: { keys: 20 } }),
     ];
     const draft = ingest(null, events, ANCHOR + 9 * MIN);
-    expect(draft.domains['naver.com']).toBeUndefined();
-    // 네이버가 중간에 끼어도 그 9분은 실제로 사람이 있던 github 이 이어서 먹는다.
+    // 방문 사실은 남는다(unique_domains 의 의미가 "방문한 도메인 수"여야 하므로)
+    // — 다만 체류 시간은 0 이다.
+    expect(draft.domains['naver.com']).toBe(0);
+    // 그 9분은 실제로 사람이 있던 github 이 이어서 먹는다.
     expect(draft.domains['github.com']).toBe(9 * 60);
+    // 도메인 집합은 그대로 2개 — 전송 필터의 unique_domains 판정이 안 바뀐다.
+    expect(Object.keys(draft.domains)).toHaveLength(2);
   });
 
   it('activityScore 는 이벤트들의 가중합이다', () => {

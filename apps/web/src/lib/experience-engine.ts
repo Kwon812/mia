@@ -138,10 +138,22 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
   하나라도 빠뜨리면 안 된다. 각각 이번 세션 내용을 반영해 캐릭터가 사용자에게 건네는
   자연스러운 한국어 반말 한 마디, 80자 이내. 시간대에 맞는 어감으로 쓴다
   (아침이면 하루를 여는 톤, 밤이면 하루를 돌아보는 톤).
-- thread: 이 경험이 "진행 중인 작업 목록"에 있는 기존 작업의 연장이면
-  action="attach" 로 하고 existing_thread_id 에 그 목록에 있는 id 를 그대로 적는다
-  (목록에 없는 id 를 만들어내지 않는다). 새로운 작업이면 action="new" 로 하고
-  title 에 그 작업을 부르는 짧은 명사구를 적는다("Redis 캐싱 도입" 같은). completed 는
+- thread: 이 경험이 진행 중인 작업의 연장인지 판정한다.
+    attach : 목록의 그 작업과 **같은 대상**을 계속 다뤘을 때만 고른다.
+             같은 저장소, 같은 기능, 같은 문서, 같은 버그, 같은 강의.
+             existing_thread_id 에 목록에 있는 id 를 그대로 적는다
+             (목록에 없는 id 를 만들어내지 않는다).
+    new    : 위에 해당하지 않으면 전부 new. 목록이 비었으면 무조건 new.
+             title 은 그 작업을 부르는 짧은 명사구 — **무엇을 다루는지가
+             제목에 드러나야 한다**("Redis 캐싱 도입", "Army Sim 배포 설정").
+             "개발", "공부", "작업" 같은 분야명은 제목이 아니다.
+
+  **분야(category)가 같다는 것은 attach 의 근거가 아니다.** 목록에
+  "프로젝트 A 개발"이 있고 이번에 프로젝트 B 를 개발했다면 둘 다 dev 지만
+  서로 다른 작업이다 — 이때는 new 다. 목록 항목의 "최근:" 줄에 그 작업에서
+  마지막으로 한 일이 적혀 있으니, 이번 세션이 그 일의 다음 단계인지로 판단하라.
+  애매하면 new 로 간다. 잘못 붙이면 서로 다른 두 작업이 한 덩어리로 뭉쳐
+  영원히 분리되지 않지만, 잘못 나누면 나중에 사람이 합칠 수 있다. completed 는
   이번 경험으로 그 작업이 완결됐다고 볼 수 있으면 true — 애매하면 false.`;
 
 // strict: true 로 스키마 위반 자체를 막는다. 그래도 최종 검증은 항상
@@ -263,8 +275,23 @@ const MAX_SUMMARY_LEN = 100;
 // 각각 다르게 부르면 사용자가 둘을 연결하지 못한다.
 const DORMANT_SKILL_DAYS = 30;
 
+/** 모든 가산항이 참일 때의 점수. 중요도 스케일의 위쪽 끝이다.
+ *  50(새 스킬) + 40(처음) + 35(돌파) + 30(복귀) + 25(묵힌 스킬) + 20(긴 세션) */
+const MAX_MEMORY_SCORE = 200;
+
+/** 점수 → 중요도(1~10).
+ *
+ *  score/10 은 쓸 수 없다. 기억은 60점 문턱을 넘어야 생기므로 그 변환은
+ *  6~10 만 만들어내고 **1~5 는 수학적으로 존재할 수 없었다** — 10단계 스케일의
+ *  절반이 죽어 있었고, 지도의 크기(4 + importance*0.8)도 설계된 폭의 절반만
+ *  써서 "크기가 중요도다"가 눈에 안 들어왔다.
+ *  문턱~최대(60~200)를 1~10 에 편다.
+ *
+ *  문턱을 거치지 않는 thread_complete 기억은 60 미만일 수 있어 1 로 떨어진다 —
+ *  다른 신호 없이 작업만 끝낸 기억이므로 그게 맞다. */
 function clampImportance(score: number): number {
-  return Math.min(10, Math.max(1, Math.round(score / 10)));
+  const t = (score - MEMORY_SCORE_THRESHOLD) / (MAX_MEMORY_SCORE - MEMORY_SCORE_THRESHOLD);
+  return Math.min(10, Math.max(1, 1 + Math.round(t * 9)));
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -360,12 +387,19 @@ interface ActiveThreadRow {
   title: string;
   category: string;
   experienceCount: number;
+  /** 그 작업에서 마지막으로 한 일. 제목만으로는 무엇을 하던 작업인지 모른다. */
+  lastSummary?: string;
 }
 
 function buildActiveThreadsList(activeThreads: ActiveThreadRow[]): string {
   if (activeThreads.length === 0) return '(진행 중인 작업 없음)';
+  // 제목만 주면 그 작업이 무엇을 하던 것인지 알 수 없어, 분야만 같아도 붙이게
+  // 된다. 마지막으로 한 일을 함께 줘야 "이번 세션이 그 다음 단계인가"를 볼 수 있다.
   return activeThreads
-    .map((t, i) => `${i + 1}. id=${t.id} · "${t.title}" (카테고리: ${t.category}, 경험 ${t.experienceCount}건)`)
+    .map((t, i) => {
+      const head = `${i + 1}. id=${t.id} · "${t.title}" (카테고리: ${t.category}, 경험 ${t.experienceCount}건)`;
+      return t.lastSummary ? `${head}\n   최근: ${t.lastSummary}` : head;
+    })
     .join('\n');
 }
 
@@ -408,6 +442,15 @@ export function buildUserMessage(
 // ------------------------------------------------------------
 // 메인 파이프라인
 // ------------------------------------------------------------
+
+/** 동시 처리로 이 세션의 경험이 이미 만들어졌을 때. 트랜잭션을 실제로 롤백시키려고
+ *  던지는 전용 오류 — 바깥에서 이것만은 조용히 넘긴다(재처리 대상으로 남길 필요가 없다). */
+class SessionAlreadyProcessedError extends Error {
+  constructor(sessionId: string) {
+    super(`session already processed: ${sessionId}`);
+    this.name = 'SessionAlreadyProcessedError';
+  }
+}
 
 export async function processSession(sessionId: string, userId: string): Promise<void> {
   try {
@@ -588,9 +631,12 @@ export async function processSession(sessionId: string, userId: string): Promise
     const activeThreadsById = new Map(activeThreadRows.map((t) => [t.id, t]));
     let threadAction: 'attach' | 'new' = output.thread.action;
     let attachTargetId = output.thread.existing_thread_id;
+    // 강등 여부를 기억해둔다. completed 플래그를 그대로 살리면 안 되기 때문이다.
+    let threadDemoted = false;
     if (threadAction === 'attach' && (!attachTargetId || !activeThreadsById.has(attachTargetId))) {
       threadAction = 'new';
       attachTargetId = null;
+      threadDemoted = true;
     }
 
     const threadId = threadAction === 'new' ? randomUUID() : attachTargetId!;
@@ -675,11 +721,18 @@ export async function processSession(sessionId: string, userId: string): Promise
         .onConflictDoNothing({ target: experiences.sessionId })
         .returning({ id: experiences.id });
 
-      // experiences.session_id 는 UNIQUE — 동시 처리로 이미 만들어졌다면 조용히 종료.
-      // (기억 생성, attach 갱신 등 아래 모든 부수효과는 여기서 함께 취소된다. action='new' 로
-      // 위에서 만든 thread 행은 이 드문 경합에서 고아로 남을 수 있지만, 매 세션마다 새
-      // thread 를 만드는 정상 경로에서는 발생하지 않는 감내 가능한 트레이드오프다.)
-      if (!insertedExperience) return;
+      // experiences.session_id 는 UNIQUE — 동시 처리로 이미 만들어졌다.
+      //
+      // 여기서 `return` 하면 안 된다. postgres-js 의 client.begin 은 콜백이 정상
+      // resolve 하면 COMMIT 한다 — return 은 롤백이 아니라 "건너뛰고 커밋"이다.
+      // 그래서 위에서 만든 thread 행이 고아로 커밋되고, processed_at 도 안 채워지고,
+      // ingest_failures 도 안 남는다. 그 조합이 최악이다: 재처리 스윕은
+      // processed_at IS NULL 로 뽑는데 실패 기록이 없으니 백오프에 영영 안 걸려,
+      // 스윕을 돌릴 때마다 LLM 을 한 번씩 태우고 고아 thread 를 하나씩 더 쌓는다.
+      // 던져서 실제로 롤백시키고, 바깥 catch 가 ingest_failures 에 남기게 한다.
+      if (!insertedExperience) {
+        throw new SessionAlreadyProcessedError(sessionId);
+      }
 
       if (dedupedSkills.length > 0) {
         await tx
@@ -738,7 +791,14 @@ export async function processSession(sessionId: string, userId: string): Promise
         await tx
           .update(threads)
           .set({
-            lastActivityAt: session.startedAt,
+            // GREATEST 로 역행을 막는다 — 바로 위 userSkills upsert 와 같은 이유다.
+            // 세션은 며칠 늦게 도착할 수 있는데(오프라인 버퍼링), 무조건 덮어쓰면
+            // 어제까지 활동하던 thread 의 last_activity_at 이 두 달 전으로
+            // 되돌아간다. 그러면 (a) 오늘 밤 배치가 살아있는 작업을 abandoned 로
+            // 전이시키고 — 되돌리는 코드 경로가 없다 — (b) 활성 목록(최근순 5개)
+            // 에서 밀려나 이후 경험이 붙을 수 없게 되며 (c) 성격의 완결형 축이
+            // 오염된다.
+            lastActivityAt: sql`GREATEST(${threads.lastActivityAt}, ${session.startedAt.toISOString()}::timestamptz)`,
             experienceCount: sql`${threads.experienceCount} + 1`,
           })
           .where(eq(threads.id, threadId));
@@ -748,7 +808,10 @@ export async function processSession(sessionId: string, userId: string): Promise
       // 임계값을 넘으면 'new_skill'/'comeback' 기억을 하나 더 남긴다(둘 다 발생 가능).
       let newMemoriesCount = 0;
 
-      if (output.thread.completed) {
+      // 강등된 attach 의 completed 는 무시한다. LLM 은 "그 기존 작업이 끝났다"고
+      // 말한 것인데 그 작업은 존재하지 않았다 — 방금 만든 새 thread 를 즉시
+      // 완결시키면 존재한 적 없는 작업의 완결 기억이 생기고 완결형 축이 부푼다.
+      if (output.thread.completed && !threadDemoted) {
         await tx.update(threads).set({ status: 'completed', completedAt: now }).where(eq(threads.id, threadId));
 
         await tx.insert(memories).values({
