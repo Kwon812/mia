@@ -177,10 +177,18 @@ const CAPTURE = 2.4;
  *  지수를 1 보다 크게 잡으면 안쪽에서만 급히 당기고 가장자리에서는 거의
  *  안 움직여, 자석이 아니라 "닿으면 달라붙는 것"이 된다. 1 보다 작게 잡아야
  *  범위 안에 들어서는 순간부터 끌려오고 경계에서 부드럽게 풀린다. */
-/** 모핑 이징. 처음에 빠르고 끝에서 잦아든다 — 날아가 자리를 잡는 움직임이다.
- *  in-out 을 쓰면 초반 값이 거의 0 이라(ft 0.15 에서 겨우 0.014) 알파는
- *  이미 페이드인 중인데 이동은 시작도 안 해, 두 층이 따로 논다. */
-const easeOut = (x: number) => 1 - Math.pow(1 - x, 3);
+/** 모핑 이징. 가는 쪽·오는 쪽 모두 "출발이 빠르고 도착에서 잦아든다"여야 한다.
+ *
+ *  하나의 곡선을 양방향에 쓰면 안 된다. 들어갈 때 맞는 곡선을 되돌아올 때
+ *  거꾸로 타면 그대로 뒤집힌 곡선이 되어, 대상이 중심에 붙어 있다가 마지막
+ *  몇 프레임에 원위치로 튄다 — 돌아오는 길만 뚝 끊긴다.
+ *  그래서 방향을 받아 곡선을 뒤집는다. 경계값(0, 1)에서 두 곡선이 만나므로
+ *  전환이 뒤집히는 순간에도 값이 이어진다.
+ *
+ *  들어갈 때 in-out 을 쓰면 안 된다 — 초반 값이 거의 0 이라(ft 0.15 에서
+ *  0.014) 알파는 이미 페이드인 중인데 이동은 시작도 안 해 두 층이 따로 논다. */
+const easeMorph = (x: number, entering: boolean) =>
+  entering ? 1 - Math.pow(1 - x, 3) : x * x * x;
 
 const pullAt = (t: number) => Math.pow(1 - Math.min(1, Math.max(0, t)), 0.45);
 
@@ -537,7 +545,7 @@ export function OrbitalMap({
 
       // 알파도 이동과 같은 시계를 쓴다. 선형 알파 + 이징 이동이면 화면이
       // 반쯤 지워졌는데 대상은 아직 출발도 안 한 상태가 생긴다.
-      const ez = easeOut(ft);
+      const ez = easeMorph(ft, focusRef.current != null);
       const sysAlpha = 1 - ez;
       if (focusRef.current) shownFoc = focusRef.current;
       else if (ft < 0.01) shownFoc = null;
@@ -603,7 +611,7 @@ export function OrbitalMap({
             : `rgba(158,171,190,${0.9 * sysAlpha})`;
           ctx!.fillText(label, lx, ly);
 
-          if (ft < 0.01) {
+          if (ez < 0.02) {
             const half = ctx!.measureText(label).width / 2 + 8;
             hit.set(`maxis:${tr}`, {
               x: lx + (dx >= 0 ? half - 8 : -(half - 8)),
@@ -652,7 +660,7 @@ export function OrbitalMap({
         // 이전 공간이라, 카메라가 움직이는 동안 등록하면 보이는 곳과 눌리는
         // 곳이 어긋난다. 전환 중에는 아무것도 못 누르는 편이 낫다.
         for (const { el, p } of placed) {
-          if (ft < 0.01) hit.set(el.id, { x: p.x, y: p.y, r: el.size + 14, kind: "mem" });
+          if (ez < 0.02) hit.set(el.id, { x: p.x, y: p.y, r: el.size + 14, kind: "mem" });
         }
       }
 
@@ -768,7 +776,7 @@ export function OrbitalMap({
           ctx!.fillText(label, lx, ly);
 
           // 라벨을 겨눌 수 있게 한다 — 방향을 이름으로 짚으면 그 갈래가 켜진다.
-          if (ft > 0.99) {
+          if (ez > 0.98) {
             const half = ctx!.measureText(label).width / 2 + 8;
             hit.set(`axis:${oc}`, {
               x: lx + (dx >= 0 ? half - 8 : -(half - 8)),
@@ -841,10 +849,10 @@ export function OrbitalMap({
         }
 
         for (const st of sats) {
-          if (ft > 0.99) hit.set(st.b.id, { x: st.x, y: st.y, r: 18, kind: "exp" });
+          if (ez > 0.98) hit.set(st.b.id, { x: st.x, y: st.y, r: 18, kind: "exp" });
         }
 
-        if (ft > 0.99) hit.set(foc.id, { x: cx, y: cy, r: 32, kind: "focus" });
+        if (ez > 0.98) hit.set(foc.id, { x: cx, y: cy, r: 32, kind: "focus" });
       }
 
       // ── 판독 대상 ──
