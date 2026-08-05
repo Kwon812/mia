@@ -311,9 +311,6 @@ export function OrbitalMap({
     let hovered: string | null = null;
     // 조준점. 실제 커서는 숨기고 이걸 그린다 — OS 커서를 코드로 옮기는 방법은
     // 없으니, 빨려드는 느낌은 화면에 그리는 수밖에 없다.
-    // 모핑 출발점. 누른 순간의 그 천체의 화면 위치와 크기 — 여기서 중심으로
-    // 날아가며 커진다. 포커스 중에는 계가 멈춰 있으니 나갈 때도 같은 값을 쓴다.
-    let morph: { x: number; y: number; size: number } | null = null;
     // 그리기용 포커스. focus 가 null 이 돼도 ft 가 0 에 닿을 때까지 남는다 —
     // 안 그러면 나가는 순간 대상이 사라져 되돌아가는 모핑이 안 그려진다.
     let shownFoc: MemoryBody | null = null;
@@ -527,7 +524,9 @@ export function OrbitalMap({
       //   satT — 포커스 안의 위성(경험). 겨누고 있을 때만 멈춘다.
       // 예전에는 하나였다. 그래서 포커스에 들어가는 순간 위성까지 같이 얼어
       // 근거가 도는 게 아니라 박혀 있었다 — 멈춰야 하는 건 배경이지 대상이 아니다.
-      const scaleTarget = hovered || focusRef.current ? 0 : 1;
+      // 전환 중에도 멈춘 채로 둔다. 돌아오는 동안 계가 돌면 착지점이 계속
+      // 움직여, 어디로 돌아가는지가 안 읽힌다.
+      const scaleTarget = hovered || focusRef.current || ft > 0.02 ? 0 : 1;
       tScale += (scaleTarget - tScale) * 0.16;
       simT += dt * tScale;
       const satTarget = hovered ? 0 : 1;
@@ -554,8 +553,15 @@ export function OrbitalMap({
       // 카메라. 누른 천체를 초점으로 계 전체를 확대하면서 그 천체를 화면
       // 중앙으로 데려간다. 크로스페이드만 하면 "다른 화면으로 갈아탔다"가
       // 되는데, 초점을 향해 밀고 들어가면 "그 안으로 들어갔다"가 된다.
-      const fx = morph ? morph.x : cx;
-      const fy = morph ? morph.y : cy;
+      //
+      // 초점은 그 천체의 "지금" 궤도 위치다. 클릭 순간의 좌표를 저장해 쓰면
+      // 안 된다 — 돌아올 때 계가 다시 돌기 시작하면 실제 궤도 위치는 이미
+      // 딴 데 가 있고, 전환이 끝나 시스템 레이어로 넘어가는 순간 그 차이만큼
+      // 천체가 뚝 튄다. 매 프레임 다시 구하면 넘겨주는 지점이 정확히 맞는다.
+      const focEl = foc ? els.find((e) => e.id === foc.id) : null;
+      const fp = focEl ? orbitPoint(focEl, t) : null;
+      const fx = fp ? fp.x : cx;
+      const fy = fp ? fp.y : cy;
       const camZ = 1 + ez * (ZOOM - 1);
       const camX = fx + (cx - fx) * ez;
       const camY = fy + (cy - fy) * ez;
@@ -564,7 +570,7 @@ export function OrbitalMap({
       const litTrigger = hovered?.startsWith("maxis:") ? hovered.slice(6) : null;
       if (sysAlpha > 0.01) {
         ctx!.save();
-        if (morph && ft > 0.001) {
+        if (fp && ft > 0.001) {
           ctx!.translate(camX, camY);
           ctx!.scale(camZ, camZ);
           ctx!.translate(-fx, -fy);
@@ -832,7 +838,8 @@ export function OrbitalMap({
         // 두 화면을 통틀어 계속 존재하는 유일한 것. 사라졌다 나타나는 게
         // 아니라 자리를 옮기며 자란다 — 이게 모핑이다. 그래서 알파도 1 이다.
         const toR = 18 + foc.importance * 1.2;
-        const fromR = morph ? morph.size : toR;
+        // 출발 크기도 계가 그렸을 크기와 같아야 넘겨주는 지점이 안 튄다.
+        const fromR = focEl ? focEl.size : toR;
         drawMemory(
           camX,
           camY,
@@ -973,9 +980,6 @@ export function OrbitalMap({
       if (!p) return;
       if (p.kind === "axis" || p.kind === "maxis") return; // 축은 겨누기만 한다
       if (p.kind === "mem") {
-        // 지금 이 순간의 화면 위치가 모핑의 출발점이다. 나중에 계산하려 하면
-        // 이미 tScale 이 0 으로 죽으며 위치가 미묘하게 달라져 있다.
-        morph = { x: p.x, y: p.y, size: Math.max(4, p.r - 14) };
         setFocus(memories.find((m) => m.id === hovered) ?? null);
         setPicked(null); // 다른 기억으로 옮겨가면 이전 선택은 의미가 없다
       } else if (p.kind === "focus") {
