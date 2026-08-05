@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   CAT_GROUPS,
@@ -81,6 +81,15 @@ export function MapStage({
   // 캐릭터가 계속 말을 걸고 있으면 읽을 것이 둘이 된다 — 게다가 그 대사는
   // 지금 보고 있는 기억이 아니라 오늘 전체에 대한 말이라 문맥도 어긋난다.
   const [reading, setReading] = useState(false);
+
+  // 조준점이 OS 커서를 대신하는 동안에는 화면 전체에서 커서를 감춘다.
+  // 이 화면에서만 — 하위 페이지에는 조준점이 없으므로 커서가 있어야 한다.
+  useEffect(() => {
+    document.body.dataset.reticle = "on";
+    return () => {
+      delete document.body.dataset.reticle;
+    };
+  }, []);
   // OrbitalMap 의 effect 의존성에 들어가므로 매 렌더 새로 만들면 안 된다.
   const handleFocusChange = useCallback((focused: boolean) => setReading(focused), []);
 
@@ -97,7 +106,11 @@ export function MapStage({
       </div>
 
       {/* 좌상 — 이 계가 무엇인가 */}
-      <div className="pointer-events-none absolute left-16 top-8 sm:left-20">
+      {/* 축척 레일과 같은 왼쪽 선(레일 padding 14 + 항목 padding 6 = 20px)에서
+          시작한다. 예전에는 레일을 피해 오른쪽으로 밀려 있었는데, 그러면 레일이
+          한 칸 판독값이 한 칸으로 갈라져 하나의 계기판으로 안 읽힌다.
+          레일 항목은 세로 가운데에만 있어 세로로 겹칠 일이 없다. */}
+      <div className="pointer-events-none absolute left-5 top-8">
         <div className="settle">
           <div className="tick mb-2">관측 대상</div>
           <div className="readout text-[15px] tracking-[0.06em] text-lum-0">{name}</div>
@@ -150,7 +163,7 @@ export function MapStage({
       </div>
 
       {/* 좌하 — 오늘 */}
-      <div className="pointer-events-none absolute bottom-8 left-16 flex gap-10 sm:left-20">
+      <div className="pointer-events-none absolute bottom-8 left-5 flex gap-10">
         <Readout label="오늘 세션" value={todaySessions} delay={160} />
         <Readout label="관측 시간" value={todayMinutes} unit="분" delay={200} />
       </div>

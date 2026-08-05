@@ -1018,16 +1018,20 @@ export function OrbitalMap({
     raf = requestAnimationFrame(frame);
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
-    canvas.addEventListener("mousemove", onMove);
-    canvas.addEventListener("mouseleave", onLeave);
+    // 캔버스가 아니라 창 전체에서 마우스를 따라간다. 캔버스에만 걸면 축척
+    // 레일 위로 올라가는 순간 mouseleave 가 떠서 조준점이 사라지고 OS 커서가
+    // 나타난다 — 커서가 두 번 바뀌는 셈이라 어긋나 보인다.
+    // 판정 좌표는 그대로 캔버스 기준이라 계산은 달라지지 않는다.
+    window.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseleave", onLeave);
     canvas.addEventListener("click", onClick);
     window.addEventListener("keydown", onKey);
 
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      canvas.removeEventListener("mousemove", onMove);
-      canvas.removeEventListener("mouseleave", onLeave);
+      window.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseleave", onLeave);
       canvas.removeEventListener("click", onClick);
       window.removeEventListener("keydown", onKey);
     };

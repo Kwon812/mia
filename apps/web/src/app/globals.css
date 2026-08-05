@@ -172,8 +172,16 @@ body {
   display: block;
   width: 100%;
   height: 100%;
-  /* 커서는 캔버스가 직접 그린다. OS 커서를 코드로 옮길 수는 없으니
-     빨려드는 조준점은 그리는 수밖에 없고, 둘이 같이 보이면 어긋나 보인다. */
+}
+
+/* 조준점이 떠 있는 동안에는 화면 전체가 OS 커서를 감춘다.
+   캔버스에만 걸면 레일 위로 갔을 때 OS 커서가 나타나면서 조준점과 둘이
+   보인다 — 캔버스 밖으로 나갔다고 조준점이 사라지는 것도 아니라서 더 어긋난다.
+   지도가 있는 화면(MapStage)에서만 켜지고, 하위 페이지에는 안 걸린다. */
+body[data-reticle='on'],
+body[data-reticle='on'] .rail-item,
+body[data-reticle='on'] a,
+body[data-reticle='on'] button {
   cursor: none;
 }
 
