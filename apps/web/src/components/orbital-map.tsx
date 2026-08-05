@@ -189,10 +189,13 @@ export function OrbitalMap({
   bodies,
   memories,
   centerLabel,
+  onFocusChange,
 }: {
   bodies: Body[];
   memories: MemoryBody[];
   centerLabel: string;
+  /** 기억 하나에 붙었는지. 지도 바깥(계기판)이 읽는 상태에 맞춰 물러나도록. */
+  onFocusChange?: (focused: boolean) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -201,6 +204,10 @@ export function OrbitalMap({
   );
   const [focus, setFocus] = useState<MemoryBody | null>(null);
   const [picked, setPicked] = useState<Body | null>(null);
+
+  useEffect(() => {
+    onFocusChange?.(focus != null);
+  }, [focus, onFocusChange]);
   // 렌더 루프가 읽는 최신 선택. 마우스가 떠나도 고른 것은 켜진 채로 남는다.
   const pickedRef = useRef<Body | null>(null);
   pickedRef.current = picked;

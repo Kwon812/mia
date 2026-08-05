@@ -1,5 +1,7 @@
 "use client";
 
+import { useCallback, useState } from "react";
+
 import {
   CAT_GROUPS,
   OrbitalMap,
@@ -75,11 +77,23 @@ export function MapStage({
     return CAT_GROUPS.filter((g) => used.has(g.key));
   })();
 
+  // 기억 하나를 펼쳐 읽는 동안에는 대사가 물러난다. 근거를 짚어보는 화면인데
+  // 캐릭터가 계속 말을 걸고 있으면 읽을 것이 둘이 된다 — 게다가 그 대사는
+  // 지금 보고 있는 기억이 아니라 오늘 전체에 대한 말이라 문맥도 어긋난다.
+  const [reading, setReading] = useState(false);
+  // OrbitalMap 의 effect 의존성에 들어가므로 매 렌더 새로 만들면 안 된다.
+  const handleFocusChange = useCallback((focused: boolean) => setReading(focused), []);
+
   return (
     <main className="relative h-screen w-full overflow-hidden">
       {/* 관측 영역 */}
       <div className="absolute inset-0">
-        <OrbitalMap bodies={bodies} memories={memories} centerLabel={name} />
+        <OrbitalMap
+          bodies={bodies}
+          memories={memories}
+          centerLabel={name}
+          onFocusChange={handleFocusChange}
+        />
       </div>
 
       {/* 좌상 — 이 계가 무엇인가 */}
@@ -149,13 +163,31 @@ export function MapStage({
       </div>
 
       {/* 하단 중앙 — 이 계에서 유일하게 기계가 아닌 것 */}
+      {/* 사라지는 연출은 바깥 껍데기가 맡는다. .settle 은 animation-fill-mode:both
+          라서 끝 키프레임(opacity 1)이 인라인 스타일을 이긴다 — 같은 요소에서
+          다투면 페이드가 통째로 무시된다. 층을 나누면 두 값이 곱해진다. */}
       <div className="pointer-events-none absolute bottom-24 left-1/2 w-full max-w-xl -translate-x-1/2 px-6 text-center">
-        <p
-          className="utterance settle text-[17px]"
-          style={{ "--d": "420ms" } as React.CSSProperties}
+        {/* 연출을 층으로 나눈다.
+            바깥 — 자리잡기(-translate-x-1/2). Tailwind v4 는 이걸 transform 이
+                   아니라 translate 속성으로 낸다. 여기에 인라인 translate 를
+                   얹으면 같은 속성이라 가로 중앙정렬이 통째로 날아간다.
+            가운데 — 사라짐. 여기서만 opacity·translate 를 만진다.
+            안쪽 — 등장(.settle). animation-fill-mode:both 라 끝 키프레임이
+                   인라인 스타일을 이기므로 같은 요소에서 다투면 안 된다. */}
+        <div
+          style={{
+            opacity: reading ? 0 : 1,
+            translate: reading ? "0 14px" : "0 0",
+            transition: "opacity 520ms ease, translate 520ms cubic-bezier(.22,1,.36,1)",
+          }}
         >
-          {dialogue}
-        </p>
+          <p
+            className="utterance settle text-[17px]"
+            style={{ "--d": "420ms" } as React.CSSProperties}
+          >
+            {dialogue}
+          </p>
+        </div>
       </div>
     </main>
   );
