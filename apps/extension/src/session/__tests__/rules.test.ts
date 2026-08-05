@@ -9,6 +9,7 @@ import {
   ACTIVITY_WEIGHTS,
   isWorthSending,
   shouldClose,
+  timeUntilClose,
 } from '../rules';
 import type { ActivityEvent, SessionDraft } from '../types';
 
@@ -338,5 +339,56 @@ describe('dominantCategory — 점수 가중 투표', () => {
       );
     }
     expect(dominantCategory(events)).toBe('entertainment');
+  });
+});
+
+describe('timeUntilClose — 팝업 남은 시간 표시', () => {
+  it('idle 은 마지막 활동 이후 경과분만큼 줄어든다', () => {
+    const d = draft({ startedAt: ANCHOR, lastActivityAt: ANCHOR + 5 * MIN });
+    const { idle } = timeUntilClose(d, ANCHOR + 15 * MIN);
+    expect(idle).toBe(20 * MIN); // 30분 - (15분 - 5분)
+  });
+
+  it('maxlen 은 세션 시작 이후 경과분만큼 줄어든다', () => {
+    const d = draft({ startedAt: ANCHOR, lastActivityAt: ANCHOR });
+    const { maxlen } = timeUntilClose(d, ANCHOR + 1 * HOUR);
+    expect(maxlen).toBe(3 * HOUR);
+  });
+
+  it('임계값을 이미 넘겼으면 음수가 아니라 0 이다', () => {
+    const d = draft({ startedAt: ANCHOR, lastActivityAt: ANCHOR });
+    const { idle, maxlen } = timeUntilClose(d, ANCHOR + 5 * HOUR);
+    expect(idle).toBe(0);
+    expect(maxlen).toBe(0);
+  });
+
+  it('남은 시간이 0 이 되는 시점과 shouldClose 가 발동하는 시점이 어긋나지 않는다', () => {
+    const d = draft({ startedAt: ANCHOR, lastActivityAt: ANCHOR });
+    // idle 카운트다운이 0 이 되는 정확한 순간에는 아직 발동 전(shouldClose 는 초과 비교),
+    // 그 직후에는 발동한다 — 표시가 "0초 남음"일 때 다음 알람에 닫힌다는 뜻이 된다.
+    const zeroAt = ANCHOR + 30 * MIN;
+    expect(timeUntilClose(d, zeroAt).idle).toBe(0);
+    expect(shouldClose(d, zeroAt)).toBeNull();
+    expect(shouldClose(d, zeroAt + 1)).toBe('idle');
+  });
+
+  it('day 는 다음 새벽 4시까지 남은 시간이다', () => {
+    // 로컬 정오 기준 → 다음 경계는 다음날 04:00 = 16시간 뒤
+    const d = draft({ startedAt: ANCHOR, lastActivityAt: ANCHOR });
+    expect(timeUntilClose(d, ANCHOR).day).toBe(16 * HOUR);
+  });
+
+  it('새벽 2시(경계 전)의 다음 경계는 같은 날 04:00 이다', () => {
+    const at2am = new Date(2026, 7, 5, 2, 0, 0).getTime();
+    const d = draft({ startedAt: at2am, lastActivityAt: at2am });
+    expect(timeUntilClose(d, at2am).day).toBe(2 * HOUR);
+  });
+
+  it('이미 경계를 넘긴 세션은 day 가 0 이다 (shouldClose 와 일치)', () => {
+    const startedAt = new Date(2026, 7, 4, 23, 0, 0).getTime(); // 전날 23시 시작
+    const now = new Date(2026, 7, 5, 5, 0, 0).getTime(); // 경계(05일 04시) 넘긴 뒤
+    const d = draft({ startedAt, lastActivityAt: now });
+    expect(dayBoundaryCrossed(d, now)).toBe(true);
+    expect(timeUntilClose(d, now).day).toBe(0);
   });
 });

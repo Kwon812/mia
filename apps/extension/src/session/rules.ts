@@ -170,6 +170,38 @@ export function shouldClose(draft: SessionDraft, now: number): CloseReason | nul
   return null;
 }
 
+/** 다음 새벽 4시 경계의 epoch ms. dayBucket 과 같은 로컬 시각 기준을 쓴다. */
+function nextDayBoundary(now: number): number {
+  const d = new Date(now);
+  const boundary = new Date(d.getFullYear(), d.getMonth(), d.getDate(), DAY_BOUNDARY_HOUR, 0, 0, 0);
+  if (d.getTime() >= boundary.getTime()) boundary.setDate(boundary.getDate() + 1);
+  return boundary.getTime();
+}
+
+/** 시한부 종료 조건까지 남은 시간(ms). 이미 조건을 넘겼으면 0. */
+export interface CloseCountdown {
+  idle: number;
+  maxlen: number;
+  day: number;
+}
+
+/**
+ * shouldClose 의 "언제쯤"을 답하는 함수 — 팝업(popup.ts)의 남은 시간 표시용.
+ *
+ * switch 는 여기 없다. 앞으로 어떤 도메인을 볼지에 달린 조건이라 남은 시간이라는
+ * 개념이 성립하지 않는다(지금 이탈 중인지는 recentDominantCategory 로 따로 본다).
+ *
+ * 이 함수가 존재하는 이유는 IDLE_MS/MAXLEN_MS/DAY_BOUNDARY_HOUR 를 이 파일 밖으로
+ * 내보내지 않기 위해서다 — 임계값이 두 곳에 생기면 규칙을 고쳤을 때 표시가 거짓말을 한다.
+ */
+export function timeUntilClose(draft: SessionDraft, now: number): CloseCountdown {
+  return {
+    idle: Math.max(0, IDLE_MS - (now - draft.lastActivityAt)),
+    maxlen: Math.max(0, MAXLEN_MS - (now - draft.startedAt)),
+    day: dayBoundaryCrossed(draft, now) ? 0 : Math.max(0, nextDayBoundary(now) - now),
+  };
+}
+
 /** 전송 필터에 필요한 최소 형태 (close() 가 만드는 최종 페이로드와 호환). */
 export interface SendableSession {
   duration_min: number;

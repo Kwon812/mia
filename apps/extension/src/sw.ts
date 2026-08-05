@@ -1,7 +1,16 @@
 import { API_BASE } from './config';
 import { db } from './db';
-import { close, continueDraft, ingest, isBlockedDomain, sendSkipReason, shouldClose } from './session';
+import {
+  close,
+  continueDraft,
+  ingest,
+  isBlockedDomain,
+  sendSkipReason,
+  shouldClose,
+  timeUntilClose,
+} from './session';
 import type { SessionDraft, SessionPayloadLike } from './session';
+import type { SessionSnapshot, SnapshotDraft, SnapshotPreview } from './snapshot';
 
 // 서비스 워커: manifest 에서 "type": "module" 이므로 정적 import 사용 가능.
 // 다만 이 파일은 vite 멀티 엔트리 빌드에서 content.ts 와 공유 청크를 만들지
@@ -250,6 +259,70 @@ async function handleStartup(): Promise<void> {
   }
 }
 
+/**
+ * 팝업(popup.ts)이 읽는 "지금 이 순간" 스냅샷.
+ *
+ * 팝업이 IndexedDB 를 직접 열지 않고 서비스 워커에게 물어보는 이유는 두 가지다.
+ * 1) 팝업이 db.ts / session/* 를 import 하면 sw.js 와 공유 청크가 생긴다
+ *    (vite.config.ts 의 공유 청크 금지 원칙).
+ * 2) 더 중요하게 — "지금 마감되면 전송될까"는 실제 close()·sendSkipReason() 을
+ *    그대로 태워야 맞는다. 팝업에 규칙을 복제하면 그 미리보기가 언젠가 거짓말을 한다.
+ */
+async function buildSessionSnapshot(now: number): Promise<SessionSnapshot> {
+  const [draft, pendings, archived, rawEventCount, extensionKey] = await Promise.all([
+    loadCurrentSession(),
+    db.pending.toArray(),
+    db.archive.toArray(), // 3일치라 수십 건 규모 — 전량을 읽어도 부담이 없다
+    db.rawEvents.count(),
+    getExtensionKey(),
+  ]);
+
+  let snapshotDraft: SnapshotDraft | null = null;
+  let preview: SnapshotPreview | null = null;
+  let countdown = null;
+
+  if (draft) {
+    // close_reason 은 전송 필터(sendSkipReason)가 보지 않는 필드라 미리보기에서는
+    // 'idle' 을 놓는다. 나머지 값(길이·도메인 수·점수)은 실제 마감과 똑같이 나온다.
+    const final = close(draft, 'idle', now);
+
+    snapshotDraft = {
+      id: draft.id,
+      startedAt: draft.startedAt,
+      lastActivityAt: draft.lastActivityAt,
+      primaryCategory: draft.primaryCategory,
+      activityScore: Math.round(draft.activityScore),
+      switchCount: draft.switchCount,
+      tags: draft.tags,
+      domains: draft.domains,
+      eventCount: draft.events.length,
+      continuedFrom: draft.continuedFrom ?? null,
+      excursionCategory: draft.activeExcursionCategory ?? null,
+    };
+    preview = {
+      durationMin: final.duration_min,
+      uniqueDomains: final.unique_domains,
+      skipReason: sendSkipReason(final),
+    };
+    countdown = timeUntilClose(draft, now);
+  }
+
+  return {
+    now,
+    draft: snapshotDraft,
+    preview,
+    countdown,
+    queue: {
+      sending: pendings.filter((p) => p.status === 'sending').length,
+      failed: pendings.filter((p) => p.status === 'failed').length,
+      archived: archived.length,
+      skipped: archived.filter((a) => a.skipReason !== null).length,
+    },
+    rawEvents: rawEventCount,
+    connected: Boolean(extensionKey),
+  };
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   switch (alarm.name) {
     case ALARM_SESSION_CHECK:
@@ -278,6 +351,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'GET_EXTENSION_KEY') {
     void getExtensionKey().then((key) => sendResponse({ key: key ?? null }));
     return true; // 비동기 sendResponse 유지
+  }
+
+  // 팝업 전용 — 읽기만 하고 아무것도 바꾸지 않는다. 세션 판정을 앞당기지도 않는다
+  // (알람이 도는 시점은 그대로다). 팝업을 열어보는 행위가 데이터에 영향을 주면 안 된다.
+  if (message?.type === 'GET_SESSION_SNAPSHOT') {
+    void buildSessionSnapshot(Date.now()).then(sendResponse);
+    return true;
   }
 
   if (message?.type !== 'ACTIVITY') return;

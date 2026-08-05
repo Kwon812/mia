@@ -24,6 +24,7 @@
     }
   ],
   "action": {
-    "default_title": "Project NA"
+    "default_title": "Project NA",
+    "default_popup": "popup.html"
   }
 }
