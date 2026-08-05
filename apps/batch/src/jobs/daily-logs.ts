@@ -11,7 +11,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { and, gte, lt } from 'drizzle-orm';
 import { dailyLogs, experiences, type Db } from '@na/db';
-import { yesterdayKstLogDate, yesterdayKstRange } from '../kst';
+import { diaryTargetKst } from '../kst';
 
 // 저비용 모델. 유저당 1회만 호출되므로 Haiku 로 충분하다 (claude-api 스킬 캐시 기준 모델 ID).
 const MODEL = 'claude-haiku-4-5';
@@ -93,8 +93,9 @@ function buildUserMessage(rows: DayExperienceRow[]): string {
 export async function generateDailyLogs(db: Db): Promise<void> {
   console.log('[daily-logs] start');
 
-  const { start, end } = yesterdayKstRange();
-  const logDate = yesterdayKstLogDate();
+  // "어제"가 아니라 "지금 끝나가는/방금 끝난 하루" — 새벽 3시 정규 실행이
+  // 경계(4시) 이전이라 yesterdayKstRange 를 쓰면 하루가 밀린다 (kst.ts 참고).
+  const { start, end, logDate } = diaryTargetKst();
 
   const expRows: DayExperienceRow[] = await db
     .select({

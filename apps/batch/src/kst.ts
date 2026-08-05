@@ -59,3 +59,26 @@ export function yesterdayKstLogDate(now: Date = new Date()): string {
   const { start } = yesterdayKstRange(now);
   return kstDayKey(start);
 }
+
+/**
+ * 일기 대상 하루의 [start, end) 구간과 log_date 라벨.
+ *
+ * 배치는 KST 새벽 3시 — 새벽 4시 경계 "이전" — 에 돈다. 이 시각의 "어제"
+ * (yesterdayKstRange)는 이미 그저께가 되어 버려서, 어젯밤에 쌓인 경험들이
+ * 일기를 영영 못 받는 off-by-one 이 났다 (실측: 8/5 03:00 실행이 8/3 을 겨냥).
+ * 일기의 대상은 "지금 끝나가는(또는 방금 끝난) 논리적 하루"다:
+ *   - KST 0~3시대 실행(정규 크론): 아직 진행 중인 현재 하루 (1시간 뒤 마감)
+ *   - KST 4시 이후 실행(수동 트리거 등): 가장 최근에 완전히 끝난 하루
+ *
+ * 알려진 한계: 정규 실행(3시) 후 3~4시 사이에 닫힌 세션은 일기에 못 들어간다 —
+ * 계획서가 자정 대신 3시를 택하며 수용한 트레이드오프.
+ */
+export function diaryTargetKst(now: Date = new Date()): { start: Date; end: Date; logDate: string } {
+  const currentStart = currentPeriodStart(now);
+  // KST 0~3시대면 지금이 곧 그 하루의 끝자락 — 현재 구간이 대상.
+  // 4시 이후면 현재 구간은 "오늘"이므로 한 구간 전(방금 끝난 하루)이 대상.
+  const targetStart =
+    kstHour(now) < DAY_BOUNDARY_HOUR ? currentStart : new Date(currentStart.getTime() - DAY_MS);
+  const end = new Date(targetStart.getTime() + DAY_MS);
+  return { start: targetStart, end, logDate: kstDayKey(targetStart) };
+}
