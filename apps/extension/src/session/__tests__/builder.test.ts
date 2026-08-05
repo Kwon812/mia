@@ -65,12 +65,27 @@ describe('ingest — 기본 동작', () => {
 
   it('domains 는 이벤트 사이 간격을 초 단위로 누적한다', () => {
     const events = [
-      raw({ at: ANCHOR, domain: 'github.com', payload: { scrolls: 0 } }),
-      raw({ at: ANCHOR + 5 * MIN, domain: 'github.com', payload: { scrolls: 0 } }),
+      raw({ at: ANCHOR, domain: 'github.com', payload: { scrolls: 1 } }),
+      raw({ at: ANCHOR + 5 * MIN, domain: 'github.com', payload: { scrolls: 1 } }),
     ];
     const draft = ingest(null, events, ANCHOR + 5 * MIN);
     // 마지막 이벤트는 다음 신호가 없어 구간을 셀 수 없으므로 0 — 첫 구간만 5분(300초).
     expect(draft.domains['github.com']).toBe(300);
+  });
+
+  it('점수 0 이벤트는 체류 시간을 가져가지 않는다', () => {
+    // 배경에 열어둔 네이버 탭이 로드를 끝냈을 뿐인데, 예전에는 다음 이벤트까지의
+    // 간격(최대 10분)을 통째로 가져가 "가장 오래 머문 곳"이 그쪽으로 찍혔다.
+    const events = [
+      raw({ at: ANCHOR, domain: 'github.com', payload: { keys: 20 } }),
+      // 배경 탭 로드 완료 — eventScore 0
+      { at: ANCHOR + MIN, kind: 'tab_updated', domain: 'naver.com', payload: { active: false } },
+      raw({ at: ANCHOR + 9 * MIN, domain: 'github.com', payload: { keys: 20 } }),
+    ];
+    const draft = ingest(null, events, ANCHOR + 9 * MIN);
+    expect(draft.domains['naver.com']).toBeUndefined();
+    // 네이버가 중간에 끼어도 그 9분은 실제로 사람이 있던 github 이 이어서 먹는다.
+    expect(draft.domains['github.com']).toBe(9 * 60);
   });
 
   it('activityScore 는 이벤트들의 가중합이다', () => {

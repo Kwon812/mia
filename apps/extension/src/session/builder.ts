@@ -79,10 +79,22 @@ export function normalizeEvent(raw: RawEvent): ActivityEvent {
 }
 
 function computeDomainSeconds(events: ActivityEvent[]): Record<string, number> {
+  // 시간은 **주의를 준 이벤트**에만 귀속한다.
+  //
+  // 예전에는 모든 이벤트가 다음 이벤트까지의 간격을 먹었다. 그래서 배경에
+  // 열어둔 탭(네이버 메일·카페처럼 스스로 갱신하는 페이지)이 로드를 끝낼
+  // 때마다 최대 10분씩 가져갔다 — 정작 그 시간에는 다른 탭에서 일하고 있는데
+  // "가장 오래 머문 곳"이 그 배경 탭으로 찍힌다. primary_category 까지 그쪽으로
+  // 넘어가면 세션 전체의 판정이 틀어진다.
+  //
+  // 기준은 유휴 시계와 같은 eventScore > 0 이다. 탭 전환(5)과 영상 재생 틱(0.5)은
+  // 남고, 로드 완료(tab_updated, 0)만 빠진다. 빠진 이벤트의 구간은 그 앞의
+  // 주의 이벤트가 이어서 먹는다 — 그게 실제로 사람이 있던 곳이다.
+  const attended = events.filter((e) => eventScore(e) > 0);
   const domains: Record<string, number> = {};
-  for (let i = 0; i < events.length; i++) {
-    const cur = events[i];
-    const next = events[i + 1];
+  for (let i = 0; i < attended.length; i++) {
+    const cur = attended[i];
+    const next = attended[i + 1];
     // 마지막 이벤트는 다음 신호가 없어 구간 길이를 알 수 없으므로 0으로 둔다
     // (보수적 추정 — 다음 ingest 호출에서 새 이벤트가 붙으면 그때 채워진다).
     const gapMs = next ? next.at - cur.at : 0;
