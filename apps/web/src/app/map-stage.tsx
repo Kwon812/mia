@@ -2,9 +2,8 @@
 
 import {
   OrbitalMap,
-  TRIGGER_COLOR,
-  TRIGGER_KO,
-  TRIGGER_ORDER,
+  categoryColors,
+  dominantCategory,
   type Body,
   type MemoryBody,
 } from "@/components/orbital-map";
@@ -61,6 +60,20 @@ export function MapStage({
   todayMinutes: number;
   todaySessions: number;
 }) {
+  // 기억의 색은 그 기억을 만든 경험들 중 가장 많은 분야에서 온다.
+  // 범례에는 실제로 색으로 쓰인 분야만 올린다 — 경험에만 있고 어떤 기억도
+  // 대표하지 않는 분야까지 적으면, 화면에 없는 색을 설명하는 줄이 된다.
+  const memoryCategories = (() => {
+    const byId = new Map(bodies.map((b) => [b.id, b]));
+    const all = categoryColors(bodies.map((b) => b.category));
+    const used = new Set(
+      memories.map((m) => dominantCategory(m, byId)).filter((c): c is string => c != null),
+    );
+    return Array.from(used)
+      .sort()
+      .map((c) => [c, all.get(c)!] as [string, [number, number, number]]);
+  })();
+
   return (
     <main className="relative h-screen w-full overflow-hidden">
       {/* 관측 영역 */}
@@ -94,32 +107,29 @@ export function MapStage({
 
           {/* 색 범례. 궤도 축에 이름은 적혀 있지만 그건 "그 방향이 무엇인가"이지
               "이 색이 무엇인가"가 아니다 — 축에서 멀리 떨어진 천체는 색만 남는다.
-              화면에 실제로 올라온 종류만, 그것도 정해진 순서대로 적는다. */}
+              기억의 색으로 실제로 쓰인 분야만 적는다. */}
           <div className="mt-3 flex flex-col items-end gap-1.5">
-            {TRIGGER_ORDER.filter((tr) => memories.some((m) => m.trigger === tr)).map((tr) => {
-              const col = (TRIGGER_COLOR[tr] ?? TRIGGER_COLOR.comeback).join(",");
-              return (
-                <span key={tr} className="flex items-center gap-2">
-                  <span className="readout text-[11.5px] text-lum-1">{TRIGGER_KO[tr] ?? tr}</span>
-                  <span
-                    className="inline-block h-1.5 w-1.5 rounded-full"
-                    style={{
-                      background: `rgb(${col})`,
-                      boxShadow: `0 0 8px 2px rgba(${col},.55)`,
-                    }}
-                  />
-                </span>
-              );
-            })}
+            {memoryCategories.map(([cat, col]) => (
+              <span key={cat} className="flex items-center gap-2">
+                <span className="readout text-[11.5px] uppercase text-lum-1">{cat}</span>
+                <span
+                  className="inline-block h-1.5 w-1.5 rounded-full"
+                  style={{
+                    background: `rgb(${col.join(",")})`,
+                    boxShadow: `0 0 8px 2px rgba(${col.join(",")},.55)`,
+                  }}
+                />
+              </span>
+            ))}
           </div>
 
           <div className="mt-3 ml-auto h-px w-28" style={{ background: "var(--color-lum-4)" }} />
           <div className="readout mt-3 text-[11.5px] leading-relaxed text-lum-2">
             반경 = 경과일 · 크기 = 중요도
             <br />
-            색·방향 = 종류 · 이심률 = 어떻게 남았나
+            방향·이심률 = 종류 · 색 = 근거의 주된 분야
             <br />
-            누르면 근거가 위성으로 · 방향 = 결과, 색 = 카테고리
+            누르면 근거가 위성으로 · 방향 = 결과, 색 = 분야
           </div>
         </div>
       </div>
