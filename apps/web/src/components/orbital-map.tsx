@@ -167,12 +167,21 @@ const speedOf = (a: number) => 0.012 / Math.pow(a, 1.5);
 
 /** 붙잡는 범위. 천체의 판정 반경을 이만큼 넓혀 조준점을 끌어당긴다.
  *  너무 키우면 화면이 온통 자석이 되어 빈 곳을 눌러 빠져나올 수가 없다. */
+/** 모핑 배율. 누른 천체로 얼마나 밀고 들어가는가. 너무 크면 나머지 궤도가
+ *  한 프레임 만에 화면 밖으로 튀어 "확대"가 아니라 "터짐"이 된다. */
+const ZOOM = 2.6;
+
 const CAPTURE = 2.4;
 
 /** 끌림의 세기. 거리비 t(0=중심, 1=경계)를 0~1 로 바꾼다.
  *  지수를 1 보다 크게 잡으면 안쪽에서만 급히 당기고 가장자리에서는 거의
  *  안 움직여, 자석이 아니라 "닿으면 달라붙는 것"이 된다. 1 보다 작게 잡아야
  *  범위 안에 들어서는 순간부터 끌려오고 경계에서 부드럽게 풀린다. */
+/** 모핑 이징. 처음에 빠르고 끝에서 잦아든다 — 날아가 자리를 잡는 움직임이다.
+ *  in-out 을 쓰면 초반 값이 거의 0 이라(ft 0.15 에서 겨우 0.014) 알파는
+ *  이미 페이드인 중인데 이동은 시작도 안 해, 두 층이 따로 논다. */
+const easeOut = (x: number) => 1 - Math.pow(1 - x, 3);
+
 const pullAt = (t: number) => Math.pow(1 - Math.min(1, Math.max(0, t)), 0.45);
 
 // 궤도면을 위에서 살짝 기울여 본다. 3D 를 쓰지 않고 깊이를 만드는 방법.
@@ -294,6 +303,12 @@ export function OrbitalMap({
     let hovered: string | null = null;
     // 조준점. 실제 커서는 숨기고 이걸 그린다 — OS 커서를 코드로 옮기는 방법은
     // 없으니, 빨려드는 느낌은 화면에 그리는 수밖에 없다.
+    // 모핑 출발점. 누른 순간의 그 천체의 화면 위치와 크기 — 여기서 중심으로
+    // 날아가며 커진다. 포커스 중에는 계가 멈춰 있으니 나갈 때도 같은 값을 쓴다.
+    let morph: { x: number; y: number; size: number } | null = null;
+    // 그리기용 포커스. focus 가 null 이 돼도 ft 가 0 에 닿을 때까지 남는다 —
+    // 안 그러면 나가는 순간 대상이 사라져 되돌아가는 모핑이 안 그려진다.
+    let shownFoc: MemoryBody | null = null;
     let aim: { x: number; y: number } | null = null;
     let grab = 0; // 0 = 자유, 1 = 붙잡힘. 사이 값이 끌려가는 중이다.
     // 포커스 전환 진행도. 0 = 계 전체, 1 = 기억 하나에 붙음.
@@ -514,18 +529,38 @@ export function OrbitalMap({
       const ts = reduced ? 0 : satT;
 
       const target = focusRef.current ? 1 : 0;
-      ft += (target - ft) * 0.08;
+      ft += (target - ft) * 0.075;
       if (Math.abs(target - ft) < 0.002) ft = target;
 
       ctx!.clearRect(0, 0, w, h);
       hit.clear();
 
-      const sysAlpha = 1 - ft;
-      const foc = focusRef.current;
+      // 알파도 이동과 같은 시계를 쓴다. 선형 알파 + 이징 이동이면 화면이
+      // 반쯤 지워졌는데 대상은 아직 출발도 안 한 상태가 생긴다.
+      const ez = easeOut(ft);
+      const sysAlpha = 1 - ez;
+      if (focusRef.current) shownFoc = focusRef.current;
+      else if (ft < 0.01) shownFoc = null;
+      const foc = shownFoc;
+
+      // 카메라. 누른 천체를 초점으로 계 전체를 확대하면서 그 천체를 화면
+      // 중앙으로 데려간다. 크로스페이드만 하면 "다른 화면으로 갈아탔다"가
+      // 되는데, 초점을 향해 밀고 들어가면 "그 안으로 들어갔다"가 된다.
+      const fx = morph ? morph.x : cx;
+      const fy = morph ? morph.y : cy;
+      const camZ = 1 + ez * (ZOOM - 1);
+      const camX = fx + (cx - fx) * ez;
+      const camY = fy + (cy - fy) * ez;
 
       // ── 계 전체 ──
       const litTrigger = hovered?.startsWith("maxis:") ? hovered.slice(6) : null;
       if (sysAlpha > 0.01) {
+        ctx!.save();
+        if (morph && ft > 0.001) {
+          ctx!.translate(camX, camY);
+          ctx!.scale(camZ, camZ);
+          ctx!.translate(-fx, -fy);
+        }
         // 갈래 축. 포커스 안의 결과 축과 같은 원리다 — 갈래를 정하는 건
         // trigger 고 thread 는 그 안에서 조금 틀 뿐이니, 축은 종류마다 하나면
         // 된다. 갈래 한가운데라는 임의의 자리가 아니라 그 종류에 속한 기억들이
@@ -568,7 +603,7 @@ export function OrbitalMap({
             : `rgba(158,171,190,${0.9 * sysAlpha})`;
           ctx!.fillText(label, lx, ly);
 
-          if (ft < 0.5) {
+          if (ft < 0.01) {
             const half = ctx!.measureText(label).width / 2 + 8;
             hit.set(`maxis:${tr}`, {
               x: lx + (dx >= 0 ? half - 8 : -(half - 8)),
@@ -587,6 +622,7 @@ export function OrbitalMap({
 
         for (const { el, p } of placed) {
           if (p.y > cy) continue; // 앞쪽은 나중에
+          if (foc && el.id === foc.id) continue; // 모핑 중인 대상은 따로 그린다
           drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || litTrigger === el.mem.trigger, sysAlpha, t);
         }
 
@@ -607,18 +643,25 @@ export function OrbitalMap({
 
         for (const { el, p } of placed) {
           if (p.y <= cy) continue; // 뒤쪽은 이미 그렸다
+          if (foc && el.id === foc.id) continue;
           drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || litTrigger === el.mem.trigger, sysAlpha, t);
         }
+        ctx!.restore();
 
+        // 판정은 변환이 걸리지 않은 정지 상태에서만 받는다. hit 좌표는 변환
+        // 이전 공간이라, 카메라가 움직이는 동안 등록하면 보이는 곳과 눌리는
+        // 곳이 어긋난다. 전환 중에는 아무것도 못 누르는 편이 낫다.
         for (const { el, p } of placed) {
-          if (ft < 0.5) hit.set(el.id, { x: p.x, y: p.y, r: el.size + 14, kind: "mem" });
+          if (ft < 0.01) hit.set(el.id, { x: p.x, y: p.y, r: el.size + 14, kind: "mem" });
         }
       }
 
       // ── 기억 하나에 붙었을 때 ──
       if (foc && ft > 0.01) {
         const refs = foc.referencedIds.map((id) => byId.get(id)).filter(Boolean) as Body[];
-        const R = Math.min(w, h) * 0.3;
+        // 궤도가 안에서 바깥으로 펴지며 나타난다. 다 자란 채로 페이드인하면
+        // 대상이 커지는 움직임과 어긋나 두 층이 따로 논다.
+        const R = Math.min(w, h) * 0.3 * (0.78 + 0.22 * ez);
 
         // 점수를 고정값(140)으로 나누면 실제 데이터가 0~70 일 때 표현 범위의
         // 절반만 쓰게 되어 차이가 뭉갠다. 지금 화면에 올라온 것들 중 최댓값을
@@ -705,8 +748,8 @@ export function OrbitalMap({
           const on = litOutcome === oc;
 
           ctx!.strokeStyle = on
-            ? `rgba(99,230,210,${0.6 * ft})`
-            : `rgba(150,175,210,${0.22 * ft})`;
+            ? `rgba(99,230,210,${0.6 * ez})`
+            : `rgba(150,175,210,${0.22 * ez})`;
           ctx!.lineWidth = on ? 1.1 : 0.8;
           ctx!.setLineDash(on ? [] : [3, 6]);
           ctx!.beginPath();
@@ -720,12 +763,12 @@ export function OrbitalMap({
           const ly = cy + dy * (len + 16);
           ctx!.textAlign = dx >= 0 ? "left" : "right";
           ctx!.fillStyle = on
-            ? `rgba(143,244,228,${ft})`
-            : `rgba(158,171,190,${0.9 * ft})`;
+            ? `rgba(143,244,228,${ez})`
+            : `rgba(158,171,190,${0.9 * ez})`;
           ctx!.fillText(label, lx, ly);
 
           // 라벨을 겨눌 수 있게 한다 — 방향을 이름으로 짚으면 그 갈래가 켜진다.
-          if (ft > 0.5) {
+          if (ft > 0.99) {
             const half = ctx!.measureText(label).width / 2 + 8;
             hit.set(`axis:${oc}`, {
               x: lx + (dx >= 0 ? half - 8 : -(half - 8)),
@@ -749,8 +792,8 @@ export function OrbitalMap({
           ctx!.restore();
           const onAxis = litOutcome === (st.b.outcome ?? "explore");
           ctx!.strokeStyle = onAxis
-            ? `rgba(99,230,210,${0.5 * ft})`
-            : `rgba(${st.color.join(",")},${(0.11 + st.lum * 0.18) * ft})`;
+            ? `rgba(99,230,210,${0.5 * ez})`
+            : `rgba(${st.color.join(",")},${(0.11 + st.lum * 0.18) * ez})`;
           ctx!.lineWidth = onAxis ? 1.1 : 0.9;
           ctx!.stroke();
         }
@@ -764,9 +807,9 @@ export function OrbitalMap({
             hovered === st.b.id ||
             pickedRef.current?.id === st.b.id ||
             litOutcome === (st.b.outcome ?? "explore");
-          drawPoint(st.x, st.y, st.size, st.lum, on, ft, st.color);
+          drawPoint(st.x, st.y, st.size, st.lum, on, ez, st.color);
           if (!st.isSource) return;
-          ctx!.strokeStyle = `rgba(${st.color.join(",")},${0.5 * ft})`;
+          ctx!.strokeStyle = `rgba(${st.color.join(",")},${0.5 * ez})`;
           ctx!.lineWidth = 0.9;
           ctx!.beginPath();
           ctx!.arc(st.x, st.y, st.size * 1.9, 0, Math.PI * 2);
@@ -778,13 +821,17 @@ export function OrbitalMap({
           drawSat(st);
         }
 
+        // 두 화면을 통틀어 계속 존재하는 유일한 것. 사라졌다 나타나는 게
+        // 아니라 자리를 옮기며 자란다 — 이게 모핑이다. 그래서 알파도 1 이다.
+        const toR = 18 + foc.importance * 1.2;
+        const fromR = morph ? morph.size : toR;
         drawMemory(
-          cx,
-          cy,
-          18 + foc.importance * 1.2,
+          camX,
+          camY,
+          fromR + (toR - fromR) * ez,
           colorOf(foc),
           hovered === foc.id,
-          ft,
+          1,
           t,
         );
 
@@ -794,10 +841,10 @@ export function OrbitalMap({
         }
 
         for (const st of sats) {
-          if (ft > 0.5) hit.set(st.b.id, { x: st.x, y: st.y, r: 18, kind: "exp" });
+          if (ft > 0.99) hit.set(st.b.id, { x: st.x, y: st.y, r: 18, kind: "exp" });
         }
 
-        if (ft > 0.5) hit.set(foc.id, { x: cx, y: cy, r: 32, kind: "focus" });
+        if (ft > 0.99) hit.set(foc.id, { x: cx, y: cy, r: 32, kind: "focus" });
       }
 
       // ── 판독 대상 ──
@@ -918,6 +965,9 @@ export function OrbitalMap({
       if (!p) return;
       if (p.kind === "axis" || p.kind === "maxis") return; // 축은 겨누기만 한다
       if (p.kind === "mem") {
+        // 지금 이 순간의 화면 위치가 모핑의 출발점이다. 나중에 계산하려 하면
+        // 이미 tScale 이 0 으로 죽으며 위치가 미묘하게 달라져 있다.
+        morph = { x: p.x, y: p.y, size: Math.max(4, p.r - 14) };
         setFocus(memories.find((m) => m.id === hovered) ?? null);
         setPicked(null); // 다른 기억으로 옮겨가면 이전 선택은 의미가 없다
       } else if (p.kind === "focus") {
