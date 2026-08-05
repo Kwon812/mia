@@ -22,7 +22,10 @@ export async function refreshCharacterCache(db: Db): Promise<void> {
 
   let updated = 0;
 
+  let errored = 0;
+
   for (const user of userRows) {
+   try {
     const [{ count: experienceCount }] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(experiences)
@@ -73,8 +76,16 @@ export async function refreshCharacterCache(db: Db): Promise<void> {
       .where(eq(characters.userId, user.id));
 
     updated += 1;
+   } catch (err) {
+    // 유저 한 명의 실패가 뒤 유저 전원의 캐시를 막으면 안 된다.
+    // oldest_memory_at 은 Lv.30 툴 게이팅 조건이라, 못 갱신되면 어젯밤 첫
+    // 기억이 생긴 사람이 게이팅을 하루 더 못 넘는다.
+    errored += 1;
+    console.error(`[character-cache] user=${user.id} 실패`, err);
+   }
   }
 
+  if (errored > 0) throw new Error(`[character-cache] ${errored}명 실패`);
   console.log(`[character-cache] ${updated}명 갱신`);
   console.log('[character-cache] done');
 }

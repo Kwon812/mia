@@ -107,7 +107,10 @@ export async function generateDailyLogs(db: Db): Promise<void> {
       outcome: experiences.outcome,
     })
     .from(experiences)
-    .where(and(gte(experiences.occurredAt, start), lt(experiences.occurredAt, end)));
+    .where(and(gte(experiences.occurredAt, start), lt(experiences.occurredAt, end)))
+    // 정렬이 없으면 프롬프트의 "오늘의 경험 목록" 번호가 Postgres 반환 순서에
+    // 좌우된다. 저녁 일이 1번으로 올라오면 하루의 흐름이 뒤집힌 일기가 나온다.
+    .orderBy(experiences.occurredAt);
 
   if (expRows.length === 0) {
     console.log(`[daily-logs] log_date=${logDate} 대상 경험 없음`);
@@ -130,12 +133,21 @@ export async function generateDailyLogs(db: Db): Promise<void> {
     try {
       const response = await client.messages.create({
         model: MODEL,
-        max_tokens: 512,
+        // 512 는 부족했다. 하루 경험이 20~30건이면 요약 2~3문장 + learned 5~8개로
+        // 넘어가고, tool_use 생성 중 잘리면 input 이 불완전한 객체로 와서
+        // 검증 실패 → 그 유저의 그 날짜 일기는 영영 생기지 않는다(다음 실행은
+        // 다른 log_date 를 겨냥한다). 복구 경로가 없으니 넉넉히 준다.
+        max_tokens: 2048,
         system: DIARY_SYSTEM_PROMPT_V1,
         tools: [RECORD_DIARY_TOOL],
         tool_choice: { type: 'tool', name: TOOL_NAME },
         messages: [{ role: 'user', content: buildUserMessage(rows) }],
       });
+
+      // 잘렸으면 검증이 통과하더라도 내용이 반쪽이다. 원인을 로그에 남긴다.
+      if (response.stop_reason === 'max_tokens') {
+        console.error(`[daily-logs] user=${userId} 출력이 max_tokens 로 잘렸다`);
+      }
 
       const usage = response.usage;
       const costUsd = (usage.input_tokens / 1_000_000) * INPUT_PRICE_PER_MTOK + (usage.output_tokens / 1_000_000) * OUTPUT_PRICE_PER_MTOK;

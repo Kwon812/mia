@@ -13,11 +13,14 @@ type Step = {
   run: (db: Db) => Promise<void>;
 };
 
+// 순서에 뜻이 있다. markAbandonedThreads 가 recomputePersonality 보다 앞이다 —
+// 뒤에 두면 오늘 밤 무활동 임계를 넘긴 thread 들이 성격 계산이 끝난 뒤에야
+// abandoned 가 되어, finishExplore 축이 늘 하루 늦게 반영된다.
 const STEPS: Step[] = [
   { name: "generateDailyLogs", run: generateDailyLogs },
+  { name: "markAbandonedThreads", run: markAbandonedThreads },
   { name: "recomputePersonality", run: recomputePersonality },
   { name: "refreshCharacterCache", run: refreshCharacterCache },
-  { name: "markAbandonedThreads", run: markAbandonedThreads },
 ];
 
 async function main(): Promise<void> {
@@ -25,6 +28,13 @@ async function main(): Promise<void> {
   console.log(`[batch] start ${startedAt.toISOString()}`);
 
   const databaseUrl = process.env.DATABASE_URL;
+  if (!process.env.ANTHROPIC_API_KEY) {
+    // 없으면 일기 생성만 조용히 실패한다 — 그마저도 그날 경험이 0건이면
+    // LLM 클라이언트를 만들기 전에 early return 이라 증상이 나타났다 사라진다.
+    console.error("[batch] ANTHROPIC_API_KEY 환경변수가 없습니다. 배치를 종료합니다.");
+    process.exit(1);
+  }
+
   if (!databaseUrl) {
     console.error("[batch] DATABASE_URL 환경변수가 설정되어 있지 않습니다. 배치를 종료합니다.");
     process.exit(1);

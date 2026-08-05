@@ -110,7 +110,10 @@ export async function recomputePersonality(db: Db): Promise<void> {
   let computed = 0;
   let skipped = 0;
 
+  let errored = 0;
+
   for (const [userId, rows] of byUser) {
+   try {
     if (rows.length < MIN_SESSIONS) {
       console.log(`[personality] user=${userId} 스킵 (세션 ${rows.length}건 < ${MIN_SESSIONS})`);
       skipped += 1;
@@ -121,13 +124,17 @@ export async function recomputePersonality(db: Db): Promise<void> {
     const depthBreadth = calcDepthBreadth(rows);
     const nightMorning = calcNightMorning(rows);
 
+    // 창을 걸어야 한다. 다른 네 축은 전부 windowStart 이후만 보는데 이 축만
+    // 전 기간을 집계하고 있었다 — 1년 전에 끝낸 작업 40개가 분모에 남아,
+    // 최근 두 달을 전부 흘려보낸 사람도 완결형(+67)으로 고착됐다.
+    // "매일 밤 최근 14일을 다시 계산해 append" 라는 이 파일의 선언과 어긋난다.
     const [threadCounts] = await db
       .select({
         completed: sql<number>`count(*) filter (where ${threads.status} = 'completed')::int`,
         abandoned: sql<number>`count(*) filter (where ${threads.status} = 'abandoned')::int`,
       })
       .from(threads)
-      .where(eq(threads.userId, userId));
+      .where(and(eq(threads.userId, userId), gte(threads.lastActivityAt, windowStart)));
     const finishExplore = calcFinishExplore(threadCounts?.completed ?? 0, threadCounts?.abandoned ?? 0);
 
     const [expCounts] = await db
@@ -138,6 +145,26 @@ export async function recomputePersonality(db: Db): Promise<void> {
       .from(experiences)
       .where(and(eq(experiences.userId, userId), gte(experiences.occurredAt, windowStart)));
     const pioneerMaster = calcPioneerMaster(expCounts?.firstTime ?? 0, expCounts?.total ?? 0);
+
+    // 같은 하루에 두 번 남기지 않는다. 스냅샷 테이블에는 유니크 제약이 없고
+    // insert 에 onConflict 도 없어서, 부분 실패 후 수동 재실행하면 앞서 성공한
+    // 유저들에게 같은 날 두 번째 점이 찍힌다. compareSnapshot(t1,t2) 이
+    // "하루 1스냅샷"을 가정하는 타임라인이 그 순간 오염된다.
+    const [dup] = await db
+      .select({ id: personalitySnapshots.id })
+      .from(personalitySnapshots)
+      .where(
+        and(
+          eq(personalitySnapshots.userId, userId),
+          gte(personalitySnapshots.computedAt, windowEnd),
+        ),
+      )
+      .limit(1);
+    if (dup) {
+      console.log(`[personality] user=${userId} 스킵 (이 구간 스냅샷이 이미 있다)`);
+      skipped += 1;
+      continue;
+    }
 
     await db.insert(personalitySnapshots).values({
       userId,
@@ -153,8 +180,15 @@ export async function recomputePersonality(db: Db): Promise<void> {
     });
 
     computed += 1;
+   } catch (err) {
+    // 유저 한 명의 실패가 뒤 유저 전원을 날리면 안 된다. 예전에는 300번째에서
+    // 쿼리가 죽으면 301~500 번은 그날 밤 스냅샷이 아예 없었다.
+    errored += 1;
+    console.error(`[personality] user=${userId} 실패`, err);
+   }
   }
 
-  console.log(`[personality] ${computed}명 계산, ${skipped}명 스킵`);
+  console.log(`[personality] ${computed}명 계산, ${skipped}명 스킵, ${errored}명 실패`);
+  if (errored > 0) throw new Error(`[personality] ${errored}명 실패`);
   console.log('[personality] done');
 }
