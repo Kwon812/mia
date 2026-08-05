@@ -3,7 +3,7 @@ import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { dialogues, experienceSkills, experiences, memories, sessions } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
-import { getCurrentDialogueSlot, getKstDayBoundary, DAY_MS } from "@/lib/date";
+import { getCurrentDialogueSlot, getKstDayBoundary, kstDaysTogether, DAY_MS } from "@/lib/date";
 import { deriveEmotion, type EmotionExperienceInput, type EmotionSkillInput } from "@/lib/emotion";
 import { NameForm } from "@/components/name-form";
 import { MapStage } from "./map-stage";
@@ -34,7 +34,7 @@ export default async function Home() {
   }
 
   const dayBoundary = getKstDayBoundary();
-  const daysTogether = Math.floor((Date.now() - user.createdAt.getTime()) / DAY_MS);
+  const daysTogether = kstDaysTogether(user.createdAt);
   const slot = getCurrentDialogueSlot();
 
   const [dialogueRows, expRows, memoryRows, todaySessionRows, recentExperienceRows] =

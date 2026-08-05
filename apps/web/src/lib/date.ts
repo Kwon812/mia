@@ -75,6 +75,25 @@ export function formatKstMonthLabel(date: Date): string {
 }
 
 // KST 달력일 기준 경과 일수(반올림 없이 자정 대 자정) — 스킬 NEW 배지 판정용.
+/** 그 날짜가 속한 "하루"의 키(KST 새벽 4시 경계). 4시 이전은 전날에 속한다. */
+function kstDayKey(date: Date): number {
+  const shifted = new Date(toKstWallClock(date).getTime() - DAY_BOUNDARY_HOUR * 60 * 60 * 1000);
+  return Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate());
+}
+
+/** 함께한 날 수. **첫날이 1일째다** — 0일째는 없다.
+ *
+ *  경과 시간을 24 로 나누면 안 된다. 어젯밤 10시에 시작해 오늘 저녁이면
+ *  이미 이틀째인데, 19시간이라 0 이 나온다. 밤 11시에 시작하면 한 시간 뒤
+ *  자정에 이틀째가 되어야 하는데 24시간을 꽉 채워야 하루로 세어진다.
+ *  "며칠째"는 흐른 시간이 아니라 넘어온 날 경계의 수를 묻는 말이다.
+ *
+ *  경계는 이 앱의 "오늘"과 같은 새벽 4시를 쓴다. 자정 기준인
+ *  kstDaysSince 를 쓰면 새벽 2시에 하루가 넘어가 세션·일기와 어긋난다. */
+export function kstDaysTogether(from: Date, now: Date = new Date()): number {
+  return Math.round((kstDayKey(now) - kstDayKey(from)) / DAY_MS) + 1;
+}
+
 export function kstDaysSince(date: Date, now: Date = new Date()): number {
   const d = toKstWallClock(date);
   const n = toKstWallClock(now);
