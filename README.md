@@ -32,3 +32,14 @@ npm run typecheck   # 전 워크스페이스
 npm run build       # 전 워크스페이스
 npm run lint
 ```
+
+## 배포 리전
+
+`apps/web/vercel.json` 이 함수 리전을 `icn1`(서울)로 고정한다. Supabase 가
+`ap-northeast-2`(서울)에 있어서 함수가 다른 대륙에서 돌면 쿼리마다 태평양을
+왕복한다 — 기본값(`iad1`, 워싱턴DC)일 때 홈 화면의 순차 왕복 4번이 800ms 넘게
+들었다. 함수와 DB는 같은 리전에 둔다.
+
+Next 16 에서 `preferredRegion` 라우트 설정은 deprecated 라 `vercel.json` 으로
+지정한다. Vercel 프로젝트(`mia-web`)의 Root Directory 가 `apps/web` 이라
+`vercel.json` 도 거기 있어야 읽힌다 (Vercel 대시보드 Project Settings → Functions 에서도 같은 값을 바꿀 수 있다).
