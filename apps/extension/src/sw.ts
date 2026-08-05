@@ -3,6 +3,7 @@ import { db } from './db';
 import {
   close,
   continueDraft,
+  hasScoringEvent,
   idleGapBefore,
   ingest,
   isBlockedDomain,
@@ -217,6 +218,15 @@ async function handleSessionCheck(): Promise<void> {
       // 넣으면 duration_min 이 통째로 거짓말이 된다.
       await dispatchClosedSession(close(stale, 'idle', stale.lastActivityAt));
     }
+  }
+
+  // 점수 0 짜리(tab_updated)만으로는 세션을 새로 시작하지 않는다. 자동
+  // 새로고침 배경 탭이 30분마다 duration_min=0 짜리 빈 세션을 만들어 archive 를
+  // 채우기 때문이다. 이미 열려 있는 세션에는 문맥으로 흡수된다.
+  if (!draft && !hasScoringEvent(rawEvents)) {
+    const ids = rawEvents.map((e) => e.id).filter((id): id is number => id !== undefined);
+    if (ids.length > 0) await db.rawEvents.bulkDelete(ids);
+    return;
   }
 
   const updated = ingest(draft, rawEvents, now);

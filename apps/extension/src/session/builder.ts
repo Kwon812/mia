@@ -96,6 +96,19 @@ function computeDomainSeconds(events: ActivityEvent[]): Record<string, number> {
  * draft(없으면 새 세션) 에 새 rawEvents 를 반영한 다음 draft 를 돌려준다.
  * 呼출부(sw.ts)는 반영이 끝난 rawEvents 를 IndexedDB 에서 지운다.
  */
+/** 점수가 붙는 이벤트가 하나라도 있는가 — 세션을 새로 시작할 값어치가 있는지.
+ *
+ *  점수 0 짜리(tab_updated)만으로 세션을 시작하면, 자동 새로고침 배경 탭이
+ *  30분마다 duration_min=0 짜리 빈 세션을 하나씩 만들어 archive 를 채운다.
+ *  이미 열려 있는 세션에는 문맥(도메인·제목)으로 흡수되지만, 없는 세션을
+ *  새로 열지는 못한다. */
+export function hasScoringEvent(rawEvents: RawEvent[]): boolean {
+  return rawEvents.some((r) => {
+    const e = normalizeEvent(r);
+    return !isBlockedDomain(e.domain) && eventScore(e) > 0;
+  });
+}
+
 export function ingest(
   draft: SessionDraft | null,
   rawEvents: RawEvent[],
@@ -113,9 +126,22 @@ export function ingest(
   events.sort((a, b) => a.at - b.at);
 
   const startedAt = draft?.startedAt ?? newEvents[0]?.at ?? now;
+
+  // 유휴 시계는 **점수가 붙는 이벤트만** 리셋한다.
+  //
+  // tab_updated(로드 완료)는 eventScore 가 0 이다 — 시스템이 이미 "활동 아님"
+  // 이라고 판정해둔 것이다. 그런데 이것까지 lastActivityAt 을 밀어올리고 있어서,
+  // 배경 탭이 자동 새로고침되거나 열어둔 탭이 뭔가 로드를 마칠 때마다 유휴
+  // 시계가 0 으로 돌아갔다. 그 결과 idle 이 도달할 수 없는 조건이 됐다 —
+  // 실측: 서버에 쌓인 세션 8건의 close_reason 이 switch 7 / maxlen 1 이고
+  // idle 은 0건이다. 자리를 뜨면 idle 로 닫히는 게 정상인데도.
+  //
+  // 탭 전환(tab_activated)은 점수 5 라 그대로 활동으로 남는다. 영상 재생 틱도
+  // 0.5 라 남는다(예외 C — 입력 없이 시청만 해도 무활동이 아니다).
+  const scoringEvents = newEvents.filter((e) => eventScore(e) > 0);
   const lastActivityAt = Math.max(
     draft?.lastActivityAt ?? startedAt,
-    ...newEvents.map((e) => e.at),
+    ...scoringEvents.map((e) => e.at),
     startedAt,
   );
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RawEvent } from '../../db';
 import { isBlockedDomain } from '../categories';
-import { buildCompressedLog, close, continueDraft, ingest, MAX_QUERIES, MAX_TITLE_LEN, normalizeEvent } from '../builder';
+import { buildCompressedLog, close, continueDraft, hasScoringEvent, ingest, MAX_QUERIES, MAX_TITLE_LEN, normalizeEvent } from '../builder';
 import { shouldClose } from '../rules';
 import type { SessionDraft } from '../types';
 
@@ -327,5 +327,48 @@ describe('primaryCategory — etc 잠정값 승격', () => {
       ANCHOR + 4 * MIN,
     );
     expect(third.primaryCategory).toBe('dev');
+  });
+});
+
+describe('유휴 시계는 점수가 붙는 이벤트만 리셋한다', () => {
+  // tab_updated 는 eventScore 가 0 — 시스템이 이미 "활동 아님"으로 판정한 값이다.
+  // 그런데 이것까지 lastActivityAt 을 밀어올려서, 자동 새로고침 배경 탭 하나가
+  // 유휴 판정을 영원히 미뤘다(실측: 서버 세션 8건 중 idle 0건).
+  const tabUpdated = (at: number, domain = 'github.com'): RawEvent => ({
+    at,
+    kind: 'tab_updated',
+    domain,
+    payload: { active: true, title: 't' },
+  });
+  const typed = (at: number, domain = 'github.com'): RawEvent => ({
+    at,
+    kind: 'activity',
+    domain,
+    payload: { keys: 30, visible: true },
+  });
+
+  it('tab_updated 만 들어오면 lastActivityAt 이 안 밀린다', () => {
+    const t0 = 1_000_000;
+    const draft = ingest(null, [typed(t0)], t0);
+    expect(draft.lastActivityAt).toBe(t0);
+
+    const later = ingest(draft, [tabUpdated(t0 + 20 * 60_000)], t0 + 20 * 60_000);
+    expect(later.lastActivityAt).toBe(t0); // 20분이 지나도 그대로
+  });
+
+  it('탭 전환(점수 5)과 재생 틱(0.5)은 활동으로 남는다', () => {
+    const t0 = 1_000_000;
+    const draft = ingest(null, [typed(t0)], t0);
+
+    const switched = ingest(draft, [{ at: t0 + 60_000, kind: 'tab_activated', domain: 'github.com', payload: {} }], t0 + 60_000);
+    expect(switched.lastActivityAt).toBe(t0 + 60_000);
+
+    const playing = ingest(switched, [{ at: t0 + 120_000, kind: 'activity', domain: 'youtube.com', payload: { playing: true, visible: true } }], t0 + 120_000);
+    expect(playing.lastActivityAt).toBe(t0 + 120_000);
+  });
+
+  it('점수 0 이벤트만으로는 세션을 시작하지 않는다', () => {
+    expect(hasScoringEvent([tabUpdated(1_000_000)])).toBe(false);
+    expect(hasScoringEvent([tabUpdated(1_000_000), typed(1_000_001)])).toBe(true);
   });
 });
