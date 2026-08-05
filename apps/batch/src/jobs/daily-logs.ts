@@ -10,7 +10,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { and, gte, lt } from 'drizzle-orm';
-import { dailyLogs, experiences, type Db } from '@na/db';
+import { dailyLogs, experiences, llmOutputs, type Db } from '@na/db';
 import { diaryTargetKst } from '../kst';
 
 // 저비용 모델. 유저당 1회만 호출되므로 Haiku 로 충분하다 (claude-api 스킬 캐시 기준 모델 ID).
@@ -20,6 +20,11 @@ const TOOL_NAME = 'record_diary';
 // Haiku 4.5 가격 ($/1M 토큰) — 유저당 비용 로그용. claude-api 스킬 캐시 기준.
 const INPUT_PRICE_PER_MTOK = 1.0;
 const OUTPUT_PRICE_PER_MTOK = 5.0;
+
+/** 일기 프롬프트 버전. daily_logs.prompt_version 과 llm_outputs.prompt_version
+ *  둘 다 이 상수를 쓴다 — 예전에는 두 군데에 1 이 하드코딩돼 있어 버전을
+ *  올리면 한쪽만 바뀔 수 있었다. */
+export const DIARY_PROMPT_VERSION = 1;
 
 // v1 — 프롬프트를 바꾸면 daily_logs.prompt_version 을 올리고, experiences 가 불변이므로
 // 과거 일기 전체를 이 프롬프트로 재생성할지 검토한다.
@@ -160,6 +165,26 @@ export async function generateDailyLogs(db: Db): Promise<void> {
       );
       const output = toolUse ? parseDailyLogOutput(toolUse.input) : null;
 
+      // 원본 출력을 남긴다(검증 실패분 포함). 이 잡은 실패해도 다음 실행이
+      // 다른 log_date 를 겨냥하므로, 무엇을 뱉었는지 여기 안 남기면 그 날짜의
+      // 실패 원인을 영영 알 수 없다. 로깅 실패가 처리를 막으면 안 되니 삼킨다.
+      try {
+        await db.insert(llmOutputs).values({
+          userId,
+          kind: 'daily_log',
+          logDate,
+          model: MODEL,
+          promptVersion: DIARY_PROMPT_VERSION,
+          output: toolUse ? toolUse.input : null,
+          stopReason: response.stop_reason ?? null,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          valid: output !== null,
+        });
+      } catch (err) {
+        console.error(`[daily-logs] user=${userId} llm_outputs 기록 실패`, err);
+      }
+
       if (!output) {
         console.error(`[daily-logs] user=${userId} LLM 출력 검증 실패, 스킵`);
         failed += 1;
@@ -177,7 +202,7 @@ export async function generateDailyLogs(db: Db): Promise<void> {
           learned: output.learned,
           emotion: output.emotion,
           experienceIds,
-          promptVersion: 1,
+          promptVersion: DIARY_PROMPT_VERSION,
         })
         .onConflictDoUpdate({
           target: [dailyLogs.userId, dailyLogs.logDate],
@@ -187,7 +212,7 @@ export async function generateDailyLogs(db: Db): Promise<void> {
             emotion: output.emotion,
             experienceIds,
             generatedAt: new Date(),
-            promptVersion: 1,
+            promptVersion: DIARY_PROMPT_VERSION,
           },
         });
 

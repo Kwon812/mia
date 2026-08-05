@@ -23,6 +23,7 @@ import {
   experienceSkills,
   experiences,
   ingestFailures,
+  llmOutputs,
   memories,
   sessions,
   threads,
@@ -46,6 +47,10 @@ import { calculateMemoryScore, type RecentExperienceSummary } from './memory-sco
 export const MODEL = 'claude-haiku-4-5';
 
 export const TOOL_NAME = 'record_experience';
+
+/** SYSTEM_PROMPT_V3 의 버전 번호. llm_outputs 에 남겨 프롬프트 간 비교의
+ *  기준으로 쓴다 — 프롬프트를 고치면 여기도 올린다. */
+export const PROMPT_VERSION = 3;
 
 /** 프롬프트에 넣는 보유 스킬 목록의 최대 개수. 판정용 집합과는 다르다. */
 const PROMPT_SKILL_LIMIT = 50;
@@ -519,11 +524,35 @@ export async function processSession(sessionId: string, userId: string): Promise
       ],
     });
 
+    // 무슨 일이 있었든 원본 출력을 남긴다. 검증 실패분도 valid=false 로 함께
+    // 남겨야 "모델이 무엇을 뱉었나"를 나중에 물을 수 있다 — ingest_failures 는
+    // 운영 알림용이라 성공한 판정의 근거가 어디에도 안 남았다.
+    // 로깅 실패가 처리 자체를 막으면 안 되므로 삼킨다.
+    const recordOutput = async (payload: unknown, valid: boolean) => {
+      try {
+        await db.insert(llmOutputs).values({
+          userId,
+          kind: 'experience',
+          sessionId,
+          model: MODEL,
+          promptVersion: PROMPT_VERSION,
+          output: payload,
+          stopReason: response.stop_reason ?? null,
+          inputTokens: response.usage?.input_tokens ?? null,
+          outputTokens: response.usage?.output_tokens ?? null,
+          valid,
+        });
+      } catch (err) {
+        console.error('[engine] llm_outputs 기록 실패', err);
+      }
+    };
+
     const toolUse = response.content.find(
       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use' && block.name === TOOL_NAME,
     );
 
     if (!toolUse) {
+      await recordOutput(null, false);
       await db.insert(ingestFailures).values({
         userId,
         sessionId,
@@ -535,6 +564,7 @@ export async function processSession(sessionId: string, userId: string): Promise
 
     // 4. 출력 검증
     const parsed = experienceOutputSchema.safeParse(toolUse.input);
+    await recordOutput(toolUse.input, parsed.success);
     if (!parsed.success) {
       await db.insert(ingestFailures).values({
         userId,

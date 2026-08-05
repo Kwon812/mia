@@ -376,6 +376,49 @@ export const ingestFailures = pgTable('ingest_failures', {
 // 세션은 processed_at NULL 로 남아 재처리 대상이 된다.
 
 // ------------------------------------------------------------
+// LLM 원본 출력 — 튜닝용
+//
+// ingest_failures 가 "실패"만 남기는 탓에 성공한 판정의 근거가 어디에도
+// 없었다. outcome 이 왜 explore 였는지 나중에 물으면, 세션을 다시 LLM 에
+// 태우는 것 말고는 답할 방법이 없었다 — 그마저도 비교 대상인 이전 출력은
+// 이미 experiences 로 가공된 뒤라 원본이 남아 있지 않았다.
+// 여기에는 tool_use.input 을 가공 전 그대로 넣고, 모델과 프롬프트 버전을
+// 함께 남겨 "v3 → v4 에서 stuck 이 나오기 시작했다" 같은 비교를 가능하게 한다.
+// ------------------------------------------------------------
+
+export const LLM_OUTPUT_KINDS = ['experience', 'daily_log'] as const;
+export type LlmOutputKind = (typeof LLM_OUTPUT_KINDS)[number];
+
+export const llmOutputs = pgTable(
+  'llm_outputs',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: LLM_OUTPUT_KINDS }).notNull(),
+    // kind 에 따라 하나만 채워진다. session_id 에 FK 를 걸지 않는 것은
+    // ingest_failures 와 같은 이유 — 세션이 지워져도 판정 이력은 남아야 한다.
+    sessionId: uuid('session_id'),
+    logDate: date('log_date'),
+    model: text('model').notNull(),
+    promptVersion: smallint('prompt_version').notNull(),
+    /** tool_use.input 원본. tool_use 블록 자체가 없었으면 null. */
+    output: jsonb('output').$type<unknown>(),
+    /** 'max_tokens' 면 잘린 출력이다 — 검증을 통과했더라도 내용이 반쪽이다. */
+    stopReason: text('stop_reason'),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    /** zod 검증 통과 여부. false 면 이 출력으로는 아무것도 만들어지지 않았다. */
+    valid: boolean('valid').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('idx_llm_outputs_session').on(t.sessionId).where(sql`${t.sessionId} is not null`),
+    index('idx_llm_outputs_user_time').on(t.userId, t.createdAt.desc()),
+    check('llm_outputs_kind_check', sql`${t.kind} in ('experience','daily_log')`),
+  ],
+);
+
+// ------------------------------------------------------------
 // CHECK 제약 표현 방식 정리
 //   sessions.close_reason / threads.status / experiences.outcome / dialogues.slot
 //     → text({ enum: [...] }) 로 TS 유니온 타입까지 좁히고, check() 로 동일한

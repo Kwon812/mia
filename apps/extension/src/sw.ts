@@ -437,24 +437,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // 연장된다. GET_EXTENSION_KEY / GET_SESSION_SNAPSHOT 과 같은 방식이다.
   void db.rawEvents
     .add({
-    at: Date.now(),
-    kind: 'activity',
-    domain,
-    payload: {
-      scrolls: message.scrolls,
-      clicks: message.clicks,
-      keys: message.keys,
-      // 보이는 탭에서 미디어 재생 중 — 입력 0 이어도 시청을 활동으로 인정
-      playing: message.playing,
-      // content.ts 의 document.visibilityState 기반 플래그 — 예외 C
-      // (백그라운드 재생) 판정의 isActiveTab 근거가 된다 (session/builder.ts
-      // normalizeEvent 참고).
-      visible: message.visible,
-      // 의도 컨텍스트 — session/builder.ts normalizeEvent 에서 ActivityEvent 로 매핑된다.
-      title: message.title,
-      path: message.path,
-      query: message.query,
-    },
+      at: Date.now(),
+      kind: 'activity',
+      domain,
+      payload: {
+        scrolls: message.scrolls,
+        clicks: message.clicks,
+        keys: message.keys,
+        // 보이는 탭에서 미디어 재생 중 — 입력 0 이어도 시청을 활동으로 인정
+        playing: message.playing,
+        // content.ts 의 document.visibilityState 기반 플래그 — 예외 C
+        // (백그라운드 재생) 판정의 isActiveTab 근거가 된다 (session/builder.ts
+        // normalizeEvent 참고).
+        visible: message.visible,
+        // 의도 컨텍스트 — session/builder.ts normalizeEvent 에서 ActivityEvent 로 매핑된다.
+        title: message.title,
+        path: message.path,
+        query: message.query,
+      },
     })
     .then(
       () => sendResponse({ ok: true }),
