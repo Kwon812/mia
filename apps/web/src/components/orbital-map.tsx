@@ -448,7 +448,7 @@ export function OrbitalMap({
       if (!aim) return;
       const g = grab;
       ctx!.save();
-      ctx!.strokeStyle = `rgba(99,230,210,${0.35 + g * 0.55})`;
+      ctx!.strokeStyle = `rgba(99,230,210,${0.82 + g * 0.18})`;
       ctx!.lineWidth = 1;
 
       if (g > 0.02) {
@@ -468,18 +468,29 @@ export function OrbitalMap({
         }
       }
 
-      // 자유로울 때의 십자. 붙잡히면 옅어진다.
-      ctx!.globalAlpha = 1 - g * 0.75;
+      // 자유로울 때의 십자. 이게 커서를 대신하므로 "겨우 보이는" 정도여선
+      // 안 된다 — 검은 배경에 1px 짜리 4획이면 어디 있는지 놓친다.
+      // 팔을 길게 빼고 가운데 점을 둬서 위치가 한눈에 잡히게 한다.
+      // 붙잡히면 고리에 자리를 내주고 옅어진다.
+      ctx!.globalAlpha = 1 - g * 0.7;
+      const IN = 3.5;
+      const OUT = 11;
       ctx!.beginPath();
-      ctx!.moveTo(aim.x - 6, aim.y);
-      ctx!.lineTo(aim.x - 2, aim.y);
-      ctx!.moveTo(aim.x + 2, aim.y);
-      ctx!.lineTo(aim.x + 6, aim.y);
-      ctx!.moveTo(aim.x, aim.y - 6);
-      ctx!.lineTo(aim.x, aim.y - 2);
-      ctx!.moveTo(aim.x, aim.y + 2);
-      ctx!.lineTo(aim.x, aim.y + 6);
+      ctx!.moveTo(aim.x - OUT, aim.y);
+      ctx!.lineTo(aim.x - IN, aim.y);
+      ctx!.moveTo(aim.x + IN, aim.y);
+      ctx!.lineTo(aim.x + OUT, aim.y);
+      ctx!.moveTo(aim.x, aim.y - OUT);
+      ctx!.lineTo(aim.x, aim.y - IN);
+      ctx!.moveTo(aim.x, aim.y + IN);
+      ctx!.lineTo(aim.x, aim.y + OUT);
       ctx!.stroke();
+
+      // 가운데 점 — 획만 있으면 정확히 어디를 가리키는지가 빈칸으로 남는다
+      ctx!.fillStyle = `rgba(143,244,228,${0.95 * (1 - g * 0.7)})`;
+      ctx!.beginPath();
+      ctx!.arc(aim.x, aim.y, 1.4, 0, Math.PI * 2);
+      ctx!.fill();
       ctx!.restore();
     }
 
