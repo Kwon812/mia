@@ -165,6 +165,23 @@ function dayBucket(epochMs: number): string {
   return kstShifted.toISOString().slice(0, 10);
 }
 
+/**
+ * 마지막 활동과 다음 활동 **사이에** 유휴 임계를 넘는 공백이 있었는가.
+ *
+ * shouldClose 의 idle 판정은 `now - lastActivityAt` 만 본다. 그런데 흡수(ingest)
+ * 가 lastActivityAt 을 먼저 갱신한 뒤에 판정이 돌기 때문에, 알람이 아예 안 돈
+ * 구간(노트북 절전 등)은 그 공백이 판정에 보이지 않는다 — 어젯밤 22시 활동과
+ * 오늘 아침 9시 활동이 한 세션으로 이어지고, idle 이 아니라 maxlen 으로 잘려
+ * 11시간짜리 가짜 세션이 만들어진다.
+ * 그래서 흡수하기 **전에** 이벤트 시각으로 공백을 따로 본다.
+ *
+ * 임계값(IDLE_MS)을 파일 밖으로 내보내지 않으려고 함수로 감싼다 — timeUntilClose
+ * 와 같은 이유다.
+ */
+export function idleGapBefore(draft: SessionDraft, nextActivityAt: number): boolean {
+  return nextActivityAt - draft.lastActivityAt > IDLE_MS;
+}
+
 /** day 조건 — 세션 시작 시각과 now 가 새벽 4시 경계를 넘어 다른 "날"이면 true. */
 export function dayBoundaryCrossed(draft: SessionDraft, now: number): boolean {
   return dayBucket(draft.startedAt) !== dayBucket(now);

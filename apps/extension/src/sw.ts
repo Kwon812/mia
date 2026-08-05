@@ -3,6 +3,7 @@ import { db } from './db';
 import {
   close,
   continueDraft,
+  idleGapBefore,
   ingest,
   isBlockedDomain,
   sendSkipReason,
@@ -38,9 +39,15 @@ const ARCHIVE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 
 
 function registerAlarms(): void {
-  // 계획서 03장의 compress(5분) 알람은 없다 — 1차 압축은 content script 의
-  // 10초 집계가, 2차 압축은 sessionCheck(1분)의 draft 흡수가 이미 담당한다.
-  // rawEvents 는 흡수 즉시 삭제되므로 별도 압축 단계가 필요 없어졌다.
+  // 계획서 03장의 compress(5분) 알람은 없다.
+  //
+  // 주의: 예전 주석은 "2차 압축은 draft 흡수가 담당한다"고 적혀 있었는데
+  // 사실이 아니다. ingest 는 normalizeEvent 로 1:1 변환하고 blocked 도메인만
+  // 걸러 이어붙일 뿐, 양을 줄이지 않는다 — rawEvents 테이블에서
+  // meta.currentSession 안으로 옮기는 이사일 뿐이다.
+  // IndexedDB 안에서 실제로 줄어드는 곳은 buildCompressedLog(마감 시점) 하나다.
+  // 그래서 긴 세션이면 meta.currentSession 이 수백 KB 까지 자라고 매 1분마다
+  // 통째로 다시 직렬화된다 — 알려진 비용이다(계획서 11장 튜닝 대상).
   void chrome.alarms.clear('compress'); // 구버전이 등록해둔 잔재 정리
   void chrome.alarms.clear('diary'); // 일기는 서버 야간 배치 담당 — 확장 알람 불필요
   chrome.alarms.create(ALARM_SESSION_CHECK, { periodInMinutes: 1 });
@@ -73,8 +80,25 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  registerAlarms();
   void handleStartup();
 });
+
+// 워커가 깨어날 때마다 알람이 살아 있는지 확인한다.
+//
+// 예전에는 등록 지점이 onInstalled 하나뿐이었다. 어떤 이유로든 알람이 한 번
+// 사라지면(확장 비활성화→재활성화처럼 onInstalled 도 onStartup 도 발화하지
+// 않는 경로가 있다) 복구할 방법이 코드에 전혀 없었다 — rawEvents 만 무한히
+// 쌓이고 세션은 영원히 마감·전송되지 않는다. 팝업은 "열린 세션 없음 + 활동
+// 신호 N건 대기 중"만 계속 띄운다.
+// alarms.create 는 같은 이름이면 덮어쓰기라 중복 걱정이 없다.
+void (async () => {
+  const existing = await chrome.alarms.get(ALARM_SESSION_CHECK);
+  if (!existing) {
+    console.warn('[NA] sessionCheck 알람이 없어 다시 등록한다');
+    registerAlarms();
+  }
+})();
 
 // ── meta 테이블 헬퍼 (currentSession draft, extensionKey) ──
 
@@ -174,25 +198,49 @@ async function dispatchClosedSession(payload: SessionPayloadLike): Promise<void>
  */
 async function handleSessionCheck(): Promise<void> {
   const now = Date.now();
-  const [draft, rawEvents] = await Promise.all([loadCurrentSession(), db.rawEvents.toArray()]);
+  const [loaded, rawEvents] = await Promise.all([loadCurrentSession(), db.rawEvents.toArray()]);
+  let draft = loaded;
 
   if (!draft && rawEvents.length === 0) return; // 아무 일도 없었다
 
-  const updated = ingest(draft, rawEvents, now);
+  // 이벤트 **사이에** 숨은 유휴 구간을 흡수 전에 먼저 끊는다.
+  // 알람이 돌지 않은 구간(노트북 절전, 워커가 오래 깨지 않음)은 now 기준
+  // 판정으로는 안 보인다 — 깨어나자마자 들어온 이벤트가 lastActivityAt 을
+  // 갱신해버리기 때문이다. 그러면 밤 10시와 아침 9시가 한 세션이 된다.
+  if (draft && rawEvents.length > 0) {
+    const firstAt = Math.min(...rawEvents.map((e) => e.at));
+    if (idleGapBefore(draft, firstAt)) {
+      const stale = draft;
+      draft = null;
+      await saveCurrentSession(null);
+      // 마감 시각은 now 가 아니라 마지막 활동 시각이다. 자는 동안을 세션에
+      // 넣으면 duration_min 이 통째로 거짓말이 된다.
+      await dispatchClosedSession(close(stale, 'idle', stale.lastActivityAt));
+    }
+  }
 
-  // 반영이 끝난 rawEvents 는 즉시 지운다 — draft 흡수가 곧 압축이므로
-  // 세션에 반영된 원본은 더 이상 필요 없다 (rawEvents 수명 = 최대 1분).
+  const updated = ingest(draft, rawEvents, now);
   const processedIds = rawEvents.map((e) => e.id).filter((id): id is number => id !== undefined);
-  if (processedIds.length > 0) await db.rawEvents.bulkDelete(processedIds);
 
   const reason = shouldClose(updated, now);
 
+  // 순서가 중요하다: 반드시 **저장 먼저, 삭제 나중**이다.
+  //
+  // 예전에는 bulkDelete 가 먼저였다. 그 사이(브라우저 강제 종료, quota 초과로
+  // archive.put 이 throw) 에 죽으면 rawEvents 는 이미 사라졌는데 draft 는
+  // 갱신 전이라 그 1분치 활동이 영구 유실됐다. 마감 경로에서는 더 나빴다 —
+  // dispatch 는 끝났는데 saveCurrentSession(null) 전에 죽으면 같은 draft 가
+  // 다음 틱에 **같은 id 로 다시 마감**되고, 서버는 onConflictDoNothing 이라
+  // 먼저 도착한(덜 완전한) 판본만 남기고 두 번째를 조용히 버렸다.
+  //
+  // 지금 순서에서 최악은 "같은 rawEvent 를 한 번 더 흡수"다. ingest 는 이벤트를
+  // 이어붙일 뿐이라 중복 흡수는 활동량이 살짝 부풀 뿐 데이터가 사라지지 않는다.
+  // 유실과 중복 중 중복을 택한다.
   if (!reason) {
     await saveCurrentSession(updated);
+    if (processedIds.length > 0) await db.rawEvents.bulkDelete(processedIds);
     return;
   }
-
-  await dispatchClosedSession(close(updated, reason, now));
 
   if (reason === 'maxlen') {
     // 4시간 절단 — 곧바로 다음 draft 를 이어 시작한다 (continued_from).
@@ -202,6 +250,11 @@ async function handleSessionCheck(): Promise<void> {
     // draft=null 로 ingest() 를 호출해 새 세션을 새로 시작한다.
     await saveCurrentSession(null);
   }
+  if (processedIds.length > 0) await db.rawEvents.bulkDelete(processedIds);
+
+  // 마감 전송은 draft 정리가 끝난 뒤에. 여기서 죽어도 draft 는 이미 비워졌고
+  // 마감된 세션만 잃는다 — 살아있는 세션이 두 번 마감되는 것보다 낫다.
+  await dispatchClosedSession(close(updated, reason, now));
 }
 
 /**
