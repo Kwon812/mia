@@ -48,11 +48,19 @@ function kstYmd(date: Date): string {
   return new Date(date.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+// v3 — 두 가지를 고쳤다. 둘 다 "기준을 안 주면 모델은 가장 안전한 값으로 도망간다"는
+//      같은 실패였다.
+//      (1) is_first_time 판정 완화. v2 까지는 이 값이 거의 true 로 나오지 않아
+//          (실측: 6건 연속 false) 기억 생성 경로가 사실상 막혀 있었다.
+//      (2) outcome 판정 기준 명시. v2 까지는 값 네 개를 나열만 하고 언제 무엇을
+//          고를지 한 마디도 없었다 — 실측 6건 중 5건이 explore 로 쏠렸고
+//          success/stuck 이 하나도 나오지 않아, 이 값에 의존하는 감정 판정과
+//          '막힘 돌파' 기억 규칙이 통째로 죽어 있었다.
 // v2 — compressed_log 에 검색 쿼리(queries)와 페이지 제목(segments[].title),
 // 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
 // (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
 // 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
-const SYSTEM_PROMPT_V2 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
+const SYSTEM_PROMPT_V3 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
@@ -71,11 +79,25 @@ compressed_log 에는 구간(segments)마다 도메인·카테고리·시간 외
   "TypeScript로 기능을 구현했다"   ← 기존 스킬 목록에 이미 있던 것 (늘 하던 것)
   "처음으로 TypeScript를 써봤다"   ← 기존 스킬 목록에 없던 것 (신규 스킬 획득, is_first_time=true)
 
+is_first_time 을 지나치게 인색하게 매기지 마라. 도구뿐 아니라 주제·방식·환경도
+대상이다 — 처음 다뤄보는 서비스, 처음 붙여보는 연동, 처음 시도하는 방법이면
+true 다. 기준은 하나다: 보유 스킬 목록에 없던 것을 이번에 다뤘는가.
+목록에 없는 것을 다뤘는데도 망설여진다면 true 쪽으로 판단한다.
+
 record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
 - summary: 이 세션을 한 문장으로, "~했다"체로 요약한다.
 - detail: 2~3문장으로 조금 더 자세히 설명한다 (선택).
 - category: 이 경험의 카테고리.
-- outcome: success(성공) | partial(부분 성공) | stuck(막힘) | explore(탐색/실험) 중 하나.
+- outcome: 아래 기준으로 넷 중 하나를 고른다. 판단이 서지 않는다고 explore 로
+  도망가지 마라 — explore 는 "목표가 없었다"는 적극적인 판정이지 기본값이 아니다.
+    success : 찾던 것을 찾았거나 하려던 것을 해냈다. 검색 → 문서·해답 → 적용·확인으로
+              이어지고 그 주제가 세션 후반에 사라진다. 배포 확인, 설정 완료, 문제 해결.
+    partial : 목표는 있었고 일부는 됐는데 남은 게 있다. 한 갈래는 마무리됐지만
+              다른 갈래로 넘어가며 끝났다.
+    stuck   : 같은 문제를 붙들고 끝났다. 같은 주제의 검색어가 반복되거나, 여러 문서를
+              오갔는데 세션 끝까지 그 주제에서 벗어나지 못한다. 해결 신호가 없다.
+    explore : 정해진 목표 없이 둘러봤다. 검색어가 넓고 얕으며 한 주제에 오래 머물지
+              않는다. 특정 주제를 파고든 흔적이 있으면 explore 가 아니다.
 - is_first_time: 기존 스킬 목록에 없던 것을 이번에 처음 시도했으면 true.
 - skills: 이번에 사용하거나 습득한 스킬과 비중(weight, 1~10). 기존 스킬 목록과 이름이
   겹치면 반드시 동일한 표기를 재사용한다 — "TS"·"타입스크립트"처럼 같은 스킬을 다른
@@ -115,7 +137,9 @@ const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
       outcome: {
         type: 'string',
         enum: [...EXPERIENCE_OUTCOMES],
-        description: 'success | partial | stuck | explore 중 하나.',
+        description:
+          'success: 하려던 것을 해냈다 / partial: 일부만 됐다 / stuck: 같은 문제를 붙들고 끝났다 / ' +
+          'explore: 목표 없이 둘러봤다. 애매하다고 explore 를 고르지 않는다.',
       },
       is_first_time: {
         type: 'boolean',
@@ -186,10 +210,19 @@ const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
 
 // ------------------------------------------------------------
 // Memory Engine — thread 완결과 별개로 memory_score 가 이 임계값을 넘으면
-// 'new_skill' 또는 'comeback' 트리거로 memories 를 하나 더 남긴다.
-// 어느 트리거인지는 breakdown 에서 어느 규칙이 발동했는지로 정한다.
+// memories 를 하나 더 남긴다. 어느 트리거인지는 breakdown 에서 어느 규칙이
+// 발동했는지로 정한다 ('new_skill' | 'breakthrough' | 'revival' | 'comeback').
 // ------------------------------------------------------------
-const MEMORY_SCORE_THRESHOLD = 80;
+// 80 이었을 때는 "신규 스킬 + 첫 시도"가 겹치는 경우 말고는 넘을 길이 사실상
+// 없었다(50/40/30/20 조합상 두 개가 겹쳐야만 도달). is_first_time 이 잘 안 뜨면
+// 그 유일한 길마저 막혀서 하루 여섯 경험에 기억 0건이 나온다. 60 으로 낮추면
+// 신규 스킬 하나만으로는 여전히 부족하지만(50), 거기에 뭐라도 하나 겹치면 남는다.
+const MEMORY_SCORE_THRESHOLD = 60;
+
+// 이 기간 이상 안 쓴 스킬이 다시 나오면 "휴면 스킬 재등장"으로 본다.
+// lib/emotion.ts 의 '그리움' 판정과 같은 값을 쓴다 — 같은 현상을 감정과 기억이
+// 각각 다르게 부르면 사용자가 둘을 연결하지 못한다.
+const DORMANT_SKILL_DAYS = 30;
 
 function clampImportance(score: number): number {
   return Math.min(10, Math.max(1, Math.round(score / 10)));
@@ -430,7 +463,7 @@ export async function processSession(sessionId: string, userId: string): Promise
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 1024,
-      system: SYSTEM_PROMPT_V2,
+      system: SYSTEM_PROMPT_V3,
       tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [
@@ -498,9 +531,24 @@ export async function processSession(sessionId: string, userId: string): Promise
       primarySkillName: primarySkillByExperienceId.get(e.id) ?? null,
     }));
 
+    // 막혔던 것을 뚫었는가 — 직전 경험이 stuck 인데 이번이 success.
+    const brokeThrough =
+      recentExperienceRows[0]?.outcome === 'stuck' && output.outcome === 'success';
+
+    // 오래 묵혀둔 스킬이 돌아왔는가. existingSkillRows 에 이미 lastUsedAt 이
+    // 실려 있어 추가 쿼리가 필요 없다.
+    const lastUsedByName = new Map(existingSkillRows.map((r) => [r.name, r.lastUsedAt]));
+    const dormantSkillReturned = dedupedSkills.some((sk) => {
+      const last = lastUsedByName.get(sk.name);
+      if (!last) return false; // 신규 스킬은 여기 해당 없음(그건 hasNewSkill 이 잡는다)
+      return session.startedAt.getTime() - last.getTime() >= DORMANT_SKILL_DAYS * DAY_MS;
+    });
+
     const memoryScoreResult = calculateMemoryScore({
       hasNewSkill,
       isFirstTime: output.is_first_time,
+      brokeThrough,
+      dormantSkillReturned,
       daysSinceLastExperience,
       durationMin: session.durationMin,
       recentSessionDurations: recentSessionRows.map((r) => r.durationMin),
@@ -638,10 +686,15 @@ export async function processSession(sessionId: string, userId: string): Promise
       }
 
       if (memoryScoreResult.score >= MEMORY_SCORE_THRESHOLD) {
-        const trigger =
-          memoryScoreResult.breakdown.hasNewSkill || memoryScoreResult.breakdown.isFirstTime
-            ? 'new_skill'
-            : 'comeback';
+        // 어느 규칙이 이 기억을 만들었는지가 곧 trigger 다. 위에서부터 먼저 맞는 것.
+        const bd = memoryScoreResult.breakdown;
+        const trigger = bd.hasNewSkill || bd.isFirstTime
+          ? 'new_skill'
+          : bd.brokeThrough
+            ? 'breakthrough'
+            : bd.dormantSkillReturned
+              ? 'revival'
+              : 'comeback';
 
         await tx.insert(memories).values({
           userId,

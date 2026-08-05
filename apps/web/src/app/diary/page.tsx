@@ -3,8 +3,7 @@ import { desc, eq } from "drizzle-orm";
 import { dailyLogs } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
-import { PageHeader } from "@/components/page-header";
-import { Dialogue } from "@/components/dialogue";
+import { Head, Shell, Empty } from "@/components/shell";
 
 // log_date 는 문자열 모드 DATE("YYYY-MM-DD") — 접두 10자만 잘라 쓰면
 // TZ 변환 없이 서버·클라이언트가 항상 같은 문자열을 그린다.
@@ -24,55 +23,46 @@ export default async function DiaryPage() {
     .orderBy(desc(dailyLogs.logDate));
 
   return (
-    <div>
-      <PageHeader
-        kicker="DIARY"
+    <Shell>
+      <Head
+        tick="DIARY · 하루치 궤적"
         title="일기"
-        desc={`매일 밤, 하루를 돌아보며 ${user.character.name ?? "캐릭터"}가 남긴 짧은 기록.`}
+        note="매일 밤 배치가 그날의 경험을 한 문단으로 접는다. 한 층씩 쌓인다."
       />
 
       {logs.length === 0 ? (
-        <p className="font-mono text-[12.5px] text-faint">
-          아직 일기가 없어. 오늘 밤 첫 장이 쓰일 거야.
-        </p>
+        <Empty>아직 접힌 하루가 없다. 오늘 밤 첫 층이 쌓인다.</Empty>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col">
           {logs.map((log, i) => (
             <article
               key={log.logDate}
-              className="glass na-rise p-5"
-              style={{ "--na-delay": `${i * 60}ms` } as React.CSSProperties}
+              className="settle field grid grid-cols-[auto_1fr] gap-x-6 py-7"
+              style={{ "--d": `${i * 45}ms` } as React.CSSProperties}
             >
-              <div className="mb-2.5 flex items-center gap-2.5">
-                <time className="font-mono text-[12px] text-faint">
-                  {formatDotDate(log.logDate)}
-                </time>
+              <time className="readout w-24 text-[10.5px] leading-relaxed text-lum-3">
+                {formatDotDate(log.logDate)}
                 {log.emotion && (
-                  <span className="chip chip-warm px-2.5 py-0.5 font-mono text-[11px]">
-                    {log.emotion}
-                  </span>
+                  <>
+                    <br />
+                    <span className="text-lum-4">{log.emotion}</span>
+                  </>
+                )}
+              </time>
+              <div>
+                <p className="utterance text-[15px]">{log.summary}</p>
+                {(log.learned?.length ?? 0) > 0 && (
+                  <div className="readout mt-4 flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] text-lum-3">
+                    {log.learned!.map((item) => (
+                      <span key={item}>+ {item}</span>
+                    ))}
+                  </div>
                 )}
               </div>
-              <Dialogue text={log.summary} size="sm" />
-              {(log.learned?.length ?? 0) > 0 && (
-                <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
-                  <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-faint">
-                    배운 것
-                  </span>
-                  {log.learned!.map((item) => (
-                    <span
-                      key={item}
-                      className="chip chip-cool px-2 py-0.5 font-mono text-[11px]"
-                    >
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              )}
             </article>
           ))}
         </div>
       )}
-    </div>
+    </Shell>
   );
 }

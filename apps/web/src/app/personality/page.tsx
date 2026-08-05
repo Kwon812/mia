@@ -4,9 +4,8 @@ import { personalitySnapshots } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { formatKstYmd } from "@/lib/date";
-import { PageHeader } from "@/components/page-header";
+import { Head, Shell, Empty } from "@/components/shell";
 
-// 성격 축 5개, -100(오른쪽 극) ~ +100(왼쪽 극). personality_snapshots 컬럼과 매칭.
 const PERSONALITY_AXES = [
   { key: "focusScatter", left: "몰입형", right: "산만형" },
   { key: "depthBreadth", left: "집중형", right: "멀티형" },
@@ -26,10 +25,9 @@ async function loadSnapshots(userId: string) {
     .limit(2);
 }
 
-// 값(-100~+100) → 다이버징 트랙 x좌표(viewBox 0 0 200 24).
-// +100 은 왼쪽 극(x=0), -100 은 오른쪽 극(x=200), 0 은 중앙(x=100).
-function axisX(value: number): number {
-  return Math.max(0, Math.min(200, 100 - value));
+/** -100(오른쪽 극) ~ +100(왼쪽 극) → 0~100% */
+function axisPct(value: number): number {
+  return Math.max(0, Math.min(100, (100 - value) / 2));
 }
 
 function signed(value: number): string {
@@ -40,136 +38,73 @@ export default async function PersonalityPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/connect");
 
-  // desc(computedAt) 로 가져왔으므로 [0] = 현재, [1] = 이전.
   const snapshots = await loadSnapshots(user.userId);
   const latest: Snapshot | undefined = snapshots[0];
   const previous: Snapshot | undefined = snapshots[1];
 
   return (
-    <div>
-      <PageHeader
-        kicker="PERSONALITY"
+    <Shell>
+      <Head
+        tick="PERSONALITY · 계 전체"
         title="성격"
-        desc="어떻게 했는가 — 같은 스킬도 접근 방식은 저마다 다르다."
+        note="가장 멀리서 본 모습. 개별 궤도가 아니라 계 전체의 형태다."
       />
 
       {!latest ? (
-        <p className="font-mono text-[12.5px] text-faint">
-          아직 알아가는 중이야. 데이터가 좀 더 쌓이면 성격이 드러날 거야.
-        </p>
+        <Empty>아직 계의 형태가 드러나지 않았다.</Empty>
       ) : (
         <>
-          <div className="glass na-rise flex flex-col px-5 py-2">
+          <div className="flex flex-col">
             {PERSONALITY_AXES.map((axis, i) => {
               const cur = latest[axis.key];
               const prev = previous?.[axis.key];
-              const xCur = axisX(cur);
-              const xPrev = prev !== undefined ? axisX(prev) : null;
-
               return (
                 <div
                   key={axis.key}
-                  className={`py-4 ${i > 0 ? "border-t border-rule" : ""}`}
+                  className="settle field py-6"
+                  style={{ "--d": `${i * 45}ms` } as React.CSSProperties}
                 >
-                  <div className="flex items-center gap-3">
-                    <span className="w-16 shrink-0 text-right text-[12.5px] text-sub">
-                      {axis.left}
-                    </span>
-
-                    <div className="flex-1">
-                      <svg
-                        viewBox="0 0 200 24"
-                        preserveAspectRatio="none"
-                        className="h-6 w-full"
-                        aria-hidden="true"
-                      >
-                        {/* 트랙 */}
-                        <line
-                          x1="0"
-                          y1="12"
-                          x2="200"
-                          y2="12"
-                          stroke="var(--color-rule)"
-                          strokeWidth="2"
-                        />
-                        {/* 중앙(0) 눈금 */}
-                        <line
-                          x1="100"
-                          y1="4"
-                          x2="100"
-                          y2="20"
-                          stroke="var(--color-rule-hard)"
-                          strokeWidth="2"
-                        />
-                        {/* 중앙 → 현재값 바 */}
-                        <line
-                          x1="100"
-                          y1="12"
-                          x2={xCur}
-                          y2="12"
-                          stroke="var(--color-live)"
-                          strokeWidth="4"
-                          strokeLinecap="round"
-                        />
-                        {/* 이전 스냅샷 고스트 마커 — 스냅샷이 2개일 때만 */}
-                        {xPrev !== null && (
-                          <circle
-                            cx={xPrev}
-                            cy="12"
-                            r="3"
-                            fill="var(--color-faint)"
-                            opacity="0.55"
-                          />
-                        )}
-                        {/* 현재값 마커 — 축 위의 광점 */}
-                        <circle
-                          cx={xCur}
-                          cy="12"
-                          r="8"
-                          fill="var(--color-live)"
-                          opacity="0.16"
-                        />
-                        <circle cx={xCur} cy="12" r="4.5" fill="var(--color-live)" />
-                      </svg>
-
-                      <div className="mt-1 text-center font-mono text-[11px] text-faint">
-                        {signed(cur)}
-                      </div>
-                    </div>
-
-                    <span className="w-16 shrink-0 text-[12.5px] text-sub">
-                      {axis.right}
-                    </span>
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <span className="readout text-[11.5px] text-lum-2">{axis.left}</span>
+                    <span className="readout text-[13px] text-lum-0">{signed(cur)}</span>
+                    <span className="readout text-[11.5px] text-lum-2">{axis.right}</span>
+                  </div>
+                  {/* 눈금 위의 지표. 중앙이 0. */}
+                  <div className="relative h-5">
+                    <div
+                      className="absolute top-1/2 h-px w-full"
+                      style={{ background: "var(--color-lum-4)" }}
+                    />
+                    <div
+                      className="absolute top-1/2 h-3 w-px -translate-y-1/2"
+                      style={{ left: "50%", background: "var(--color-lum-3)" }}
+                    />
+                    {prev !== undefined && (
+                      <div
+                        className="absolute top-1/2 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                        style={{ left: `${axisPct(prev)}%`, background: "var(--color-lum-4)" }}
+                      />
+                    )}
+                    <div
+                      className="absolute top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lum-0"
+                      style={{
+                        left: `${axisPct(cur)}%`,
+                        boxShadow: "0 0 12px 3px rgba(230,240,255,.35)",
+                      }}
+                    />
                   </div>
                 </div>
               );
             })}
           </div>
 
-          <div className="mt-6 flex items-center gap-5 font-mono text-[11px] text-faint">
-            <span className="inline-flex items-center gap-1.5">
-              <span
-                className="inline-block h-2 w-2 rounded-full bg-live"
-                aria-hidden="true"
-              />
-              현재 · {formatKstYmd(latest.computedAt)}
-            </span>
-            {previous && (
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="inline-block h-1.5 w-1.5 rounded-full bg-faint opacity-55"
-                  aria-hidden="true"
-                />
-                이전 · {formatKstYmd(previous.computedAt)}
-              </span>
-            )}
+          <div className="readout mt-10 flex flex-wrap gap-x-8 gap-y-2 text-[10px] text-lum-3">
+            <span>현재 {formatKstYmd(latest.computedAt, ".")}</span>
+            {previous && <span>이전 {formatKstYmd(previous.computedAt, ".")}</span>}
+            <span>표본 {latest.sampleSize} 세션 · 2주 이동평균</span>
           </div>
-
-          <p className="mt-8 font-mono text-[11px] text-faint">
-            세션 {latest.sampleSize}개 기준 · 2주 이동평균
-          </p>
         </>
       )}
-    </div>
+    </Shell>
   );
 }

@@ -3,11 +3,18 @@
 //
 //   신규 스킬 등장(user_skills 에 없던 스킬 포함)         +50
 //   is_first_time                                        +40
+//   막힘 → 성공 (직전이 stuck 인데 이번에 success)          +35
 //   직전 experience 와 3일 이상 간격                       +30
+//   30일 이상 안 쓰던 스킬이 다시 등장                      +25
 //   duration_min 이 최근 세션 평균(해당 유저 최근 20개)의
 //     2배 이상                                            +20
 //   최근 experiences 3건과 category+주요 스킬이 모두 같음
 //     (같은 패턴 반복)                                     -30
+//
+// "막힘 → 성공"과 "휴면 스킬 재등장"은 나중에 추가됐다. 원래 규칙 다섯 개로는
+// 신규 스킬과 첫 시도가 겹치는 경우 말고는 임계값을 넘을 길이 사실상 없어서,
+// 하루에 여섯 번을 겪어도 기억이 하나도 안 남는 일이 실제로 있었다.
+// 둘 다 드물게 발동하면서 "기억할 만한 순간"이라는 뜻이 분명한 신호다.
 //
 // score 는 그대로 experiences.memory_score 에 들어간다.
 // breakdown 은 어떤 규칙이 발동했는지 내역이다 — thread 완결과 별개로
@@ -30,6 +37,10 @@ export interface MemoryScoreInput {
   hasNewSkill: boolean;
   /** LLM 이 판정한 is_first_time */
   isFirstTime: boolean;
+  /** 직전 경험이 stuck 이었는데 이번이 success 인가 — 막혔던 걸 뚫었다 */
+  brokeThrough: boolean;
+  /** 30일 이상 안 쓰던 스킬이 이번에 다시 등장했는가 */
+  dormantSkillReturned: boolean;
   /** 직전 experience(occurred_at 기준)와의 간격(일). 직전 경험이 없으면 null */
   daysSinceLastExperience: number | null;
   /** 이번 세션의 duration_min */
@@ -44,12 +55,16 @@ export interface MemoryScoreInput {
   recentExperiences: RecentExperienceSummary[];
 }
 
-/** 어떤 규칙이 발동했는지 내역. score 는 이 값들의 합(-30~+140)이다. */
+/** 어떤 규칙이 발동했는지 내역. score 는 이 값들의 합(-30~+200)이다. */
 export interface MemoryScoreBreakdown {
   /** +50 — 신규 스킬 등장 */
   hasNewSkill: boolean;
   /** +40 — 해당 스킬 첫 시도(is_first_time) */
   isFirstTime: boolean;
+  /** +35 — 막혔던 것을 뚫었다 */
+  brokeThrough: boolean;
+  /** +25 — 오래 묵혀둔 스킬이 돌아왔다 */
+  dormantSkillReturned: boolean;
   /** +30 — 3일 이상 공백 후 복귀 */
   comeback: boolean;
   /** +20 — 세션 길이가 평소(최근 20개 평균)의 2배 이상 */
@@ -88,6 +103,8 @@ export function calculateMemoryScore(input: MemoryScoreInput): MemoryScoreResult
   const breakdown: MemoryScoreBreakdown = {
     hasNewSkill: input.hasNewSkill,
     isFirstTime: input.isFirstTime,
+    brokeThrough: input.brokeThrough,
+    dormantSkillReturned: input.dormantSkillReturned,
     comeback,
     longSession,
     repeatingPattern,
@@ -96,7 +113,9 @@ export function calculateMemoryScore(input: MemoryScoreInput): MemoryScoreResult
   let score = 0;
   if (breakdown.hasNewSkill) score += 50;
   if (breakdown.isFirstTime) score += 40;
+  if (breakdown.brokeThrough) score += 35;
   if (breakdown.comeback) score += 30;
+  if (breakdown.dormantSkillReturned) score += 25;
   if (breakdown.longSession) score += 20;
   if (breakdown.repeatingPattern) score -= 30;
 

@@ -4,9 +4,7 @@ import { memories } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { formatKstYmd, formatKstMonthLabel } from "@/lib/date";
-import { PageHeader } from "@/components/page-header";
-import { Card } from "@/components/card";
-import { Dialogue } from "@/components/dialogue";
+import { Head, Shell, Empty } from "@/components/shell";
 
 type Memory = Awaited<ReturnType<typeof loadMemories>>[number];
 
@@ -18,7 +16,6 @@ async function loadMemories(userId: string) {
     .orderBy(desc(memories.occurredAt));
 }
 
-// 최신 달이 위로 오도록 묶는다 — 몇 년치가 쌓여도 "이번 달"부터 보이는 구조.
 function groupByMonth(items: Memory[]): [string, Memory[]][] {
   const groups = new Map<string, Memory[]>();
   for (const item of items) {
@@ -38,60 +35,45 @@ export default async function MemoriesPage() {
   const grouped = groupByMonth(items);
 
   return (
-    <div>
-      <PageHeader
-        kicker="MEMORIES"
+    <Shell>
+      <Head
+        tick="MEMORIES · 개별 천체"
         title="기억"
-        desc={`${user.character.name ?? "캐릭터"}가 스스로 남긴 회고들. 시간이 쌓일수록 두꺼워지는 기록이다.`}
+        note="궤도에서 밝게 남은 것들. 참조되지 않은 채 오래 지나면 흐려진다."
       />
 
       {items.length === 0 ? (
-        <p className="font-mono text-[12.5px] text-faint">
-          아직 기억이 없어. 뭔가를 겪으면 여기 쌓일 거야.
-        </p>
+        <Empty>아직 궤도에 남은 기억이 없다.</Empty>
       ) : (
-        <div
-          className="space-y-10 pl-7"
-          style={{
-            // 타임라인 축 — 위(최근)에서 아래(과거)로 빛이 식어 사라진다
-            borderLeft: "1px solid transparent",
-            borderImage:
-              "linear-gradient(180deg, rgba(180,103,31,.5), rgba(16,26,43,.16) 45%, transparent) 1",
-          }}
-        >
+        <div className="flex flex-col gap-16">
           {grouped.map(([label, group]) => (
             <section key={label}>
-              <h2 className="mb-5 font-mono text-[12px] uppercase tracking-[0.18em] text-sub">
-                {label}
-              </h2>
-              <div className="space-y-5">
+              <div className="tick mb-5">{label}</div>
+              <div className="flex flex-col">
                 {group.map((m, i) => (
-                  <div key={m.id} className="relative">
-                    <span
-                      className="absolute -left-[33px] top-6 h-2.5 w-2.5 rounded-full bg-live"
-                      style={{ boxShadow: "0 0 0 4px rgba(180,103,31,.14)" }}
-                    />
-                    <Card accent={m.importance >= 8} delay={i * 60}>
-                      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                        <span className="font-mono text-[12px] text-faint">
-                          {formatKstYmd(m.occurredAt, ".")}
-                        </span>
-                        <span className="chip px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-sub">
-                          {m.trigger}
-                        </span>
-                      </div>
-                      <h3 className="mb-2 text-[15.5px] font-semibold text-ink">
-                        {m.title}
-                      </h3>
-                      <Dialogue text={m.body} size="sm" />
-                    </Card>
-                  </div>
+                  <article
+                    key={m.id}
+                    className="settle field grid grid-cols-[auto_1fr] gap-x-6 py-6"
+                    style={{ "--d": `${i * 45}ms` } as React.CSSProperties}
+                  >
+                    <div className="readout w-24 text-[10.5px] leading-relaxed text-lum-3">
+                      {formatKstYmd(m.occurredAt, ".")}
+                      <br />
+                      <span className="text-lum-4">중요도 {m.importance}</span>
+                      <br />
+                      <span className="text-lum-4">{m.trigger}</span>
+                    </div>
+                    <div>
+                      <h2 className="mb-2 text-[15px] font-medium text-lum-0">{m.title}</h2>
+                      <p className="utterance text-[14.5px] text-lum-1">{m.body}</p>
+                    </div>
+                  </article>
                 ))}
               </div>
             </section>
           ))}
         </div>
       )}
-    </div>
+    </Shell>
   );
 }

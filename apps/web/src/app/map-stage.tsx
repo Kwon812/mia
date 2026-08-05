@@ -1,0 +1,151 @@
+"use client";
+
+import {
+  OrbitalMap,
+  TRIGGER_COLOR,
+  TRIGGER_KO,
+  TRIGGER_ORDER,
+  type Body,
+  type MemoryBody,
+} from "@/components/orbital-map";
+
+// 계기판. 지도가 화면 전체를 차지하고, 판독값은 네 모서리에 붙는다.
+// 카드도 패널도 없다 — 값은 여백 위에 그냥 놓여 있고 헤어라인이 구획한다.
+
+function Readout({
+  label,
+  value,
+  unit,
+  className = "",
+  delay = 0,
+}: {
+  label: string;
+  value: string | number;
+  unit?: string;
+  className?: string;
+  delay?: number;
+}) {
+  return (
+    <div className={`settle ${className}`} style={{ "--d": `${delay}ms` } as React.CSSProperties}>
+      <div className="tick mb-1.5">{label}</div>
+      <div className="readout text-[26px] leading-none text-lum-0">
+        {value}
+        {unit && <span className="ml-1 text-[12px] text-lum-2">{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
+export function MapStage({
+  bodies,
+  memories,
+  name,
+  level,
+  daysTogether,
+  emotion,
+  emotionReason,
+  dialogue,
+  counts,
+  todayMinutes,
+  todaySessions,
+}: {
+  bodies: Body[];
+  memories: MemoryBody[];
+  name: string;
+  level: number;
+  daysTogether: number;
+  emotion: string;
+  emotionReason: string;
+  dialogue: string;
+  counts: { experience: number; skill: number; memory: number };
+  todayMinutes: number;
+  todaySessions: number;
+}) {
+  return (
+    <main className="relative h-screen w-full overflow-hidden">
+      {/* 관측 영역 */}
+      <div className="absolute inset-0">
+        <OrbitalMap bodies={bodies} memories={memories} centerLabel={name} />
+      </div>
+
+      {/* 좌상 — 이 계가 무엇인가 */}
+      <div className="pointer-events-none absolute left-16 top-8 sm:left-20">
+        <div className="settle">
+          <div className="tick mb-2">관측 대상</div>
+          <div className="readout text-[15px] tracking-[0.06em] text-lum-0">{name}</div>
+          <div className="readout mt-1.5 text-[12px] text-lum-1">
+            LV {String(level).padStart(2, "0")} · {daysTogether}일째 · {emotion}
+          </div>
+          <div className="mt-3 h-px w-28" style={{ background: "var(--color-lum-4)" }} />
+          <div className="readout mt-3 text-[11.5px] leading-relaxed text-lum-2" title={emotionReason}>
+            {emotionReason}
+          </div>
+        </div>
+      </div>
+
+      {/* 우상 — 궤도에 무엇이 올라 있나 */}
+      <div className="pointer-events-none absolute right-8 top-8 text-right">
+        <div className="settle" style={{ "--d": "80ms" } as React.CSSProperties}>
+          <div className="tick mb-2">궤도상 기억</div>
+          <div className="readout text-[15px] text-lum-0">
+            {memories.length}
+            <span className="ml-1 text-[12px] text-lum-2">/ 경험 {counts.experience}</span>
+          </div>
+
+          {/* 색 범례. 궤도 축에 이름은 적혀 있지만 그건 "그 방향이 무엇인가"이지
+              "이 색이 무엇인가"가 아니다 — 축에서 멀리 떨어진 천체는 색만 남는다.
+              화면에 실제로 올라온 종류만, 그것도 정해진 순서대로 적는다. */}
+          <div className="mt-3 flex flex-col items-end gap-1.5">
+            {TRIGGER_ORDER.filter((tr) => memories.some((m) => m.trigger === tr)).map((tr) => {
+              const col = (TRIGGER_COLOR[tr] ?? TRIGGER_COLOR.comeback).join(",");
+              return (
+                <span key={tr} className="flex items-center gap-2">
+                  <span className="readout text-[11.5px] text-lum-1">{TRIGGER_KO[tr] ?? tr}</span>
+                  <span
+                    className="inline-block h-1.5 w-1.5 rounded-full"
+                    style={{
+                      background: `rgb(${col})`,
+                      boxShadow: `0 0 8px 2px rgba(${col},.55)`,
+                    }}
+                  />
+                </span>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 ml-auto h-px w-28" style={{ background: "var(--color-lum-4)" }} />
+          <div className="readout mt-3 text-[11.5px] leading-relaxed text-lum-2">
+            반경 = 경과일 · 크기 = 중요도
+            <br />
+            색·방향 = 종류 · 이심률 = 어떻게 남았나
+            <br />
+            누르면 근거가 위성으로 · 방향 = 결과, 색 = 카테고리
+          </div>
+        </div>
+      </div>
+
+      {/* 좌하 — 오늘 */}
+      <div className="pointer-events-none absolute bottom-8 left-16 flex gap-10 sm:left-20">
+        <Readout label="오늘 세션" value={todaySessions} delay={160} />
+        <Readout label="관측 시간" value={todayMinutes} unit="분" delay={200} />
+      </div>
+
+      {/* 우하 — 누적 */}
+      <div className="pointer-events-none absolute bottom-8 right-8 flex gap-10 text-right">
+        <Readout label="경험" value={counts.experience} delay={240} />
+        <Readout label="스킬" value={counts.skill} delay={280} />
+        <Readout label="기억" value={counts.memory} delay={320} />
+      </div>
+
+      {/* 하단 중앙 — 이 계에서 유일하게 기계가 아닌 것 */}
+      <div className="pointer-events-none absolute bottom-24 left-1/2 w-full max-w-xl -translate-x-1/2 px-6 text-center">
+        <p
+          className="utterance settle text-[17px]"
+          style={{ "--d": "420ms" } as React.CSSProperties}
+        >
+          {dialogue}
+        </p>
+      </div>
+    </main>
+  );
+}
