@@ -387,6 +387,15 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+/** 브라우저 내부 페이지인가. chrome://new-tab-page 같은 URL 은 hostname 이
+ *  'new-tab-page' 로 잡혀 어엿한 도메인처럼 기록된다 — 새 탭을 한 번 열었을
+ *  뿐인데 unique_domains 가 2 가 되어 단일 도메인 영상 필터가 통째로 우회된다.
+ *  남의 확장 ID(chrome-extension://)도 마찬가지로 도메인 자리에 들어간다. */
+function isInternalUrl(url: string | undefined): boolean {
+  if (!url) return true;
+  return !/^https?:\/\//i.test(url);
+}
+
 function domainOf(url: string | undefined): string {
   if (!url) return '';
   try {
@@ -421,7 +430,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // 서비스 워커에서도 한 번 더 걸러 rawEvents 에 아예 남기지 않는다.
   if (isBlockedDomain(domain)) return;
 
-  void db.rawEvents.add({
+  // sendResponse 를 걸어 쓰기가 끝날 때까지 워커를 붙잡는다(return true).
+  // void 로 던져두면 리스너가 즉시 끝나고, 크롬이 그 사이 워커를 종료하면
+  // 진행 중이던 쓰기가 사라진다 — 그 10초치 활동이 통째로 없어진다.
+  // content.ts 는 응답을 기다리지 않지만, 응답을 "약속"하는 것만으로 수명이
+  // 연장된다. GET_EXTENSION_KEY / GET_SESSION_SNAPSHOT 과 같은 방식이다.
+  void db.rawEvents
+    .add({
     at: Date.now(),
     kind: 'activity',
     domain,
@@ -440,12 +455,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       path: message.path,
       query: message.query,
     },
-  });
+    })
+    .then(
+      () => sendResponse({ ok: true }),
+      (err) => {
+        console.error('[NA] rawEvent 기록 실패', err);
+        sendResponse({ ok: false });
+      },
+    );
+  return true;
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   void chrome.tabs.get(activeInfo.tabId, (tab) => {
-    const domain = domainOf(tab?.url);
+    // 빠른 전환 뒤 탭이 이미 닫혔으면 tab 이 undefined 로 온다. lastError 를
+    // 읽지 않으면 콘솔에 Unchecked runtime.lastError 가 쌓이고, domainOf 가
+    // '' 를 돌려줘 builder 에서 'etc' 도메인으로 둔갑해 기록된다.
+    if (chrome.runtime.lastError || !tab) return;
+    if (isInternalUrl(tab.url)) return; // chrome:// · about: · file:// 은 도메인이 아니다
+    const domain = domainOf(tab.url);
+    if (!domain) return;
     if (isBlockedDomain(domain)) return; // 방어적 필터 — blocked 도메인은 tabs 이벤트도 기록하지 않는다
 
     void db.rawEvents.add({
@@ -453,7 +482,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
       kind: 'tab_activated',
       domain,
       // tabs 권한으로 얻는 tab.title 도 의도 컨텍스트로 함께 저장한다.
-      payload: { tabId: activeInfo.tabId, windowId: activeInfo.windowId, title: tab?.title },
+      payload: { tabId: activeInfo.tabId, windowId: activeInfo.windowId, title: tab.title },
     });
   });
 });
@@ -461,7 +490,9 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
 
+  if (isInternalUrl(tab.url)) return; // chrome:// · about: · file:// 은 도메인이 아니다
   const domain = domainOf(tab.url);
+  if (!domain) return;
   if (isBlockedDomain(domain)) return; // 방어적 필터
 
   void db.rawEvents.add({
