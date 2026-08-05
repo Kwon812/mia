@@ -24,7 +24,7 @@ const sql = postgres(pick('DATABASE_URL'), { prepare: false });
 const client = new Anthropic();
 
 const rows = await sql`
-  select s.id, s.user_id, s.started_at, s.primary_category, s.duration_min, s.domains, s.compressed_log,
+  select s.id, s.user_id, s.started_at, s.primary_category, s.duration_min, s.close_reason, s.activity_score, s.domains, s.compressed_log,
          e.outcome as old_outcome, e.is_first_time as old_first, e.category as old_category,
          e.memory_score as old_score, left(e.summary, 40) as old_summary
   from sessions s join experiences e on e.session_id = s.id
@@ -62,6 +62,7 @@ for (const [i, r] of rows.entries()) {
       role: 'user',
       content: buildUserMessage(
         { primaryCategory: r.primary_category, durationMin: r.duration_min,
+          closeReason: r.close_reason, activityScore: r.activity_score,
           domains: r.domains, compressedLog: r.compressed_log },
         skills.map((s: any) => ({ name: s.name, lastUsedAt: s.last_used_at })),
         recent as any,

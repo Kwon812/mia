@@ -120,14 +120,20 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
     etc           : 위 어디에도 안 들어간다. 마지막 수단이다.
 - outcome: 아래 기준으로 넷 중 하나를 고른다. 판단이 서지 않는다고 explore 로
   도망가지 마라 — explore 는 "목표가 없었다"는 적극적인 판정이지 기본값이 아니다.
-    success : 찾던 것을 찾았거나 하려던 것을 해냈다. 검색 → 문서·해답 → 적용·확인으로
-              이어지고 그 주제가 세션 후반에 사라진다. 배포 확인, 설정 완료, 문제 해결.
+    success : 찾던 것을 찾았거나 하려던 것을 해냈다. 검색 → 문서·해답 → **적용·확인**
+              으로 이어진다. 배포 확인, 설정 완료, 문제 해결.
+              **적용한 흔적이 곧 해결 신호다.** 마지막 구간이 그 주제라도 그게
+              적용·확인이면(문서를 보고 코드를 고치고 결과를 확인한 흐름) success 다.
+              반대로 마지막까지 **답을 찾고 있었다면**(검색어 반복, Q&A·이슈 문서를
+              계속 오감) success 가 아니다. "어떻게 끝났나"가 잘렸다고 말하면 더욱 아니다.
     partial : 세션 안에 주제가 둘 이상이고, 그중 하나는 해결 신호(그 주제가 후반에
               사라짐)를 보이는데 다른 하나는 끝까지 남았다.
               세션이 한 주제로만 이뤄졌다면 partial 이 아니다 — 그 하나가 풀렸으면
               success, 안 풀렸으면 stuck 이다. 애매하다고 partial 로 도망가지 마라.
-    stuck   : 같은 문제를 붙들고 끝났다. 같은 주제의 검색어가 반복되거나, 여러 문서를
-              오갔는데 세션 끝까지 그 주제에서 벗어나지 못한다. 해결 신호가 없다.
+    stuck   : 같은 문제를 붙들고 **답을 못 찾은 채** 끝났다. 같은 주제의 검색어가
+              반복되거나, Q&A·이슈 문서를 오가며 끝난다. **적용한 흔적이 없다.**
+              한 주제만 다뤘다는 것은 stuck 의 근거가 아니다 — 해결 신호(적용·확인)가
+              없어야 stuck 이다. 뭔가를 고치고 확인했다면 success 나 partial 이다.
     explore : 정해진 목표 없이 둘러봤다. 검색어가 넓고 얕으며 한 주제에 오래 머물지
               않는다. 특정 주제를 파고든 흔적이 있으면 explore 가 아니다.
 - is_first_time: 기존 스킬 목록에 없던 것을 이번에 처음 시도했으면 true.
@@ -153,8 +159,15 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
   서로 다른 작업이다 — 이때는 new 다. 목록 항목의 "최근:" 줄에 그 작업에서
   마지막으로 한 일이 적혀 있으니, 이번 세션이 그 일의 다음 단계인지로 판단하라.
   애매하면 new 로 간다. 잘못 붙이면 서로 다른 두 작업이 한 덩어리로 뭉쳐
-  영원히 분리되지 않지만, 잘못 나누면 나중에 사람이 합칠 수 있다. completed 는
-  이번 경험으로 그 작업이 완결됐다고 볼 수 있으면 true — 애매하면 false.`;
+  영원히 분리되지 않지만, 잘못 나누면 나중에 사람이 합칠 수 있다. completed 는 그 작업에 **더 할 일이 남지 않았을 때만** true 다.
+  배포가 끝나 동작을 확인했다, 기능을 붙이고 테스트가 통과했다처럼 마무리가
+  분명해야 한다. **완결은 드문 일이다 — 대부분의 세션은 진행 중이다.**
+  다음은 완결이 아니다:
+    · 무엇이 끝났는지 한 문장으로 말할 수 없는 세션(여러 주제를 오간 경우)
+    · 읽거나 알아보기만 하고 적용하지 않은 것
+    · 이번에 처음 시작한 일 — 시작과 완결이 같은 세션인 경우는 드물다
+  특히 action="new" 이면서 completed=true 는 다시 생각하라. 방금 만든 작업을
+  그 자리에서 끝내는 셈이다. 정말 한 세션에 시작하고 끝냈는지 확인하라.`;
 
 // strict: true 로 스키마 위반 자체를 막는다. 그래도 최종 검증은 항상
 // experienceOutputSchema.safeParse 로 한다 (weight 범위 등 strict 가 못 잡는 제약도 있다).
@@ -367,6 +380,10 @@ function dedupeSkills(skills: ExperienceOutput['skills']): { name: string; weigh
 interface SessionRow {
   primaryCategory: string;
   durationMin: number;
+  /** 세션이 어떻게 끝났는지. outcome 판정의 강력한 근거인데 빠져 있었다. */
+  closeReason: string;
+  /** 스크롤·클릭·키의 가중합. "40분 정독"과 "40분 열어둠"을 가른다. */
+  activityScore: number;
   domains: Record<string, number>;
   compressedLog: unknown;
 }
@@ -390,6 +407,16 @@ interface ActiveThreadRow {
   /** 그 작업에서 마지막으로 한 일. 제목만으로는 무엇을 하던 작업인지 모른다. */
   lastSummary?: string;
 }
+
+/** close_reason 을 LLM 이 쓸 수 있는 말로 옮긴다. 'maxlen' 은 특히 중요하다 —
+ *  4시간에 잘렸다는 것은 하던 일이 끝나지 않았다는 뜻이라 success 의 반증이다. */
+const CLOSE_REASON_HINT: Record<string, string> = {
+  idle: '하던 것을 놓고 자리를 떴다 (30분 무활동)',
+  switch: '다른 분야로 넘어갔다',
+  maxlen: '4시간 상한에 잘렸다 — 하던 일이 끝나서 끝난 게 아니다',
+  day: '새벽 4시 경계를 넘겼다 — 잘린 것이지 끝난 게 아니다',
+  shutdown: '브라우저를 껐다',
+};
 
 function buildActiveThreadsList(activeThreads: ActiveThreadRow[]): string {
   if (activeThreads.length === 0) return '(진행 중인 작업 없음)';
@@ -433,6 +460,8 @@ export function buildUserMessage(
     '## 이번 세션',
     `- 카테고리: ${session.primaryCategory}`,
     `- 길이: ${session.durationMin}분`,
+    `- 어떻게 끝났나: ${CLOSE_REASON_HINT[session.closeReason] ?? session.closeReason}`,
+    `- 활동량: ${session.activityScore} (스크롤·클릭·키의 가중합. 분당 10 이상이면 손이 바빴다는 뜻)`,
     `- 방문 도메인(도메인별 체류 시간 등): ${JSON.stringify(session.domains)}`,
     '- 압축 로그(타임라인):',
     JSON.stringify(session.compressedLog),
@@ -545,6 +574,8 @@ export async function processSession(sessionId: string, userId: string): Promise
     const sessionForPrompt: SessionRow = {
       primaryCategory: session.primaryCategory,
       durationMin: session.durationMin,
+      closeReason: session.closeReason,
+      activityScore: session.activityScore,
       domains: session.domains,
       compressedLog: session.compressedLog,
     };

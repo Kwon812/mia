@@ -59,7 +59,9 @@ for (const r of rows) {
     where user_id=${r.user_id} and status='active' and id::text not like '5eed%'
     order by last_activity_at desc limit 5`;
   const content = buildUserMessage(
-    { primaryCategory: r.primary_category, durationMin: r.duration_min, domains: r.domains, compressedLog: r.compressed_log },
+    { primaryCategory: r.primary_category, durationMin: r.duration_min,
+      closeReason: r.close_reason, activityScore: r.activity_score,
+      domains: r.domains, compressedLog: r.compressed_log },
     skills.map((s: any) => ({ name: s.name, lastUsedAt: s.last_used_at })),
     recent as any,
     threads.map((t: any) => ({ id: t.id, title: t.title, category: t.category, experienceCount: t.experience_count })),
