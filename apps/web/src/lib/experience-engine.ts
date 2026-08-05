@@ -47,6 +47,9 @@ export const MODEL = 'claude-haiku-4-5';
 
 export const TOOL_NAME = 'record_experience';
 
+/** 프롬프트에 넣는 보유 스킬 목록의 최대 개수. 판정용 집합과는 다르다. */
+const PROMPT_SKILL_LIMIT = 50;
+
 // 프롬프트에 넣는 날짜는 KST 달력일로 — UTC slice 를 쓰면 KST 새벽 사용이
 // 하루 이르게 표기되어 LLM 이 "어제 썼다"를 "그저께 썼다"로 오해한다.
 function kstYmd(date: Date): string {
@@ -245,6 +248,11 @@ export const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
 // 신규 스킬 하나만으로는 여전히 부족하지만(50), 거기에 뭐라도 하나 겹치면 남는다.
 const MEMORY_SCORE_THRESHOLD = 60;
 
+/** 경험 하나에 붙일 수 있는 스킬 수. 넘치면 비중 높은 것부터 남긴다. */
+const MAX_SKILLS_PER_EXPERIENCE = 10;
+/** 요약 표시 상한. 넘치면 자른다 — 길다고 경험을 버리지 않는다. */
+const MAX_SUMMARY_LEN = 100;
+
 // 이 기간 이상 안 쓴 스킬이 다시 나오면 "휴면 스킬 재등장"으로 본다.
 // lib/emotion.ts 의 '그리움' 판정과 같은 값을 쓴다 — 같은 현상을 감정과 기억이
 // 각각 다르게 부르면 사용자가 둘을 연결하지 못한다.
@@ -403,13 +411,20 @@ export async function processSession(sessionId: string, userId: string): Promise
     if (!session || session.processedAt) return;
 
     // 2. 컨텍스트 로드
+    // 전부 가져온다. 예전에는 limit(50) 이었는데, 이 집합이 프롬프트용 목록일
+    // 뿐 아니라 hasNewSkill 과 dormantSkillReturned 판정의 유일한 근거였다.
+    // 그래서 51번째로 오래된 스킬을 다시 쓰면 "처음 해봤다"(new_skill, +50)로
+    // 기록됐다 — 하필 정확히 휴면 상태인 스킬만 골라서 오판하므로 revival
+    // 트리거는 스킬이 50개를 넘은 시점부터 사실상 영구히 발동 불가였다.
+    // 스킬 수는 사용자당 수십~수백이라 전량 조회가 비싸지 않다.
     const existingSkillRows = await db
       .select({ name: userSkills.skillName, lastUsedAt: userSkills.lastUsedAt })
       .from(userSkills)
       .where(eq(userSkills.userId, userId))
-      .orderBy(desc(userSkills.lastUsedAt))
-      .limit(50);
+      .orderBy(desc(userSkills.lastUsedAt));
     const existingSkillNames = new Set(existingSkillRows.map((s) => s.name));
+    // 프롬프트에는 최근 것만 넣는다(토큰). 판정은 위 전체 집합으로 한다.
+    const skillRowsForPrompt = existingSkillRows.slice(0, PROMPT_SKILL_LIMIT);
 
     const recentExperienceRows = await db
       .select({
@@ -499,7 +514,7 @@ export async function processSession(sessionId: string, userId: string): Promise
       messages: [
         {
           role: 'user',
-          content: buildUserMessage(sessionForPrompt, existingSkillRows, recentExperienceRows, activeThreadRows),
+          content: buildUserMessage(sessionForPrompt, skillRowsForPrompt, recentExperienceRows, activeThreadRows),
         },
       ],
     });
@@ -531,7 +546,11 @@ export async function processSession(sessionId: string, userId: string): Promise
     }
 
     const output = parsed.data;
-    const dedupedSkills = dedupeSkills(output.skills);
+    // 스키마 상한을 넉넉히 푼 만큼 여기서 자른다. 개수가 많다고 경험 전체를
+    // 버리는 것보다, 합치고 상위만 남기는 편이 손실이 적다.
+    const dedupedSkills = dedupeSkills(output.skills)
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, MAX_SKILLS_PER_EXPERIENCE);
     const hasNewSkill = dedupedSkills.some((s) => !existingSkillNames.has(s.name));
     const primarySkillName = dedupedSkills.length > 0 ? [...dedupedSkills].sort((a, b) => b.weight - a.weight)[0].name : null;
 
@@ -547,8 +566,8 @@ export async function processSession(sessionId: string, userId: string): Promise
     const threadId = threadAction === 'new' ? randomUUID() : attachTargetId!;
     const threadTitle =
       threadAction === 'new'
-        ? output.thread.title?.trim() || output.summary.slice(0, 100)
-        : (activeThreadsById.get(threadId)?.title ?? output.summary.slice(0, 100));
+        ? output.thread.title?.trim() || output.summary.slice(0, MAX_SUMMARY_LEN)
+        : (activeThreadsById.get(threadId)?.title ?? output.summary.slice(0, MAX_SUMMARY_LEN));
 
     // 6. Memory Engine 점수 (순수 함수, LLM 재호출 없음)
     const daysSinceLastExperience =
@@ -616,7 +635,7 @@ export async function processSession(sessionId: string, userId: string): Promise
           sessionId,
           threadId, // insert 시점에 부착 — 이렇게 하면 "유일한 UPDATE 대상"이던 thread_id 에 대한 UPDATE 자체가 없어진다.
           occurredAt: session.startedAt,
-          summary: output.summary,
+          summary: output.summary.slice(0, MAX_SUMMARY_LEN),
           detail: output.detail ?? null,
           category: output.category,
           outcome: output.outcome,

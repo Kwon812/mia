@@ -43,6 +43,7 @@ export type EmotionSkillInput = {
 const STUCK_STREAK = 3;
 const COMEBACK_GAP_DAYS = 3;
 const SKILL_LONELY_GAP_DAYS = 30;
+const EXCITEMENT_WINDOW_HOURS = 48;
 const DECAY_HOURS = 48;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -64,7 +65,17 @@ export function deriveEmotion(
   }
 
   // 1. 흥분 — 최근 경험 중 처음 해보는 것이 있었다
-  if (recentExperiences.some((e) => e.isFirstTime)) {
+  //
+  // 시간 창이 필요하다. 표본(최근 5건) 전체를 훑으면, 경험이 드문 사용자는
+  // 몇 달 전의 첫 시도 하나로 감정이 영구히 '흥분'에 고정된다 — 3일 만에
+  // 돌아온 오늘도 '반가움'이 아니라 '흥분'이다. is_first_time 을 관대하게
+  // 판정하도록 프롬프트를 바꿨기 때문에 더 잘 걸린다.
+  const excitementCutoff = now.getTime() - EXCITEMENT_WINDOW_HOURS * HOUR_MS;
+  if (
+    recentExperiences.some(
+      (e) => e.isFirstTime && e.occurredAt.getTime() >= excitementCutoff,
+    )
+  ) {
     return { label: '흥분', reason: '최근 경험 중 처음 해보는 것이 있었다' };
   }
 

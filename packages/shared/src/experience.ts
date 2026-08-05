@@ -52,22 +52,29 @@ const experienceDialogueSchema = z.object({
 //   action='new'    → title 필수("Redis 캐싱 도입" 같은 작업명).
 export const experienceThreadSchema = z.object({
   action: z.enum(['attach', 'new']),
-  existing_thread_id: z.uuid().nullable(),
+  // 형태만 본다. z.uuid() 로 조이면 LLM 이 "thread-1" 같은 걸 냈을 때 스키마
+  // 단계에서 실패해 경험 전체가 폐기된다 — 바로 위 주석이 약속한 "new 로 강등"
+  // 경로에 도달조차 못 한다. 실제 존재 여부는 엔진이 목록과 대조한다.
+  existing_thread_id: z.string().max(64).nullable(),
   title: z.string().min(1).nullable(),
   completed: z.boolean(),
 });
 
 export const experienceOutputSchema = z.object({
-  summary: z.string().min(1).max(100),
+  // 상한은 넉넉히 두고 초과분은 엔진이 자른다. 101자라고 경험 전체를 버리는
+  // 것은 손실이 너무 크다 — 이 파일이 dialogues 에서 이미 그렇게 판단했다.
+  summary: z.string().min(1).max(600),
   detail: z.string().optional(),
   category: z.enum(EXPERIENCE_CATEGORIES),
   outcome: z.enum(EXPERIENCE_OUTCOMES),
   is_first_time: z.boolean(),
-  skills: z.array(experienceSkillSchema).max(10),
+  // 툴 스키마에 maxItems 가 없어 strict:true 도 개수를 못 막는다. 넘치면
+  // 엔진의 dedupeSkills 가 합치고 앞에서부터 자른다.
+  skills: z.array(experienceSkillSchema).max(40),
   // 프롬프트는 4개(슬롯당 1개)를 요구하지만 검증은 1개부터 받는다 — 대사는
   // 캐시일 뿐이라, 개수 미달로 경험 전체를 버리는 것(llm_output_invalid)이
   // 더 큰 손실이다. 부족한 슬롯은 이전 대사가 남아있으면 그걸로 버틴다.
-  dialogues: z.array(experienceDialogueSchema).min(1).max(4),
+  dialogues: z.array(experienceDialogueSchema).min(1).max(16),
   thread: experienceThreadSchema,
 });
 

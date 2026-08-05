@@ -12,8 +12,31 @@ import { users } from '@na/db';
 import { db } from '@/lib/db';
 import { NA_KEY_COOKIE, NA_KEY_MAX_AGE_SECONDS } from '@/lib/current-user';
 
+/** 이 요청이 우리 사이트에서 온 것인가.
+ *
+ *  이 라우트는 쿠키를 심는다 = 로그인이다. Origin 검사가 없으면 로그인 CSRF 가
+ *  성립한다: 공격자가 text/plain 폼(프리플라이트 없음)으로 자기 키를 심는
+ *  POST 를 피해자 브라우저에서 쏘면, SameSite=Lax 는 최상위 POST 응답의
+ *  Set-Cookie 를 막지 않으므로 피해자 브라우저가 공격자 계정으로 묶인다.
+ *  이후 피해자가 남기는 이름·활동이 공격자 계정에 쌓이고 공격자가 그걸 읽는다. */
+function isSameOrigin(req: Request): boolean {
+  const origin = req.headers.get('origin');
+  // 확장(chrome-extension://) 과 서버 간 호출에는 Origin 이 없을 수 있다.
+  // 없는 경우는 브라우저가 만든 크로스사이트 폼 전송이 아니므로 통과시킨다.
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === new URL(req.url).host;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: Request) {
   try {
+    if (!isSameOrigin(req)) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+    }
+
     let body: unknown;
     try {
       body = await req.json();
@@ -50,7 +73,10 @@ export async function POST(req: Request) {
     });
     return res;
   } catch (err) {
-    console.error('[POST /api/connect] failed', err);
+    // err 를 통째로 찍으면 안 된다. drizzle 의 DrizzleQueryError 는 메시지에
+    // "Failed query: ... params: [...]" 를 넣는데, 여기 params 에는 extension_key
+    // 가 들어 있다 — 그 키가 곧 인증 자격증명 전체다(비밀번호 없음).
+    console.error('[POST /api/connect] failed', err instanceof Error ? err.name : 'unknown');
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }
