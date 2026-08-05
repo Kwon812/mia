@@ -11,11 +11,11 @@ import { characters, dialogues, experiences, sessions } from '@na/db';
 import type { StateResponse } from '@na/shared';
 import { db } from '@/lib/db';
 import { getUserByExtensionKey } from '@/lib/api-auth';
-import { getKstDayBoundary } from '@/lib/date';
+import { getKstDayBoundary, kstDaysTogether } from '@/lib/date';
 
-// "오늘" 경계는 lib/date.ts 의 getKstDayBoundary 를 단일 소스로 쓴다
-// (KST 새벽 4시 — 계획서 04장 day 규칙. 중복 구현 금지).
-const DAY_MS = 24 * 60 * 60 * 1000; // days_together 계산용 (24시간 단위)
+// "오늘" 경계도 days_together 도 lib/date.ts(→ @na/shared)를 단일 소스로 쓴다.
+// 예전에는 여기서만 (now - createdAt) / 24h 로 따로 셌고, 그래서 확장 새 탭과
+// 사이트가 같은 사용자에게 다른 숫자를 보여줬다.
 
 
 export async function GET(req: Request) {
@@ -43,7 +43,7 @@ export async function GET(req: Request) {
     ]);
 
     const character = characterRow[0];
-    const daysTogether = Math.floor((Date.now() - user.createdAt.getTime()) / DAY_MS);
+    const daysTogether = kstDaysTogether(user.createdAt);
 
     const body: StateResponse = {
       character: {

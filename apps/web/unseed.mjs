@@ -51,6 +51,10 @@ await sql.begin(async (tx) => {
       experience_count = (select count(*) from experiences where user_id = c.user_id),
       memory_count = (select count(*) from memories where user_id = c.user_id and forgotten_at is null),
       skill_count = (select count(*) from user_skills where user_id = c.user_id),
+      -- active_days = 경험이 있는 고유 KST(새벽4시 경계) 날짜 수. 배치와 같은 정의.
+      active_days = (select count(distinct
+          ((occurred_at at time zone 'Asia/Seoul') - interval '4 hour')::date)
+        from experiences where user_id = c.user_id),
       oldest_memory_at = (select min(occurred_at) from memories where user_id = c.user_id),
       last_computed_at = now()`;
 });

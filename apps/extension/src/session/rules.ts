@@ -14,6 +14,9 @@ const SWITCH_GRACE_MS = 10 * 60 * 1000; // 맥락 전환 10분 유예
 const SCATTERED_WINDOW_MS = 60 * 60 * 1000; // scattered 판정 기준 60분
 const SCATTERED_MIN_SWITCHES = 3; // scattered 판정 기준 전환 3회
 const DAY_BOUNDARY_HOUR = 4; // 새벽 4시 경계
+// 하루 경계는 KST 고정. 서버(daily_logs.log_date·일기 배치·웹의 "오늘")가 전부
+// KST 고정이라 확장만 로컬 시각을 쓰면 두 정의가 갈린다. KST 는 서머타임이 없다.
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 // activityScore 가중치. 계획서 11장 "Activity Score 가중치 — 실데이터로 튜닝"
 // 대상이라 상수로 분리해둔다. 지금 값은 임의의 초기값이다.
@@ -147,11 +150,19 @@ export function contextSwitched(draft: SessionDraft, now: number): boolean {
   return true;
 }
 
-/** 새벽 4시를 기준으로 한 "논리적 날짜" 버킷. DST 등 엣지 케이스는 무시한다. */
+/** 새벽 4시를 기준으로 한 "논리적 날짜" 버킷.
+ *
+ *  KST 고정 오프셋으로 센다. 브라우저 로컬 시각(setHours)으로 세면 안 된다 —
+ *  서버(daily_logs.log_date, 일기 배치, 웹의 "오늘")는 전부 KST 고정이라,
+ *  사용자가 KST 가 아닌 머신을 쓰면 세션이 잘리는 지점과 일기가 담는 구간이
+ *  최대 하루 가까이 어긋난다. 한 "날"의 세션이 두 log_date 로 흩어지거나
+ *  어느 일기에도 안 들어간다.
+ *  KST 는 서머타임이 없어 고정 오프셋으로 충분하다. */
 function dayBucket(epochMs: number): string {
-  const d = new Date(epochMs);
-  d.setHours(d.getHours() - DAY_BOUNDARY_HOUR);
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const kstShifted = new Date(
+    epochMs + KST_OFFSET_MS - DAY_BOUNDARY_HOUR * 60 * 60 * 1000,
+  );
+  return kstShifted.toISOString().slice(0, 10);
 }
 
 /** day 조건 — 세션 시작 시각과 now 가 새벽 4시 경계를 넘어 다른 "날"이면 true. */

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { formatKstYmd } from "@/lib/date";
+
 // 궤도 지도 — 이 사이트의 본체.
 //
 // 규칙 하나: 기억은 크고 밝다. 경험은 작고 흐리다.
@@ -306,6 +308,7 @@ export function OrbitalMap({
     let cx = 0;
     let cy = 0;
     let unit = 1;
+    let dpr = 1;
     let raf = 0;
     let mouse: { x: number; y: number } | null = null;
     let hovered: string | null = null;
@@ -331,7 +334,7 @@ export function OrbitalMap({
     const hit = new Map<string, { x: number; y: number; r: number; kind: string }>();
 
     function resize() {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = wrap!.clientWidth;
       h = wrap!.clientHeight;
       canvas!.width = Math.round(w * dpr);
@@ -454,6 +457,11 @@ export function OrbitalMap({
       try {
         step(now);
       } catch (err) {
+        // save/restore 사이에서 예외가 나면 변환 스택이 복구되지 않는다. 그대로
+        // 두면 다음 프레임이 또 save+translate 를 쌓아 clearRect(0,0,w,h) 가
+        // 캔버스를 못 덮고 화면이 번진다. 기본 변환으로 되돌려 놓는다.
+        ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx!.globalAlpha = 1;
         if (!crashed) {
           crashed = true;
           console.error("[orbital-map] 프레임 오류", err);
@@ -589,7 +597,10 @@ export function OrbitalMap({
           acc.n += 1;
           mAxis.set(el.mem.trigger, acc);
         }
-        const AX = Math.min(w / 2, h / 2) * 1.02;
+        // 라벨 폭까지 감안해 화면 안에 가둔다. min(w,h)*1.02 로 잡으면 세로가
+        // 긴 뷰포트(태블릿 세로)에서 가로축 라벨이 캔버스 밖으로 나가고,
+        // 그러면 hit 좌표도 화면 밖이라 그 축은 아예 겨눌 수 없다.
+        const AX = Math.min(Math.min(w / 2, h / 2) * 1.02, w / 2 - 96);
         ctx!.font = '11.5px ui-monospace, SFMono-Regular, Menlo, monospace';
         ctx!.textBaseline = "middle";
         for (const [tr, acc] of mAxis) {
@@ -760,7 +771,8 @@ export function OrbitalMap({
           const ang = acc.sum / acc.n;
           const dx = Math.cos(ang);
           const dy = Math.sin(ang) * FLATTEN;
-          const len = R * 1.62;
+          // 위와 같은 이유로 가로 폭에 가둔다.
+          const len = Math.min(R * 1.62, w / 2 - 92);
           const on = litOutcome === oc;
 
           ctx!.strokeStyle = on
@@ -908,8 +920,12 @@ export function OrbitalMap({
             sub: "이 방향의 궤도들",
           });
         } else if (p.kind === "mem" || p.kind === "focus") {
-          const m = memories.find((x) => x.id === found)!;
-          setProbe({
+          const m = memories.find((x) => x.id === found);
+          // 데이터가 갱신되며 이 기억이 빠졌을 수 있다(야간 배치의 망각 마킹 등).
+          // 단언으로 두면 undefined.title 에서 프레임이 죽고, try/catch 가 삼켜
+          // 그 프레임의 조준점까지 통째로 안 그려진다 — 커서가 사라진다.
+          if (!m) setProbe(null);
+          else setProbe({
             x: p.x,
             y: p.y,
             text: m.title,
@@ -921,7 +937,7 @@ export function OrbitalMap({
             x: p.x,
             y: p.y,
             text: b.summary,
-            sub: `${tag(b.category)} · ${new Date(b.occurredAt).toISOString().slice(0, 10).replace(/-/g, ".")} · ${tag(b.outcome)} · M${b.memoryScore}`,
+            sub: `${tag(b.category)} · ${formatKstYmd(new Date(b.occurredAt), ".")} · ${tag(b.outcome)} · M${b.memoryScore}`,
           });
         }
       } else if (found && probeRef.current) {
@@ -1045,7 +1061,16 @@ export function OrbitalMap({
 
   return (
     <div ref={wrapRef} className="relative h-full w-full">
-      <canvas ref={canvasRef} className="map-canvas" />
+      {/* 키보드로도 닿아야 한다. 마우스 없이는 기억을 하나도 고를 수 없었다.
+          Tab 으로 지도에 들어오면 Enter/Space 로 가장 밝은 기억부터 펼치고
+          Escape 로 나간다 — 캔버스라 스크린리더에는 요약을 대신 읽힌다. */}
+      <canvas
+        ref={canvasRef}
+        className="map-canvas"
+        tabIndex={0}
+        role="img"
+        aria-label={`궤도 지도 — 기억 ${memories.length}개, 경험 ${bodies.length}개. Enter 로 가장 중요한 기억을 펼치고 Escape 로 돌아온다.`}
+      />
 
       {/* 중심 라벨 */}
       <div
@@ -1121,7 +1146,7 @@ export function OrbitalMap({
         <div className="pointer-events-none absolute bottom-44 left-1/2 w-full max-w-lg -translate-x-1/2 px-6 text-center">
           <div className="settle">
             <div className="tick mb-2">
-              경험 · {new Date(picked.occurredAt).toISOString().slice(0, 10).replace(/-/g, ".")} ·{" "}
+              경험 · {formatKstYmd(new Date(picked.occurredAt), ".")} ·{" "}
               {tag(picked.outcome)} · M{picked.memoryScore}
             </div>
             <p className="font-sans text-[14px] leading-relaxed text-lum-0">{picked.summary}</p>

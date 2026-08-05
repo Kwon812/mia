@@ -180,7 +180,14 @@ body {
 /* 천체에 커서를 얹었을 때 뜨는 판독값 */
 .probe {
   position: absolute;
-  z-index: 20;
+  /* top/left 가 없으면 정적 위치 — 바로 앞 형제인 캔버스(height:100%) 다음,
+     즉 뷰포트 높이만큼 아래가 기준이 된다. 거기에 translate 를 얹으니
+     판독값이 항상 화면 밖(100vh + y)에 그려져 한 번도 보이지 않았다. */
+  top: 0;
+  left: 0;
+  /* 축척 레일(z-index:30)보다 위. 화면 왼쪽 가장자리 천체의 판독값이
+     레일에 가려지면 안 된다. */
+  z-index: 40;
   pointer-events: none;
   max-width: 22rem;
   padding: 10px 13px;

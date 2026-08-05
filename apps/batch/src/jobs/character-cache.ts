@@ -10,7 +10,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { calculateLevel } from '@na/shared';
 import { characters, experiences, memories, userSkills, users, type Db } from '@na/db';
-import { kstDayKey } from '../kst';
+import { kstDayKey, kstDaysTogether } from '../kst';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -53,7 +53,10 @@ export async function refreshCharacterCache(db: Db): Promise<void> {
     // 기대하는 Date 로 명시적으로 감싼다.
     const oldestMemoryAt = memoryAgg?.oldest ? new Date(memoryAgg.oldest) : null;
 
-    const daysSinceCreated = Math.floor((now.getTime() - user.createdAt.getTime()) / DAY_MS);
+    // 흐른 시간을 24 로 나누면 안 된다. 밤 11시에 가입한 사람은 다음날 밤
+    // 10시가 되어도 0 일이라 레벨 상한이 1 에 묶인다 — 표시가 아니라 실제
+    // 레벨을 깎는다. 넘어온 날 경계의 수를 센다(첫날 = 0일차).
+    const daysSinceCreated = kstDaysTogether(user.createdAt, now) - 1;
     const level = calculateLevel({ experienceCount, skillCount, daysSinceCreated });
 
     await db
