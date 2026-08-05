@@ -8,6 +8,29 @@
 
 import { z } from 'zod';
 
+/** 경험 카테고리. 확장의 도메인 사전(apps/extension/src/session/categories.ts)이
+ *  정본이고 여기는 그 사본이다 — 확장은 @na/db 를 의존하지 않는다(drizzle 이
+ *  번들에 딸려온다). 한쪽을 고치면 반드시 다른 쪽도 고친다.
+ *  세션의 primary_category 와 같은 어휘를 써야 LLM 이 "도메인 사전이 찍은 값"과
+ *  "내용으로 다시 판정한 값"을 같은 축에서 비교할 수 있다. */
+export const EXPERIENCE_CATEGORIES = [
+  'dev',
+  'study',
+  'docs',
+  'ai',
+  'search',
+  'community',
+  'entertainment',
+  'music',
+  'shopping',
+  'productivity',
+  'news',
+  'finance',
+  'etc',
+] as const;
+export type ExperienceCategory = (typeof EXPERIENCE_CATEGORIES)[number];
+
+
 export const EXPERIENCE_OUTCOMES = ['success', 'partial', 'stuck', 'explore'] as const;
 export const DIALOGUE_SLOTS = ['morning', 'afternoon', 'evening', 'night'] as const;
 
@@ -37,7 +60,7 @@ export const experienceThreadSchema = z.object({
 export const experienceOutputSchema = z.object({
   summary: z.string().min(1).max(100),
   detail: z.string().optional(),
-  category: z.string(),
+  category: z.enum(EXPERIENCE_CATEGORIES),
   outcome: z.enum(EXPERIENCE_OUTCOMES),
   is_first_time: z.boolean(),
   skills: z.array(experienceSkillSchema).max(10),

@@ -29,7 +29,12 @@ import {
   userSkills,
   users,
 } from '@na/db';
-import { calculateLevel, experienceOutputSchema, type ExperienceOutput } from '@na/shared';
+import {
+  EXPERIENCE_CATEGORIES,
+  calculateLevel,
+  experienceOutputSchema,
+  type ExperienceOutput,
+} from '@na/shared';
 import { db } from './db';
 import { calculateMemoryScore, type RecentExperienceSummary } from './memory-score';
 
@@ -38,9 +43,9 @@ import { calculateMemoryScore, type RecentExperienceSummary } from './memory-sco
 // ------------------------------------------------------------
 
 // 저비용 모델. 세션 하나당 1회만 호출되므로 Haiku 로 충분하다 (claude-api 스킬 캐시 기준 모델 ID).
-const MODEL = 'claude-haiku-4-5';
+export const MODEL = 'claude-haiku-4-5';
 
-const TOOL_NAME = 'record_experience';
+export const TOOL_NAME = 'record_experience';
 
 // 프롬프트에 넣는 날짜는 KST 달력일로 — UTC slice 를 쓰면 KST 새벽 사용이
 // 하루 이르게 표기되어 LLM 이 "어제 썼다"를 "그저께 썼다"로 오해한다.
@@ -60,7 +65,7 @@ function kstYmd(date: Date): string {
 // 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
 // (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
 // 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
-const SYSTEM_PROMPT_V3 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
+export const SYSTEM_PROMPT_V3 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
@@ -87,13 +92,32 @@ true 다. 기준은 하나다: 보유 스킬 목록에 없던 것을 이번에 �
 record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
 - summary: 이 세션을 한 문장으로, "~했다"체로 요약한다.
 - detail: 2~3문장으로 조금 더 자세히 설명한다 (선택).
-- category: 이 경험의 카테고리.
+- category: 아래 열셋 중 하나를 고른다. "이번 세션" 에 적힌 카테고리는 방문 도메인을
+  사전에서 조회한 결과일 뿐 판정이 아니다 — 참고만 하고, 실제로 무엇을 했는지로
+  다시 고른다. 도메인이 아니라 행위를 보라. 같은 github.com 이라도 코드를 고쳤으면
+  dev 이고 남의 코드를 읽으며 배우기만 했으면 study 다.
+    dev           : 코드를 쓰거나 고치거나 돌렸다. 배포·설정·디버깅 포함.
+    study         : 배우려고 읽었다. 강의·튜토리얼·개념 학습. 만들지는 않았다.
+    docs          : 레퍼런스를 찾아봤다. API 문서, 매뉴얼, 스펙 확인.
+    ai            : AI 도구 자체를 쓰거나 다뤘다. 대화, 프롬프트, 모델 설정.
+    community     : 사람들의 글을 읽거나 썼다. 포럼, 커뮤니티, SNS, 이슈 스레드.
+    entertainment : 재미로 봤다. 영상, 웹툰, 게임.
+    music         : 음악을 들었다.
+    news          : 뉴스·시사를 읽었다.
+    shopping      : 물건을 보거나 샀다.
+    finance       : 금융·투자를 봤다.
+    productivity  : 문서·일정·할 일을 정리했다. 노션, 캘린더, 메일 정리.
+    search        : 검색만 하고 어디에도 도달하지 못했다. 무엇을 했는지 말할 수
+                    없을 때만 쓴다 — 검색은 대개 수단이지 분야가 아니다.
+    etc           : 위 어디에도 안 들어간다. 마지막 수단이다.
 - outcome: 아래 기준으로 넷 중 하나를 고른다. 판단이 서지 않는다고 explore 로
   도망가지 마라 — explore 는 "목표가 없었다"는 적극적인 판정이지 기본값이 아니다.
     success : 찾던 것을 찾았거나 하려던 것을 해냈다. 검색 → 문서·해답 → 적용·확인으로
               이어지고 그 주제가 세션 후반에 사라진다. 배포 확인, 설정 완료, 문제 해결.
-    partial : 목표는 있었고 일부는 됐는데 남은 게 있다. 한 갈래는 마무리됐지만
-              다른 갈래로 넘어가며 끝났다.
+    partial : 세션 안에 주제가 둘 이상이고, 그중 하나는 해결 신호(그 주제가 후반에
+              사라짐)를 보이는데 다른 하나는 끝까지 남았다.
+              세션이 한 주제로만 이뤄졌다면 partial 이 아니다 — 그 하나가 풀렸으면
+              success, 안 풀렸으면 stuck 이다. 애매하다고 partial 로 도망가지 마라.
     stuck   : 같은 문제를 붙들고 끝났다. 같은 주제의 검색어가 반복되거나, 여러 문서를
               오갔는데 세션 끝까지 그 주제에서 벗어나지 못한다. 해결 신호가 없다.
     explore : 정해진 목표 없이 둘러봤다. 검색어가 넓고 얕으며 한 주제에 오래 머물지
@@ -114,7 +138,7 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
 
 // strict: true 로 스키마 위반 자체를 막는다. 그래도 최종 검증은 항상
 // experienceOutputSchema.safeParse 로 한다 (weight 범위 등 strict 가 못 잡는 제약도 있다).
-const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
+export const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
   name: TOOL_NAME,
   description:
     '이번 브라우징 세션을 "경험" 하나로 압축한 결과를 기록한다. 반드시 이 툴을 호출해서 응답한다.',
@@ -132,7 +156,9 @@ const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
       },
       category: {
         type: 'string',
-        description: '이 경험의 카테고리.',
+        enum: [...EXPERIENCE_CATEGORIES],
+        description:
+          '이 경험의 카테고리. 세션에 적힌 카테고리는 도메인 사전 조회 결과일 뿐이니 내용으로 다시 판정한다.',
       },
       outcome: {
         type: 'string',
@@ -305,7 +331,7 @@ interface SessionRow {
   compressedLog: unknown;
 }
 
-interface ExistingSkillRow {
+export interface ExistingSkillRow {
   name: string;
   lastUsedAt: Date;
 }
@@ -330,7 +356,7 @@ function buildActiveThreadsList(activeThreads: ActiveThreadRow[]): string {
     .join('\n');
 }
 
-function buildUserMessage(
+export function buildUserMessage(
   session: SessionRow,
   existingSkills: ExistingSkillRow[],
   recentExperiences: RecentExperienceRow[],
@@ -463,6 +489,10 @@ export async function processSession(sessionId: string, userId: string): Promise
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 1024,
+      // 판정 작업이다. 기본값 1.0 으로는 같은 세션을 두 번 돌리면 outcome 이
+      // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
+      // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
+      temperature: 0,
       system: SYSTEM_PROMPT_V3,
       tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },

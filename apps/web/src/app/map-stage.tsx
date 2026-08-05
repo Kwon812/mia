@@ -1,9 +1,10 @@
 "use client";
 
 import {
+  CAT_GROUPS,
   OrbitalMap,
-  categoryColors,
   dominantCategory,
+  groupOfCategory,
   type Body,
   type MemoryBody,
 } from "@/components/orbital-map";
@@ -63,15 +64,15 @@ export function MapStage({
   // 기억의 색은 그 기억을 만든 경험들 중 가장 많은 분야에서 온다.
   // 범례에는 실제로 색으로 쓰인 분야만 올린다 — 경험에만 있고 어떤 기억도
   // 대표하지 않는 분야까지 적으면, 화면에 없는 색을 설명하는 줄이 된다.
-  const memoryCategories = (() => {
+  const memoryGroups = (() => {
     const byId = new Map(bodies.map((b) => [b.id, b]));
-    const all = categoryColors(bodies.map((b) => b.category));
     const used = new Set(
-      memories.map((m) => dominantCategory(m, byId)).filter((c): c is string => c != null),
+      memories
+        .map((m) => dominantCategory(m, byId))
+        .filter((c): c is string => c != null)
+        .map((c) => groupOfCategory(c).key),
     );
-    return Array.from(used)
-      .sort()
-      .map((c) => [c, all.get(c)!] as [string, [number, number, number]]);
+    return CAT_GROUPS.filter((g) => used.has(g.key));
   })();
 
   return (
@@ -109,9 +110,9 @@ export function MapStage({
               "이 색이 무엇인가"가 아니다 — 축에서 멀리 떨어진 천체는 색만 남는다.
               기억의 색으로 실제로 쓰인 분야만 적는다. */}
           <div className="mt-3 flex flex-col items-end gap-1.5">
-            {memoryCategories.map(([cat, col]) => (
-              <span key={cat} className="flex items-center gap-2">
-                <span className="readout text-[11.5px] uppercase text-lum-1">{cat}</span>
+            {memoryGroups.map(({ key, label, color: col }) => (
+              <span key={key} className="flex items-center gap-2">
+                <span className="readout text-[11.5px] uppercase text-lum-1">{label}</span>
                 <span
                   className="inline-block h-1.5 w-1.5 rounded-full"
                   style={{

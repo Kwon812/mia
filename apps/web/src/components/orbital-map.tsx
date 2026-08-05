@@ -87,34 +87,51 @@ const OUTCOME_ORDER = ['success', 'partial', 'stuck', 'explore'];
 const SAT_SECTOR = Math.PI / OUTCOME_ORDER.length;
 const SAT_FILL = 0.55;
 
-const OUTCOME_KO: Record<string, string> = {
-  success: "성공",
-  partial: "부분",
-  stuck: "정체",
-  explore: "탐색",
-};
+/** 라벨은 enum 값을 그대로 쓴다. 한글 대응표를 두면 화면과 DB·프롬프트가
+ *  다른 어휘를 쓰게 되고, 값이 늘 때마다 번역을 빠뜨린다. 이 화면은 계기판이라
+ *  등폭 대문자가 오히려 결에 맞는다. */
+const tag = (v: string | null | undefined) => (v ?? '—').toUpperCase();
 
-export const TRIGGER_KO: Record<string, string> = {
-  new_skill: "새로 배움",
-  thread_complete: "작업 완결",
-  breakthrough: "막힘 돌파",
-  revival: "묵힌 것의 귀환",
-  comeback: "오랜만의 복귀",
-};
-
-// 카테고리 색. 두 가지를 피해서 골랐다.
-//   1) 상호작용 색(#63E6D2, 청록) — 겨누고 있는 것 전용이라 누구에게도 안 준다.
-//   2) 흰빛 — 그건 기억의 영역이다. 전부 채도가 분명하고 명도는 중간이다.
-const CAT_PALETTE: [number, number, number][] = [
-  [130, 176, 235], // 청
-  [230, 178, 96], // 금
-  [225, 130, 150], // 장미
-  [160, 130, 220], // 보라
-  [235, 148, 100], // 살구
-  [140, 195, 120], // 풀빛
-  [215, 140, 205], // 자홍
-  [150, 165, 190], // 회청
+// 색 묶음. 카테고리는 열셋인데 검은 배경 위 작은 후광으로 구분되는 색은
+// 여덟이 한계다 — 열셋을 다 칠하면 서로 겹쳐 보여 색이 정보가 못 된다.
+// 그래서 값은 열셋 그대로 두고 화면만 묶는다. 흔한 것에는 제 색을 주고,
+// 드물게 나오는 것들을 한 색으로 모은다. 목록이 더 늘어도 묶음에 넣으면
+// 색 체계는 안 건드린다.
+// 두 가지를 피했다: 상호작용 색(#63E6D2, 청록)과 흰빛.
+export const CAT_GROUPS: {
+  key: string;
+  label: string;
+  cats: string[];
+  color: [number, number, number];
+}[] = [
+  { key: 'dev', label: 'dev', cats: ['dev'], color: [130, 176, 235] },
+  { key: 'docs', label: 'docs', cats: ['docs'], color: [230, 178, 96] },
+  { key: 'study', label: 'study', cats: ['study'], color: [225, 130, 150] },
+  { key: 'ai', label: 'AI', cats: ['ai'], color: [160, 130, 220] },
+  { key: 'community', label: 'community', cats: ['community'], color: [235, 148, 100] },
+  { key: 'media', label: 'media', cats: ['entertainment', 'music'], color: [140, 195, 120] },
+  {
+    key: 'life',
+    label: 'life',
+    cats: ['news', 'finance', 'shopping', 'productivity'],
+    color: [215, 140, 205],
+  },
+  { key: 'etc', label: 'etc', cats: ['search', 'etc'], color: [150, 165, 190] },
 ];
+
+const GROUP_BY_CAT = new Map(CAT_GROUPS.flatMap((g) => g.cats.map((c) => [c, g] as const)));
+
+/** 카테고리 → 색 묶음. 목록에 없는 값(예전 데이터, 표기 흔들림)은 기타로 떨어진다. */
+export function groupOfCategory(cat: string) {
+  return GROUP_BY_CAT.get(cat) ?? CAT_GROUPS[CAT_GROUPS.length - 1];
+}
+
+/** 카테고리 → 색. 등장 순서와 무관하게 언제나 같은 색이다 —
+ *  예전에는 화면에 있는 값들을 정렬해 순서대로 팔레트를 나눠줬는데,
+ *  값이 하나 늘면 그 뒤가 전부 밀려 어제 외운 색이 오늘 다른 뜻이 됐다. */
+export function colorOfCategory(cat: string): [number, number, number] {
+  return groupOfCategory(cat).color;
+}
 
 /** 그 기억을 만든 경험들 중 가장 많은 분야. 기억의 색은 여기서 온다.
  *  trigger 는 이미 방향과 이심률 둘을 쓰고 있어서, 색까지 trigger 로 주면
@@ -133,14 +150,6 @@ export function dominantCategory(m: MemoryBody, byId: Map<string, Body>): string
   return Array.from(tally.entries()).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))[0][0];
 }
 
-/** 카테고리에 팔레트를 배분한다. 정렬해 매번 같은 배치.
- *  반드시 전역(경험 전체)으로 한 번만 부른다 — 기억마다 따로 부르면 근거
- *  구성에 따라 정렬 순서가 밀려 같은 분야가 기억마다 다른 색이 된다.
- *  화면 안에서는 범례가 같이 바뀌니 안 틀리지만, 색을 배울 수가 없다. */
-export function categoryColors(cats: string[]): Map<string, [number, number, number]> {
-  const sorted = Array.from(new Set(cats)).sort();
-  return new Map(sorted.map((c, i) => [c, CAT_PALETTE[i % CAT_PALETTE.length]]));
-}
 
 /** id → [0,1). 렌더마다 위상이 튀지 않도록 결정적으로 뽑는다. */
 function phaseOf(id: string): number {
@@ -209,11 +218,10 @@ export function OrbitalMap({
 
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const byId = new Map(bodies.map((b) => [b.id, b]));
-    // 분야 → 색. 전역으로 한 번만. 기억의 색도 위성의 색도 여기서 나온다.
-    const catCol = categoryColors(bodies.map((b) => b.category));
+    // 기억의 색은 근거의 주된 분야에서 온다. 분야→색은 고정 표라 전역이다.
     const colorOf = (m: MemoryBody) => {
       const dom = dominantCategory(m, byId);
-      return (dom ? catCol.get(dom) : null) ?? NEUTRAL;
+      return dom ? colorOfCategory(dom) : NEUTRAL;
     };
 
     // ── 궤도 요소 ──
@@ -319,10 +327,13 @@ export function OrbitalMap({
       ctx!.beginPath();
       ctx!.ellipse(-c * unit, 0, el.a * unit, b * unit, 0, 0, Math.PI * 2);
       ctx!.restore();
+      // 궤도선도 그 기억의 색을 쓴다. 중성 청회색이면 천체와 선이 따로 놀아
+      // "저 선이 누구 것인가"를 눈으로 못 잇는다 — 열다섯 개가 겹쳐 있으면 특히.
+      // 위성 궤도는 이미 제 색을 쓰고 있었으니 이쪽만 어긋나 있었다.
       const lit = hovered === el.id || group;
       ctx!.strokeStyle = lit
         ? `rgba(99,230,210,${0.55 * alpha})`
-        : `rgba(160,185,220,${(0.1 + el.lum * 0.14) * alpha})`;
+        : `rgba(${el.color.join(",")},${0.22 * alpha})`;
       ctx!.lineWidth = lit ? 1.4 : 0.9;
       ctx!.stroke();
     }
@@ -475,7 +486,7 @@ export function OrbitalMap({
           ctx!.stroke();
           ctx!.setLineDash([]);
 
-          const label = TRIGGER_KO[tr] ?? tr;
+          const label = tag(tr);
           const lx = cx + dx * (AX + 16);
           const ly = cy + dy * (AX + 16);
           ctx!.textAlign = dx >= 0 ? "left" : "right";
@@ -582,7 +593,7 @@ export function OrbitalMap({
             omega,
             plane,
             ecc,
-            color: catCol.get(b.category) ?? NEUTRAL,
+            color: colorOfCategory(b.category),
             isSource: b.id === foc.sourceId,
             x: cx + lx * pc - ly * ps,
             y: cy + lx * ps + ly * pc,
@@ -631,7 +642,7 @@ export function OrbitalMap({
           ctx!.stroke();
           ctx!.setLineDash([]);
 
-          const label = OUTCOME_KO[oc] ?? oc;
+          const label = tag(oc);
           const lx = cx + dx * (len + 16);
           const ly = cy + dy * (len + 16);
           ctx!.textAlign = dx >= 0 ? "left" : "right";
@@ -739,7 +750,7 @@ export function OrbitalMap({
           setProbe({
             x: p.x,
             y: p.y,
-            text: `${TRIGGER_KO[tr] ?? tr}으로 남은 기억 ${inGroup}건`,
+            text: `${tag(tr)} 로 남은 기억 ${inGroup}건`,
             sub: "이 방향의 궤도들",
           });
         } else if (p.kind === "axis") {
@@ -750,7 +761,7 @@ export function OrbitalMap({
           setProbe({
             x: p.x,
             y: p.y,
-            text: `${OUTCOME_KO[oc] ?? oc}로 끝난 경험 ${inGroup}건`,
+            text: `${tag(oc)} 로 끝난 경험 ${inGroup}건`,
             sub: "이 방향의 궤도들",
           });
         } else if (p.kind === "mem" || p.kind === "focus") {
@@ -759,7 +770,7 @@ export function OrbitalMap({
             x: p.x,
             y: p.y,
             text: m.title,
-            sub: `기억 · ${TRIGGER_KO[m.trigger] ?? m.trigger} · 중요도 ${m.importance} · 근거 ${m.referencedIds.length}건`,
+            sub: `기억 · ${tag(m.trigger)} · 중요도 ${m.importance} · 근거 ${m.referencedIds.length}건`,
           });
         } else {
           const b = byId.get(found)!;
@@ -767,9 +778,7 @@ export function OrbitalMap({
             x: p.x,
             y: p.y,
             text: b.summary,
-            sub: `${b.category} · ${new Date(b.occurredAt).toISOString().slice(0, 10).replace(/-/g, ".")} · ${
-              OUTCOME_KO[b.outcome ?? ""] ?? "—"
-            } · M${b.memoryScore}`,
+            sub: `${tag(b.category)} · ${new Date(b.occurredAt).toISOString().slice(0, 10).replace(/-/g, ".")} · ${tag(b.outcome)} · M${b.memoryScore}`,
           });
         }
       } else if (found && probeRef.current) {
@@ -862,19 +871,23 @@ export function OrbitalMap({
   // 중심 기억이 쓰고 있는 색이 어느 분야인지. 범례에서 이것만 테를 두른다 —
   // 중심도 위성과 같은 팔레트를 쓰는데 표시가 없으면 "가운데 저 색은 뭔가"에
   // 답이 없다.
-  const focusDominant = focus
-    ? dominantCategory(focus, new Map(bodies.map((b) => [b.id, b])))
+  const focusDominantGroup = focus
+    ? (() => {
+        const dom = dominantCategory(focus, new Map(bodies.map((b) => [b.id, b])));
+        return dom ? groupOfCategory(dom).key : null;
+      })()
     : null;
 
-  // 이 기억의 근거에 실제로 등장하는 분야만, 색은 전역 배분에서 가져온다.
-  const focusCategories = (() => {
-    if (!focus) return [] as [string, [number, number, number]][];
-    const all = categoryColors(bodies.map((b) => b.category));
+  // 이 기억의 근거에 등장하는 색 묶음만. 카테고리 단위로 적으면 같은 색인
+  // 항목이 둘 나란히 놓여 "왜 같은 색이 둘이지"가 된다 — 색의 범례이므로
+  // 색 단위로 적는다. 정확한 카테고리는 위성을 겨누면 판독값에 나온다.
+  const focusGroups = (() => {
+    if (!focus) return [] as typeof CAT_GROUPS;
     const known = new Set(focus.referencedIds);
-    const cats = Array.from(
-      new Set(bodies.filter((b) => known.has(b.id)).map((b) => b.category)),
-    ).sort();
-    return cats.map((c) => [c, all.get(c) ?? NEUTRAL] as [string, [number, number, number]]);
+    const keys = new Set(
+      bodies.filter((b) => known.has(b.id)).map((b) => groupOfCategory(b.category).key),
+    );
+    return CAT_GROUPS.filter((g) => keys.has(g.key));
   })();
 
   return (
@@ -909,7 +922,7 @@ export function OrbitalMap({
         <div className="pointer-events-none absolute left-1/2 top-16 w-full max-w-lg -translate-x-1/2 px-6 text-center">
           <div className="settle">
             <div className="tick mb-2">
-              {TRIGGER_KO[focus.trigger] ?? focus.trigger} · 근거 {focus.referencedIds.length}건
+              {tag(focus.trigger)} · 근거 {focus.referencedIds.length}건
             </div>
             <h2 className="text-[17px] font-medium text-lum-0">{focus.title}</h2>
             {/*<p className="utterance mt-3 text-[14px] text-lum-1">{focus.body}</p>*/}
@@ -920,10 +933,11 @@ export function OrbitalMap({
               <span className="tick" style={{ color: "var(--color-lum-3)" }}>
                 색 = 분야
               </span>
-              {focusCategories.map(([cat, col]) => {
-                const isCenter = cat === focusDominant;
+              {focusGroups.map((g) => {
+                const col = g.color;
+                const isCenter = g.key === focusDominantGroup;
                 return (
-                  <span key={cat} className="flex items-center gap-2">
+                  <span key={g.key} className="flex items-center gap-2">
                     <span
                       className="inline-block h-1.5 w-1.5 rounded-full"
                       style={{
@@ -938,7 +952,7 @@ export function OrbitalMap({
                       style={{ color: isCenter ? "var(--color-lum-0)" : "var(--color-lum-2)" }}
                       title={isCenter ? "이 기억의 주된 분야 — 중심이 쓰는 색" : undefined}
                     >
-                      {cat}
+                      {g.label}
                     </span>
                   </span>
                 );
@@ -955,7 +969,7 @@ export function OrbitalMap({
           <div className="settle">
             <div className="tick mb-2">
               경험 · {new Date(picked.occurredAt).toISOString().slice(0, 10).replace(/-/g, ".")} ·{" "}
-              {OUTCOME_KO[picked.outcome ?? ""] ?? "—"} · M{picked.memoryScore}
+              {tag(picked.outcome)} · M{picked.memoryScore}
             </div>
             <p className="font-sans text-[14px] leading-relaxed text-lum-0">{picked.summary}</p>
           </div>

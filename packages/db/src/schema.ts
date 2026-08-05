@@ -249,7 +249,10 @@ export const memories = pgTable(
     title: text('title').notNull(), // "첫 게임 출시"
     body: text('body').notNull(),
     importance: smallint('importance').notNull(),
-    trigger: text('trigger').notNull(), // 'new_skill' | 'thread_complete' | 'comeback'
+    // 'new_skill' | 'thread_complete' | 'comeback' | 'breakthrough' | 'revival'
+    // DB 에 CHECK 는 없다(자유 텍스트). 값을 늘려도 마이그레이션이 필요 없지만
+    // 목록은 여기서 관리한다 — experience-engine 의 trigger 선택과 짝이다.
+    trigger: text('trigger').notNull(),
 
     refCount: integer('ref_count').notNull().default(0), // searchMemory 로 불려간 횟수
     lastReferencedAt: timestamp('last_referenced_at', { withTimezone: true }),
