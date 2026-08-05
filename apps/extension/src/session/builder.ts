@@ -20,6 +20,18 @@ import type { ActivityEvent, FinalCloseReason, RawEvent, SessionDraft } from './
 // 실데이터 튜닝 대상 (계획서 11장).
 const MAX_DOMAIN_GAP_MS = 10 * 60 * 1000;
 
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/** 압축 로그의 시각 표기. KST 오프셋을 붙인 ISO 문자열.
+ *
+ *  toISOString() 은 UTC 라 KST 새벽 2시가 로그에는 17:00Z 로 찍혔다. 이 값을
+ *  읽는 건 LLM 뿐인데, "밤늦게까지" 같은 판단을 하려 하면 9시간 어긋난다.
+ *  오프셋을 붙이면 현지 시각과 시간대가 둘 다 드러나 오해가 없다.
+ *  이 시스템의 기준 시계는 KST 고정이다(하루 경계·일기·night_morning 축 전부). */
+function kstIso(epochMs: number): string {
+  return new Date(epochMs + KST_OFFSET_MS).toISOString().replace('Z', '+09:00');
+}
+
 // ── LLM 토큰 비용 상한 (계획서 11장) ──
 // compressed_log 는 세션 종료 시 experience-engine 프롬프트에 그대로 들어간다.
 // title/path/query 를 그대로 다 실으면 세션이 길어질수록 토큰이 무한정
@@ -213,6 +225,19 @@ export function ingest(
   return base;
 }
 
+/** 압축 로그의 검색어 한 줄. 문자열이 아니라 **반복 횟수와 구간**을 남긴다 —
+ *  "같은 걸 40분간 여덟 번 물었다"가 stuck 판정의 핵심 근거이기 때문이다. */
+interface CompressedQuery {
+  /** 검색어 원문 */
+  q: string;
+  /** 이 세션에서 이 검색어가 나온 횟수 */
+  n: number;
+  /** 처음 등장 시각 (KST) */
+  first: string;
+  /** 마지막 등장 시각 (KST) */
+  last: string;
+}
+
 interface CompressedSegment {
   domain: string;
   category: string;
@@ -261,7 +286,7 @@ function absorbEvent(seg: RawSegment, e: ActivityEvent): void {
 /** close() 내부에서 쓰지만, 상한·중복제거 로직을 직접 검증하기 위해 export 한다. */
 export function buildCompressedLog(
   draft: SessionDraft,
-): { segments: CompressedSegment[]; tags: string[]; queries: string[] } {
+): { segments: CompressedSegment[]; tags: string[]; queries: CompressedQuery[] } {
   const rawSegments: RawSegment[] = [];
   let cur: RawSegment | null = null;
 
@@ -282,13 +307,31 @@ export function buildCompressedLog(
   const segments = trimmed.map(toSegment);
 
   // 세션 전체 검색 쿼리 — 등장 순서 유지, 중복 제거, 최대 MAX_QUERIES 개.
-  const queries: string[] = [];
+  // 검색어는 **횟수와 구간을 남긴다.**
+  //
+  // 예전에는 중복을 제거하고 문자열만 남겼다. 그런데 프롬프트의 stuck 판정
+  // 기준이 "같은 주제의 검색어가 반복되거나" 다 — 판정하라고 준 근거를 판정
+  // 직전에 지운 셈이었다. 같은 걸 여덟 번 물어도 한 번 물은 것과 같은 입력이
+  // 됐다. 실제로 실데이터에서 stuck 은 한 번도 나온 적이 없다.
+  // (골든 테스트에서 반복 정보를 주면 stuck 이 정확히 잡힌다 — 프롬프트가
+  //  아니라 여기가 병목이었다.)
+  const stat = new Map<string, { n: number; firstAt: number; lastAt: number }>();
   for (const e of draft.events) {
-    if (e.query && !queries.includes(e.query)) {
-      queries.push(e.query);
-      if (queries.length >= MAX_QUERIES) break;
+    if (!e.query) continue;
+    const cur = stat.get(e.query);
+    if (cur) {
+      cur.n += 1;
+      cur.lastAt = e.at;
+    } else if (stat.size < MAX_QUERIES) {
+      stat.set(e.query, { n: 1, firstAt: e.at, lastAt: e.at });
     }
   }
+  const queries: CompressedQuery[] = Array.from(stat, ([q, v]) => ({
+    q,
+    n: v.n,
+    first: kstIso(v.firstAt),
+    last: kstIso(v.lastAt),
+  }));
 
   return { segments, tags: draft.tags, queries };
 }
@@ -297,8 +340,8 @@ function toSegment(seg: RawSegment): CompressedSegment {
   const result: CompressedSegment = {
     domain: seg.domain,
     category: seg.category,
-    start: new Date(seg.startAt).toISOString(),
-    end: new Date(seg.endAt).toISOString(),
+    start: kstIso(seg.startAt),
+    end: kstIso(seg.endAt),
   };
 
   if (seg.titleCounts.size > 0) {

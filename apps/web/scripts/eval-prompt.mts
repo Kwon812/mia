@@ -13,7 +13,9 @@ const env = fs.readFileSync('.env.local', 'utf8');
 process.env.ANTHROPIC_API_KEY ||= env.match(/ANTHROPIC_API_KEY="?([^"\n]+)"?/)![1];
 const client = new Anthropic();
 
-const T = (h: number, m = 0) => new Date(Date.UTC(2026, 7, 5, h, m)).toISOString();
+// KST 오프셋 표기 — 실제 압축 로그와 같은 형식이어야 평가가 유효하다.
+const T = (h: number, m = 0) =>
+  new Date(Date.UTC(2026, 7, 5, h, m)).toISOString().replace('Z', '+09:00');
 const seg = (domain: string, category: string, title: string, h: number, m: number, dur: number, extra: object = {}) =>
   ({ domain, category, title, start: T(h, m), end: T(h, m + dur), ...extra });
 
@@ -38,7 +40,9 @@ const CASES: Case[] = [
     name: 'stuck — 같은 검색어 반복, 해결 신호 없음',
     검증: 'outcome',
     session: { primaryCategory: 'dev', durationMin: 52, domains: { 'www.google.com': 900, 'stackoverflow.com': 1400, 'github.com': 820 },
-      compressedLog: { tags: [], queries: ['next.js hydration mismatch', 'next.js hydration mismatch fix', 'hydration mismatch 해결', 'next.js hydration mismatch server client', 'hydration error nextjs 15'],
+      compressedLog: { tags: [], queries: [ { q: 'next.js hydration mismatch', n: 3, first: '2026-08-05T19:00:00+09:00', last: '2026-08-05T19:27:00+09:00' },
+                   { q: 'hydration mismatch 해결', n: 2, first: '2026-08-05T19:13:00+09:00', last: '2026-08-05T19:31:00+09:00' },
+                   { q: 'hydration error nextjs 15', n: 1, first: '2026-08-05T19:41:00+09:00', last: '2026-08-05T19:41:00+09:00' } ],
         segments: [ seg('www.google.com','search','next.js hydration mismatch - Google 검색',10,0,4,{query:'next.js hydration mismatch'}),
           seg('stackoverflow.com','dev','Next.js hydration mismatch',10,4,9),
           seg('www.google.com','search','hydration mismatch 해결 - Google 검색',10,13,3,{query:'hydration mismatch 해결'}),
@@ -53,7 +57,7 @@ const CASES: Case[] = [
     name: 'success — 검색 → 문서 → 적용, 주제가 후반에 사라짐',
     검증: 'outcome',
     session: { primaryCategory: 'dev', durationMin: 41, domains: { 'www.google.com': 200, 'vercel.com': 700, 'localhost': 1560 },
-      compressedLog: { tags: [], queries: ['vercel cron 설정'],
+      compressedLog: { tags: [], queries: [{ q: 'vercel cron 설정', n: 1, first: '2026-08-05T22:00:00+09:00', last: '2026-08-05T22:00:00+09:00' }],
         segments: [ seg('www.google.com','search','vercel cron 설정 - Google 검색',13,0,3,{query:'vercel cron 설정'}),
           seg('vercel.com','docs','Cron Jobs – Vercel Docs',13,3,11),
           seg('localhost','dev','Project NA — vercel.json',13,14,9),
@@ -65,7 +69,8 @@ const CASES: Case[] = [
     name: 'partial — 두 주제, 하나만 해결',
     검증: 'outcome',
     session: { primaryCategory: 'dev', durationMin: 63, domains: { 'vercel.com': 600, 'localhost': 1200, 'stackoverflow.com': 1980 },
-      compressedLog: { tags: [], queries: ['vercel 환경변수 설정', 'postgres connection pool timeout'],
+      compressedLog: { tags: [], queries: [ { q: 'vercel 환경변수 설정', n: 1, first: '2026-08-05T18:00:00+09:00', last: '2026-08-05T18:00:00+09:00' },
+                   { q: 'postgres connection pool timeout', n: 4, first: '2026-08-05T18:18:00+09:00', last: '2026-08-05T18:55:00+09:00' } ],
         segments: [ seg('vercel.com','docs','Environment Variables – Vercel',9,0,10),
           seg('localhost','dev','Project NA — 설정 완료',9,10,8),
           seg('www.google.com','search','postgres connection pool timeout - Google 검색',9,18,4,{query:'postgres connection pool timeout'}),
@@ -110,7 +115,7 @@ const CASES: Case[] = [
     name: 'is_first_time true — 보유 스킬에 없는 도구를 처음',
     검증: 'is_first_time',
     session: { primaryCategory: 'dev', durationMin: 46, domains: { 'redis.io': 1400, 'localhost': 1360 },
-      compressedLog: { tags: [], queries: ['redis 시작하기'],
+      compressedLog: { tags: [], queries: [{ q: 'redis 시작하기', n: 1, first: '2026-08-06T01:00:00+09:00', last: '2026-08-06T01:00:00+09:00' }],
         segments: [ seg('redis.io','docs','Redis Quick Start',16,0,14),
           seg('redis.io','docs','Redis — SETEX',16,14,9),
           seg('localhost','dev','Project NA — 캐시 붙이기',16,23,23) ] } },
@@ -150,7 +155,7 @@ const CASES: Case[] = [
     검증: 'thread.completed',
     threads: [THREAD_A],
     session: { primaryCategory: 'dev', durationMin: 42, domains: { 'github.com': 2520 },
-      compressedLog: { tags: [], queries: ['actions matrix build'],
+      compressedLog: { tags: [], queries: [{ q: 'actions matrix build', n: 2, first: '2026-08-06T02:00:00+09:00', last: '2026-08-06T02:20:00+09:00' }],
         segments: [ seg('github.com','dev','프로젝트 A — 워크플로에 matrix 추가 중',17,0,21),
           seg('github.com','dev','프로젝트 A — 빌드 실패 로그 확인',17,21,21) ] } },
     expect: { 'thread.completed': false },
@@ -172,7 +177,8 @@ const CASES: Case[] = [
     threads: [THREAD_A],
     session: { primaryCategory: 'search', durationMin: 187,
       domains: { localhost: 3353, 'supabase.com': 2058, 'claude.ai': 981, 'cafe.naver.com': 420, 'm.bunjang.co.kr': 260, 'www.google.com': 120, etc: 168 },
-      compressedLog: { tags: [], queries: ['supabase transaction pooler', '중고 모니터'],
+      compressedLog: { tags: [], queries: [ { q: 'supabase transaction pooler', n: 2, first: '2026-08-05T21:22:00+09:00', last: '2026-08-05T21:40:00+09:00' },
+                   { q: '중고 모니터', n: 1, first: '2026-08-05T22:05:00+09:00', last: '2026-08-05T22:05:00+09:00' } ],
         segments: [ seg('localhost','dev','Project NA — 대시보드',12,0,22),
           seg('supabase.com','dev','Supabase — SQL Editor',12,22,18),
           seg('claude.ai','ai','Claude',12,40,16),

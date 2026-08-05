@@ -78,10 +78,17 @@ export const SYSTEM_PROMPT_V3 = `너는 사용자의 브라우징 세션 하나�
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
 
-compressed_log 에는 구간(segments)마다 도메인·카테고리·시간 외에 그 구간에서 관측된
-페이지 제목(title)과 경로 예시(paths)가, 그리고 세션 전체의 검색어 목록(queries)이
-들어있다. 검색 쿼리는 사용자가 무엇을 궁금해했는지, 페이지 제목은 무엇을 읽었는지
-알려준다. 이걸 근거로 summary·detail·skills 를 "github.com 에 90분 머물렀다" 같은
+compressed_log 에는 구간(segments)마다 도메인·카테고리·시각 외에 그 구간에서 관측된
+페이지 제목(title)과 경로 예시(paths)가, 그리고 세션 전체의 검색어(queries)가 들어있다.
+검색 쿼리는 사용자가 무엇을 궁금해했는지, 페이지 제목은 무엇을 읽었는지 알려준다.
+
+**모든 시각은 KST(+09:00) 다.** 새벽·심야 여부를 판단할 때 그대로 읽으면 된다.
+
+queries 는 문자열 목록이 아니라 {q, n, first, last} 객체 목록이다 — q 는 검색어, **n 은 그
+검색어가 반복된 횟수**, first/last 는 처음·마지막 등장 시각이다. **n 이 크고 first~last
+구간이 길다는 것은 같은 것을 오래 붙들고 있었다는 뜻**이고, outcome 판정의 직접적인
+근거다(예: n=8, 14:02~14:41 → 40분간 여덟 번 같은 걸 물었다 → stuck 쪽). 반대로
+n=1 이고 그 뒤에 문서·적용이 이어지면 찾던 것을 찾은 것이다. 이걸 근거로 summary·detail·skills 를 "github.com 에 90분 머물렀다" 같은
 막연한 도메인 요약이 아니라 구체적인 내용으로 만들어라(예: 검색어가
 "redis cache invalidation" 이고 이어서 GitHub 이슈·MDN 페이지 제목이 보이면 "Redis
 캐시 무효화 방법을 찾아봤다"처럼). 단, title/paths 에 개인정보(이름·계좌번호·주문번호
@@ -130,10 +137,12 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
               사라짐)를 보이는데 다른 하나는 끝까지 남았다.
               세션이 한 주제로만 이뤄졌다면 partial 이 아니다 — 그 하나가 풀렸으면
               success, 안 풀렸으면 stuck 이다. 애매하다고 partial 로 도망가지 마라.
-    stuck   : 같은 문제를 붙들고 **답을 못 찾은 채** 끝났다. 같은 주제의 검색어가
-              반복되거나, Q&A·이슈 문서를 오가며 끝난다. **적용한 흔적이 없다.**
+    stuck   : **세션 전체가 하나의 미해결 문제**일 때다. 같은 주제의 검색어가
+              반복되고(n 이 크다), Q&A·이슈 문서를 오가며 끝난다. **적용한 흔적이 없다.**
               한 주제만 다뤘다는 것은 stuck 의 근거가 아니다 — 해결 신호(적용·확인)가
-              없어야 stuck 이다. 뭔가를 고치고 확인했다면 success 나 partial 이다.
+              없어야 stuck 이다.
+              **한 주제가 반복돼도, 같은 세션에 적용·확인까지 간 다른 주제가 있으면
+              partial 이다.** 하나라도 끝냈으면 세션 전체가 막힌 것은 아니다.
     explore : 정해진 목표 없이 둘러봤다. 검색어가 넓고 얕으며 한 주제에 오래 머물지
               않는다. 특정 주제를 파고든 흔적이 있으면 explore 가 아니다.
 - is_first_time: 기존 스킬 목록에 없던 것을 이번에 처음 시도했으면 true.
@@ -874,7 +883,9 @@ export async function processSession(sessionId: string, userId: string): Promise
           threadId,
           experienceId: insertedExperience.id,
           occurredAt: session.startedAt,
-          title: output.summary,
+          // experiences.summary 와 같은 상한으로 자른다. 안 그러면 같은 문장이
+          // 경험에는 100자, 기억에는 600자로 저장돼 두 화면이 다른 길이를 보여준다.
+          title: output.summary.slice(0, MAX_SUMMARY_LEN),
           body: output.detail ?? output.summary,
           importance: clampImportance(memoryScoreResult.score),
           trigger,

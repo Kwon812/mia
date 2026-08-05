@@ -304,7 +304,29 @@ describe('buildCompressedLog — 상한·중복 제거', () => {
     );
     const log = buildCompressedLog(draftWithEvents(events));
     expect(log.queries).toHaveLength(MAX_QUERIES);
-    expect(log.queries[0]).toBe('unique-0');
+    expect(log.queries[0].q).toBe('unique-0');
+    expect(log.queries[0].n).toBe(1);
+  });
+
+  it('같은 검색어 반복은 횟수와 구간으로 남는다 (stuck 판정의 근거)', () => {
+    // 예전에는 중복을 지워서, 같은 걸 여덟 번 물어도 한 번 물은 것과 같은
+    // 입력이 됐다 — 프롬프트의 stuck 기준("같은 검색어가 반복되거나")이
+    // 판정할 근거를 압축 단계가 먼저 없앤 셈이었다.
+    const q = 'hydration mismatch';
+    const events = [
+      normalizeEvent(raw({ at: 0, domain: 'google.com', payload: { query: q } })),
+      normalizeEvent(raw({ at: 12 * MIN, domain: 'google.com', payload: { query: q } })),
+      normalizeEvent(raw({ at: 40 * MIN, domain: 'google.com', payload: { query: q } })),
+      normalizeEvent(raw({ at: 41 * MIN, domain: 'google.com', payload: { query: 'other' } })),
+    ];
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.queries).toHaveLength(2);
+    expect(log.queries[0]).toMatchObject({ q, n: 3 });
+    // 구간이 남아야 "40분간 붙들고 있었다"가 읽힌다.
+    expect(log.queries[0].first).not.toBe(log.queries[0].last);
+    // 시각은 KST 오프셋 표기 — UTC 로 찍으면 LLM 의 시간대 판단이 9시간 어긋난다.
+    expect(log.queries[0].first).toMatch(/\+09:00$/);
+    expect(log.segments[0].start).toMatch(/\+09:00$/);
   });
 });
 
