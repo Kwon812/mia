@@ -59,8 +59,8 @@ export default async function PersonalityPage() {
         </p>
       ) : (
         <>
-          <div className="flex flex-col">
-            {PERSONALITY_AXES.map((axis) => {
+          <div className="glass na-rise flex flex-col px-5 py-2">
+            {PERSONALITY_AXES.map((axis, i) => {
               const cur = latest[axis.key];
               const prev = previous?.[axis.key];
               const xCur = axisX(cur);
@@ -69,7 +69,7 @@ export default async function PersonalityPage() {
               return (
                 <div
                   key={axis.key}
-                  className="border-b border-rule py-4 last:border-b-0"
+                  className={`py-4 ${i > 0 ? "border-t border-rule" : ""}`}
                 >
                   <div className="flex items-center gap-3">
                     <span className="w-16 shrink-0 text-right text-[12.5px] text-sub">
@@ -121,7 +121,14 @@ export default async function PersonalityPage() {
                             opacity="0.55"
                           />
                         )}
-                        {/* 현재값 마커 */}
+                        {/* 현재값 마커 — 축 위의 광점 */}
+                        <circle
+                          cx={xCur}
+                          cy="12"
+                          r="8"
+                          fill="var(--color-live)"
+                          opacity="0.16"
+                        />
                         <circle cx={xCur} cy="12" r="4.5" fill="var(--color-live)" />
                       </svg>
 
@@ -141,13 +148,16 @@ export default async function PersonalityPage() {
 
           <div className="mt-6 flex items-center gap-5 font-mono text-[11px] text-faint">
             <span className="inline-flex items-center gap-1.5">
-              <span className="inline-block h-2 w-2 bg-live" aria-hidden="true" />
+              <span
+                className="inline-block h-2 w-2 rounded-full bg-live"
+                aria-hidden="true"
+              />
               현재 · {formatKstYmd(latest.computedAt)}
             </span>
             {previous && (
               <span className="inline-flex items-center gap-1.5">
                 <span
-                  className="inline-block h-1.5 w-1.5 bg-faint opacity-55"
+                  className="inline-block h-1.5 w-1.5 rounded-full bg-faint opacity-55"
                   aria-hidden="true"
                 />
                 이전 · {formatKstYmd(previous.computedAt)}

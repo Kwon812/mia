@@ -23,7 +23,7 @@ export function NameForm() {
         maxLength={12}
         placeholder="이름을 지어줘"
         autoComplete="off"
-        className="w-48 border-b-2 border-ink bg-transparent py-1.5 text-center font-serif text-[17px] text-ink outline-none placeholder:text-faint focus:border-live"
+        className="glass-inset w-56 px-4 py-2.5 text-center font-serif text-[17px] text-ink placeholder:text-faint"
       />
       {state.error && (
         <p className="font-mono text-[11.5px] text-live">{state.error}</p>
@@ -31,7 +31,7 @@ export function NameForm() {
       <button
         type="submit"
         disabled={isPending}
-        className="border border-ink bg-ink px-4 py-1.5 font-mono text-[11.5px] text-paper transition-opacity disabled:opacity-50"
+        className="solid-btn px-5 py-2 font-mono text-[11.5px] disabled:opacity-50"
       >
         {isPending ? "짓는 중..." : "이름 짓기"}
       </button>

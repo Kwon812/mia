@@ -1,32 +1,277 @@
 @import "tailwindcss";
 
 /* ── Project NA 디자인 토큰 ─────────────────────────────
-   계획서(docs/na-plan.html)의 에디토리얼 팔레트를 그대로 쓴다.
-   원칙: 캐릭터 대사만 세리프체. 메타데이터는 모노. 액센트는 한 색만. */
+   컨셉: 캐릭터가 광원이고, 나머지는 그 빛 앞에 떠 있는 유리다.
+
+   유리 모서리에서 빛이 분산(dispersion)한다 — 따뜻한 쪽(--color-live,
+   캐릭터의 체온색)과 차가운 쪽(--color-cool)으로 갈라진다. 액센트를 새로
+   만들지 않고 기존 테라코타를 "잉크"에서 "빛"으로 옮긴 것이다.
+
+   원칙(계획서 09장)은 그대로다:
+   - 캐릭터 대사만 세리프체. "말하는 존재만 서체가 다르면 UI 가 아니라 누구가 된다"
+   - 메타데이터는 모노
+   - 단일 테마(밝은 쪽)에 의도적으로 고정한다 — 이 디자인은 빛과 투명도로
+     깊이를 만들기 때문에 어두운 바탕에서는 같은 개념이 성립하지 않는다. */
 @theme {
-  --color-paper: #edf0f2;
-  --color-card: #f7f9fa;
-  --color-ink: #141f28;
-  --color-sub: #5b6c79;
-  --color-faint: #8a9aa5;
-  --color-rule: #d2dae0;
-  --color-rule-hard: #a9b7c0;
+  --color-paper: #edf1f7;
+  --color-card: rgba(255, 255, 255, 0.58);
+  --color-ink: #101a2b;
+  --color-sub: #55637a;
+  --color-faint: #8a96a9;
+  --color-rule: rgba(16, 26, 43, 0.12);
+  --color-rule-hard: rgba(16, 26, 43, 0.22);
+
+  /* 따뜻한 극 — 캐릭터의 체온. 잉크가 아니라 빛으로 쓴다. */
   --color-live: #b4671f;
-  --color-live-bg: #f6eadc;
+  --color-live-bg: rgba(180, 103, 31, 0.12);
+
+  /* 차가운 극 — 분산광의 반대쪽. */
+  --color-cool: #3e8f9c;
+  --color-cool-bg: rgba(62, 143, 156, 0.12);
 
   --font-sans: "Pretendard Variable", Pretendard, system-ui, sans-serif;
   --font-serif: var(--font-gowun), "Gowun Batang", serif;
   --font-mono: var(--font-plex-mono), "IBM Plex Mono", monospace;
 }
 
-body {
+html {
+  /* 유리 패널이 스크롤될 때 뒤 배경이 같이 밀리지 않게 — 배경은 고정 광원이다 */
   background: var(--color-paper);
+}
+
+body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
-/* 캐릭터 아바타 애니메이션 */
+/* ── 광원 필드 ────────────────────────────────────────
+   화면 전체에 고정된 빛. 유리 패널의 backdrop-filter 가 굴절시킬 대상이다 —
+   배경이 균일한 단색이면 투명도가 아무것도 드러내지 못한다. */
+.na-field {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(1200px 760px at 50% -14%, rgba(255, 255, 255, 0.98), transparent 62%),
+    radial-gradient(720px 540px at 10% 16%, rgba(180, 103, 31, 0.14), transparent 66%),
+    radial-gradient(780px 580px at 90% 30%, rgba(62, 143, 156, 0.16), transparent 66%),
+    radial-gradient(1000px 720px at 46% 112%, rgba(108, 128, 176, 0.16), transparent 64%),
+    var(--color-paper);
+}
+
+/* 아주 느리게 흐르는 광막 — 정지 화면이 아니라 "떠 있다"는 인상을 만든다.
+   40초 주기라 눈에 띄게 움직이지 않고 스크린샷에서는 보이지도 않는다. */
+.na-field::after {
+  content: "";
+  position: absolute;
+  inset: -25%;
+  background:
+    radial-gradient(38% 30% at 28% 34%, rgba(255, 255, 255, 0.55), transparent 70%),
+    radial-gradient(32% 26% at 74% 62%, rgba(180, 103, 31, 0.1), transparent 72%);
+  filter: blur(20px);
+  animation: na-drift 40s ease-in-out infinite alternate;
+}
+
+@keyframes na-drift {
+  0% {
+    transform: translate3d(-1.5%, -1%, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(2%, 1.5%, 0) scale(1.06);
+  }
+}
+
+/* 감정 오라 — 홈에서만. 파생된 감정(lib/emotion.ts)이 화면의 공기 색을 정한다.
+   데이터가 장식을 정하는 지점이라 이 사이트에서 유일하게 색이 움직인다. */
+.na-aura {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(760px 520px at 50% 8%, var(--na-aura-color), transparent 68%);
+  transition: background 800ms ease;
+}
+
+/* ── 유리 ────────────────────────────────────────────── */
+.glass {
+  position: relative;
+  border-radius: 16px;
+  background: linear-gradient(
+    158deg,
+    rgba(255, 255, 255, 0.74),
+    rgba(255, 255, 255, 0.44)
+  );
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  box-shadow:
+    0 1px 1px rgba(16, 26, 43, 0.03),
+    0 10px 24px -14px rgba(16, 26, 43, 0.16),
+    0 34px 60px -34px rgba(16, 26, 43, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* 분산 테두리 — 1px 링을 그라디언트로 칠하고 안쪽을 마스크로 도려낸다.
+   왼쪽 위는 따뜻하게, 오른쪽 아래는 차갑게 갈라진다(색분산). */
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    112deg,
+    rgba(180, 103, 31, 0.5) 0%,
+    rgba(255, 255, 255, 0.85) 26%,
+    rgba(255, 255, 255, 0.5) 58%,
+    rgba(62, 143, 156, 0.45) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* 강조 패널 — 따뜻한 쪽으로 기운 유리. 중요한 기억 등에 쓴다. */
+.glass-warm {
+  background: linear-gradient(
+    158deg,
+    rgba(255, 250, 243, 0.82),
+    rgba(255, 255, 255, 0.46)
+  );
+  box-shadow:
+    0 1px 1px rgba(16, 26, 43, 0.03),
+    0 10px 26px -14px rgba(180, 103, 31, 0.28),
+    0 34px 60px -34px rgba(16, 26, 43, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.glass-warm::before {
+  background: linear-gradient(
+    112deg,
+    rgba(180, 103, 31, 0.75) 0%,
+    rgba(255, 255, 255, 0.8) 40%,
+    rgba(255, 255, 255, 0.45) 70%,
+    rgba(62, 143, 156, 0.35) 100%
+  );
+}
+
+/* 얇은 유리 — 네비게이션처럼 항상 떠 있는 것. 그림자를 줄여 가볍게. */
+.glass-thin {
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  box-shadow:
+    0 1px 1px rgba(16, 26, 43, 0.03),
+    0 8px 20px -12px rgba(16, 26, 43, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* 유리 위에 얹는 입력 필드 — 패널보다 한 겹 안쪽으로 들어간 느낌. */
+.glass-inset {
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(16, 26, 43, 0.1);
+  box-shadow: inset 0 1px 2px rgba(16, 26, 43, 0.06);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background 160ms ease;
+}
+
+.glass-inset:focus {
+  outline: none;
+  border-color: rgba(180, 103, 31, 0.55);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow:
+    inset 0 1px 2px rgba(16, 26, 43, 0.05),
+    0 0 0 3px rgba(180, 103, 31, 0.14);
+}
+
+/* 주 버튼 — 유리가 아니라 고체. 화면에서 유일하게 불투명한 것이라 눈에 띈다. */
+.solid-btn {
+  border-radius: 10px;
+  background: linear-gradient(168deg, #1d2a3f, #101a2b);
+  color: #eef2f8;
+  box-shadow:
+    0 1px 1px rgba(16, 26, 43, 0.1),
+    0 8px 18px -10px rgba(16, 26, 43, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  transition:
+    transform 140ms ease,
+    box-shadow 140ms ease,
+    opacity 140ms ease;
+}
+
+.solid-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    0 1px 1px rgba(16, 26, 43, 0.1),
+    0 12px 24px -10px rgba(16, 26, 43, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.solid-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* 칩 — 감정·태그·결과 배지. 유리 위의 유리라 아주 얇게. */
+.chip {
+  border-radius: 999px;
+  border: 1px solid rgba(16, 26, 43, 0.1);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.chip-warm {
+  border-color: rgba(180, 103, 31, 0.28);
+  background: rgba(180, 103, 31, 0.1);
+  color: var(--color-live);
+}
+
+.chip-cool {
+  border-color: rgba(62, 143, 156, 0.28);
+  background: rgba(62, 143, 156, 0.1);
+  color: var(--color-cool);
+}
+
+/* ── 캐릭터 ──────────────────────────────────────────── */
+
+/* 캐릭터 뒤의 광휘. 이 사이트에서 빛이 나오는 유일한 곳이다. */
+.na-glow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 236, 208, 0.95) 0%,
+    rgba(226, 184, 138, 0.55) 34%,
+    rgba(180, 103, 31, 0.16) 58%,
+    transparent 72%
+  );
+  filter: blur(2px);
+  animation: na-pulse 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes na-pulse {
+  0%,
+  100% {
+    opacity: 0.78;
+    scale: 1;
+  }
+  50% {
+    opacity: 1;
+    scale: 1.05;
+  }
+}
+
 @keyframes na-float {
   0%,
   100% {
@@ -36,6 +281,7 @@ body {
     transform: translateY(-6px);
   }
 }
+
 @keyframes na-blink {
   0%,
   92%,
@@ -46,16 +292,69 @@ body {
     transform: scaleY(0.08);
   }
 }
+
 .na-float {
   animation: na-float 4.5s ease-in-out infinite;
 }
+
 .na-blink {
   transform-origin: center;
   animation: na-blink 5s ease-in-out infinite;
 }
+
+/* ── 진입 ────────────────────────────────────────────
+   패널이 빛 속에서 떠오르는 방식으로 등장한다. 순서는 각 페이지에서
+   --na-delay 로 준다. */
+@keyframes na-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.na-rise {
+  animation: na-rise 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--na-delay, 0ms);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .na-float,
-  .na-blink {
+  .na-blink,
+  .na-glow,
+  .na-rise,
+  .na-field::after {
     animation: none;
   }
+
+  .na-rise {
+    opacity: 1;
+    transform: none;
+  }
+
+  .solid-btn:hover:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* backdrop-filter 미지원 브라우저 — 투명도만으로는 글자가 안 읽히므로
+   불투명도를 올려 가독성을 지킨다. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass,
+  .glass-thin {
+    background: rgba(255, 255, 255, 0.92);
+  }
+}
+
+::selection {
+  background: rgba(180, 103, 31, 0.18);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-live);
+  outline-offset: 3px;
+  border-radius: 4px;
 }

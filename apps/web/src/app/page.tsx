@@ -9,6 +9,7 @@ import { CharacterAvatar } from "@/components/character-avatar";
 import { Dialogue } from "@/components/dialogue";
 import { Card, MonoLabel } from "@/components/card";
 import { NameForm } from "@/components/name-form";
+import { EmotionAura } from "@/components/emotion-aura";
 
 // 감정 파생에 넣는 최근 경험 표본 크기 (계획서 06장)
 const EMOTION_SAMPLE_SIZE = 5;
@@ -20,11 +21,12 @@ const OUTCOME_LABEL: Record<ExperienceOutcome, string> = {
   explore: "탐색",
 };
 
+// 결과는 빛의 온도로 구분한다 — 성공은 따뜻하게, 탐색은 차갑게, 정체는 색 없이.
 const OUTCOME_STYLE: Record<ExperienceOutcome, string> = {
-  success: "bg-live-bg text-live",
-  explore: "border border-rule text-sub",
-  partial: "border border-rule text-sub",
-  stuck: "border border-rule text-faint",
+  success: "chip chip-warm",
+  explore: "chip chip-cool",
+  partial: "chip text-sub",
+  stuck: "chip text-faint",
 };
 
 export default async function Home() {
@@ -35,9 +37,10 @@ export default async function Home() {
   // 캐릭터 + "..." 말풍선 + 이름 입력 폼만 보여준다.
   if (!user.character.name) {
     return (
-      <div className="flex flex-col items-center pt-8">
+      <div className="flex flex-col items-center pt-2">
+        <EmotionAura emotion="평온" />
         <CharacterAvatar size={160} />
-        <div className="mt-6 max-w-[22rem] text-center">
+        <div className="na-rise -mt-6 max-w-[22rem] text-center">
           <Dialogue text="..." size="lg" />
         </div>
         <NameForm />
@@ -135,75 +138,79 @@ export default async function Home() {
 
   return (
     <div className="flex flex-col items-center">
-      {/* 캐릭터 스테이지 */}
-      <section className="flex flex-col items-center pt-4">
+      {/* 감정이 화면 전체의 공기 색을 정한다 */}
+      <EmotionAura emotion={emotion.label} />
+
+      {/* 캐릭터 스테이지 — 유리가 아니라 빛. 이 화면에서 유일하게 패널이 없는 곳이다. */}
+      <section className="flex flex-col items-center pt-2">
         <CharacterAvatar size={160} />
-        <div className="mt-4 flex items-baseline gap-2">
-          <h1 className="text-[19px] font-semibold tracking-tight">
-            {user.character.name}
-          </h1>
-          <span className="font-mono text-[12px] text-sub">
-            LV.{user.character.level} · 함께한 지 {daysTogether}일
+        <div className="na-rise -mt-7 flex flex-col items-center">
+          <div className="flex items-baseline gap-2.5">
+            <h1 className="text-[21px] font-semibold tracking-[-0.01em]">
+              {user.character.name}
+            </h1>
+            <span className="font-mono text-[12px] text-sub">
+              LV.{user.character.level} · 함께한 지 {daysTogether}일
+            </span>
+          </div>
+          <span
+            className="chip chip-warm mt-3 px-2.5 py-0.5 font-mono text-[11px]"
+            title={emotion.reason}
+          >
+            {emotion.label}
           </span>
         </div>
-        <span
-          className="mt-2.5 rounded-sm bg-live-bg px-2 py-0.5 font-mono text-[11px] text-live"
-          title={emotion.reason}
-        >
-          {emotion.label}
-        </span>
       </section>
 
       {/* 오늘의 대사 */}
-      <section className="mt-6 max-w-[30rem] text-center">
+      <section
+        className="na-rise mt-7 max-w-[30rem] text-center"
+        style={{ "--na-delay": "80ms" } as React.CSSProperties}
+      >
         <Dialogue text={dialogueText} size="lg" />
       </section>
 
-      {/* 상태 요약 스트립 — characters 캐시 값 */}
-      <section className="mt-10 flex w-full max-w-sm items-center justify-around border-t border-b border-rule py-4">
-        <div className="flex flex-col items-center gap-1">
-          <span className="font-mono text-[20px] leading-none">
-            {user.character.experienceCount}
-          </span>
-          <span className="font-mono text-[11px] uppercase tracking-[0.1em] text-faint">
-            경험
-          </span>
-        </div>
-        <div className="flex flex-col items-center gap-1">
-          <span className="font-mono text-[20px] leading-none">
-            {user.character.skillCount}
-          </span>
-          <span className="font-mono text-[11px] uppercase tracking-[0.1em] text-faint">
-            스킬
-          </span>
-        </div>
-        <div className="flex flex-col items-center gap-1">
-          <span className="font-mono text-[20px] leading-none">
-            {user.character.memoryCount}
-          </span>
-          <span className="font-mono text-[11px] uppercase tracking-[0.1em] text-faint">
-            기억
-          </span>
-        </div>
+      {/* 상태 요약 — 떠 있는 유리 패널 3개 */}
+      <section
+        className="na-rise mt-10 grid w-full max-w-md grid-cols-3 gap-3"
+        style={{ "--na-delay": "160ms" } as React.CSSProperties}
+      >
+        {[
+          { value: user.character.experienceCount, label: "경험" },
+          { value: user.character.skillCount, label: "스킬" },
+          { value: user.character.memoryCount, label: "기억" },
+        ].map((item) => (
+          <div
+            key={item.label}
+            className="glass flex flex-col items-center gap-1.5 px-3 py-4"
+          >
+            <span className="font-mono text-[24px] leading-none tracking-tight">
+              {item.value}
+            </span>
+            <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-faint">
+              {item.label}
+            </span>
+          </div>
+        ))}
       </section>
 
       {/* 오늘 섹션 */}
-      <section className="mt-12 w-full">
+      <section className="mt-14 w-full">
         <MonoLabel>TODAY</MonoLabel>
-        <div className="mt-3 flex flex-col gap-3">
+        <div className="mt-3.5 flex flex-col gap-3">
           {todaySessionRows.length === 0 ? (
             <p className="font-mono text-[12px] text-faint">
               아직 오늘 기록이 없어.
             </p>
           ) : (
-            todaySessionRows.map((session) => (
-              <Card key={session.id}>
+            todaySessionRows.map((session, i) => (
+              <Card key={session.id} delay={i * 60}>
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="font-mono text-[12px] text-faint">
                     {formatKstTimeRange(session.startedAt, session.endedAt)}
                   </span>
                   {session.tags?.includes("scattered") && (
-                    <span className="rounded-sm border border-rule bg-paper px-1.5 py-0.5 font-mono text-[10px] text-sub">
+                    <span className="chip px-2 py-0.5 font-mono text-[10px] text-sub">
                       산만
                     </span>
                   )}
@@ -223,27 +230,27 @@ export default async function Home() {
       </section>
 
       {/* 오늘의 경험 */}
-      <section className="mt-10 w-full">
+      <section className="mt-12 w-full">
         <MonoLabel>오늘의 경험</MonoLabel>
-        <div className="mt-3 flex flex-col gap-3">
+        <div className="mt-3.5 flex flex-col gap-3">
           {todayExperienceRows.length === 0 ? (
             <p className="font-mono text-[12px] text-faint">
               아직 오늘의 경험이 만들어지지 않았어.
             </p>
           ) : (
-            todayExperienceRows.map((exp) => (
-              <Card key={exp.id}>
+            todayExperienceRows.map((exp, i) => (
+              <Card key={exp.id} accent={exp.isFirstTime} delay={i * 60}>
                 <div className="flex items-start justify-between gap-3">
                   <p className="text-[14.5px] leading-relaxed">{exp.summary}</p>
                   <div className="flex shrink-0 items-center gap-1.5">
                     {exp.isFirstTime && (
-                      <span className="rounded-sm bg-live-bg px-1.5 py-0.5 font-mono text-[10px] text-live">
+                      <span className="chip chip-warm px-2 py-0.5 font-mono text-[10px]">
                         첫 시도
                       </span>
                     )}
                     {exp.outcome && (
                       <span
-                        className={`rounded-sm px-1.5 py-0.5 font-mono text-[10px] ${OUTCOME_STYLE[exp.outcome]}`}
+                        className={`px-2 py-0.5 font-mono text-[10px] ${OUTCOME_STYLE[exp.outcome]}`}
                       >
                         {OUTCOME_LABEL[exp.outcome]}
                       </span>

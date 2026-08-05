@@ -50,22 +50,33 @@ export default async function MemoriesPage() {
           아직 기억이 없어. 뭔가를 겪으면 여기 쌓일 거야.
         </p>
       ) : (
-        <div className="space-y-10 border-l border-rule-hard pl-6">
+        <div
+          className="space-y-10 pl-7"
+          style={{
+            // 타임라인 축 — 위(최근)에서 아래(과거)로 빛이 식어 사라진다
+            borderLeft: "1px solid transparent",
+            borderImage:
+              "linear-gradient(180deg, rgba(180,103,31,.5), rgba(16,26,43,.16) 45%, transparent) 1",
+          }}
+        >
           {grouped.map(([label, group]) => (
             <section key={label}>
-              <h2 className="mb-5 font-mono text-[12px] uppercase tracking-[0.16em] text-sub">
+              <h2 className="mb-5 font-mono text-[12px] uppercase tracking-[0.18em] text-sub">
                 {label}
               </h2>
-              <div className="space-y-6">
-                {group.map((m) => (
+              <div className="space-y-5">
+                {group.map((m, i) => (
                   <div key={m.id} className="relative">
-                    <span className="absolute -left-[29px] top-2 h-2 w-2 rounded-full bg-live" />
-                    <Card accent={m.importance >= 8}>
+                    <span
+                      className="absolute -left-[33px] top-6 h-2.5 w-2.5 rounded-full bg-live"
+                      style={{ boxShadow: "0 0 0 4px rgba(180,103,31,.14)" }}
+                    />
+                    <Card accent={m.importance >= 8} delay={i * 60}>
                       <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
                         <span className="font-mono text-[12px] text-faint">
                           {formatKstYmd(m.occurredAt, ".")}
                         </span>
-                        <span className="border border-rule px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-sub">
+                        <span className="chip px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-sub">
                           {m.trigger}
                         </span>
                       </div>

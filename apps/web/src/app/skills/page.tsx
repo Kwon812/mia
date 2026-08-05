@@ -53,34 +53,41 @@ export default async function SkillsPage() {
             <section key={group.domain}>
               <MonoLabel>{DOMAIN_LABEL[group.domain] ?? group.domain}</MonoLabel>
               <div className="mt-3 flex flex-col gap-3">
-                {group.items.map((skill) => {
+                {group.items.map((skill, i) => {
                   const isNew = kstDaysSince(skill.firstUsedAt) < NEW_WINDOW_DAYS;
                   const barEndX = maxPoints > 0 ? 1 + (skill.points / maxPoints) * 198 : 1;
 
                   return (
-                    <Card key={skill.skillName}>
+                    <Card key={skill.skillName} accent={isNew} delay={i * 50}>
                       <div className="flex items-baseline justify-between gap-3">
                         <div className="flex items-center gap-2">
                           <span className="text-[15px] font-medium">
                             {skill.skillName}
                           </span>
                           {isNew && (
-                            <span className="rounded-sm bg-live-bg px-1.5 py-0.5 font-mono text-[10px] text-live">
+                            <span className="chip chip-warm px-2 py-0.5 font-mono text-[10px]">
                               NEW
                             </span>
                           )}
                         </div>
-                        <span className="font-mono text-[13.5px] text-ink">
+                        <span className="font-mono text-[14px] tracking-tight text-ink">
                           {skill.points}
                         </span>
                       </div>
 
+                      {/* 채워진 만큼 빛이 따뜻한 쪽에서 차가운 쪽으로 번진다 */}
                       <svg
                         viewBox="0 0 200 10"
                         preserveAspectRatio="none"
                         className="mt-2.5 h-2 w-full"
                         aria-hidden="true"
                       >
+                        <defs>
+                          <linearGradient id={`na-bar-${group.domain}`} x1="0" y1="0" x2="1" y2="0">
+                            <stop offset="0%" stopColor="var(--color-live)" />
+                            <stop offset="100%" stopColor="var(--color-cool)" />
+                          </linearGradient>
+                        </defs>
                         <line
                           x1="1"
                           y1="5"
@@ -95,7 +102,7 @@ export default async function SkillsPage() {
                           y1="5"
                           x2={barEndX}
                           y2="5"
-                          stroke="var(--color-live)"
+                          stroke={`url(#na-bar-${group.domain})`}
                           strokeWidth="6"
                           strokeLinecap="round"
                         />

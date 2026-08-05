@@ -36,24 +36,38 @@ export default async function DiaryPage() {
           아직 일기가 없어. 오늘 밤 첫 장이 쓰일 거야.
         </p>
       ) : (
-        <div className="divide-y divide-rule">
-          {logs.map((log) => (
-            <article key={log.logDate} className="py-6 first:pt-0">
-              <div className="mb-2.5 flex items-center gap-3">
+        <div className="flex flex-col gap-3">
+          {logs.map((log, i) => (
+            <article
+              key={log.logDate}
+              className="glass na-rise p-5"
+              style={{ "--na-delay": `${i * 60}ms` } as React.CSSProperties}
+            >
+              <div className="mb-2.5 flex items-center gap-2.5">
                 <time className="font-mono text-[12px] text-faint">
                   {formatDotDate(log.logDate)}
                 </time>
                 {log.emotion && (
-                  <span className="bg-live-bg px-2 py-0.5 font-mono text-[11px] text-live">
+                  <span className="chip chip-warm px-2.5 py-0.5 font-mono text-[11px]">
                     {log.emotion}
                   </span>
                 )}
               </div>
               <Dialogue text={log.summary} size="sm" />
               {(log.learned?.length ?? 0) > 0 && (
-                <p className="mt-2.5 font-mono text-[11.5px] text-faint">
-                  배운 것: {log.learned!.join(", ")}
-                </p>
+                <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
+                  <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-faint">
+                    배운 것
+                  </span>
+                  {log.learned!.map((item) => (
+                    <span
+                      key={item}
+                      className="chip chip-cool px-2 py-0.5 font-mono text-[11px]"
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
               )}
             </article>
           ))}

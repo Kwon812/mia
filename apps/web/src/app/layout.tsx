@@ -31,14 +31,24 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
         />
       </head>
-      <body className="min-h-full flex flex-col antialiased">
+      <body className="flex min-h-full flex-col antialiased">
+        {/* 고정 광원. 유리 패널이 굴절시킬 대상이라 스크롤과 무관하게 제자리에 있다. */}
+        <div className="na-field" aria-hidden="true" />
+
         <SiteNav />
-        <main className="mx-auto w-full max-w-3xl flex-1 px-5 pb-24 pt-10 sm:px-6">
+
+        <main className="mx-auto w-full max-w-3xl flex-1 px-5 pb-28 pt-8 sm:px-6">
           {children}
         </main>
-        <footer className="border-t border-rule">
-          <div className="mx-auto max-w-3xl px-5 py-6 font-mono text-[11px] tracking-wider text-faint sm:px-6">
-            PROJECT NA
+
+        <footer className="mx-auto w-full max-w-3xl px-5 pb-8 sm:px-6">
+          <div className="flex items-baseline justify-between border-t border-rule pt-5">
+            <span className="font-mono text-[11px] tracking-[0.2em] text-faint">
+              PROJECT NA
+            </span>
+            <span className="font-mono text-[11px] text-faint">
+              현실의 나를 통해 성장하는 AI
+            </span>
           </div>
         </footer>
       </body>

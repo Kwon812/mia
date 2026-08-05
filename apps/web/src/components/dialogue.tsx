@@ -11,8 +11,8 @@ export function Dialogue({
     <p
       className={
         size === "lg"
-          ? "font-serif text-[19px] leading-[1.7] text-ink"
-          : "font-serif text-[15.5px] leading-[1.65] text-ink"
+          ? "text-balance font-serif text-[20px] leading-[1.72] text-ink"
+          : "font-serif text-[15.5px] leading-[1.68] text-ink"
       }
     >
       {text}
