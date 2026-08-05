@@ -524,9 +524,11 @@ export function OrbitalMap({
       //   satT — 포커스 안의 위성(경험). 겨누고 있을 때만 멈춘다.
       // 예전에는 하나였다. 그래서 포커스에 들어가는 순간 위성까지 같이 얼어
       // 근거가 도는 게 아니라 박혀 있었다 — 멈춰야 하는 건 배경이지 대상이 아니다.
-      // 전환 중에도 멈춘 채로 둔다. 돌아오는 동안 계가 돌면 착지점이 계속
-      // 움직여, 어디로 돌아가는지가 안 읽힌다.
-      const scaleTarget = hovered || focusRef.current || ft > 0.02 ? 0 : 1;
+      // 전환 중에는 멈추지 않는다. 초점을 매 프레임 다시 구하므로 착지점이
+      // 움직여도 인수인계가 어긋나지 않는다 — 얼려둘 이유가 없다.
+      // 빠져나오는 순간부터 계가 다시 돌기 시작하고, 돌아가는 천체는 제자리가
+      // 아니라 "지금 있어야 할 자리"로 날아간다. 그게 궤도다.
+      const scaleTarget = hovered || focusRef.current ? 0 : 1;
       tScale += (scaleTarget - tScale) * 0.16;
       simT += dt * tScale;
       const satTarget = hovered ? 0 : 1;
