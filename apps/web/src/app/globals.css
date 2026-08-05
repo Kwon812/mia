@@ -172,7 +172,9 @@ body {
   display: block;
   width: 100%;
   height: 100%;
-  cursor: crosshair;
+  /* 커서는 캔버스가 직접 그린다. OS 커서를 코드로 옮길 수는 없으니
+     빨려드는 조준점은 그리는 수밖에 없고, 둘이 같이 보이면 어긋나 보인다. */
+  cursor: none;
 }
 
 /* 천체에 커서를 얹었을 때 뜨는 판독값 */

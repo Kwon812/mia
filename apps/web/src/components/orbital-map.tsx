@@ -165,6 +165,16 @@ const radiusOf = (ageDays: number) => 0.16 + Math.log1p(ageDays) * 0.3;
 /** 케플러 제3법칙. 최근 것이 1분쯤에 한 바퀴, 오래된 것은 훨씬 느리게. */
 const speedOf = (a: number) => 0.012 / Math.pow(a, 1.5);
 
+/** 붙잡는 범위. 천체의 판정 반경을 이만큼 넓혀 조준점을 끌어당긴다.
+ *  너무 키우면 화면이 온통 자석이 되어 빈 곳을 눌러 빠져나올 수가 없다. */
+const CAPTURE = 2.4;
+
+/** 끌림의 세기. 거리비 t(0=중심, 1=경계)를 0~1 로 바꾼다.
+ *  지수를 1 보다 크게 잡으면 안쪽에서만 급히 당기고 가장자리에서는 거의
+ *  안 움직여, 자석이 아니라 "닿으면 달라붙는 것"이 된다. 1 보다 작게 잡아야
+ *  범위 안에 들어서는 순간부터 끌려오고 경계에서 부드럽게 풀린다. */
+const pullAt = (t: number) => Math.pow(1 - Math.min(1, Math.max(0, t)), 0.45);
+
 // 궤도면을 위에서 살짝 기울여 본다. 3D 를 쓰지 않고 깊이를 만드는 방법.
 const FLATTEN = 0.46;
 
@@ -282,6 +292,10 @@ export function OrbitalMap({
     let raf = 0;
     let mouse: { x: number; y: number } | null = null;
     let hovered: string | null = null;
+    // 조준점. 실제 커서는 숨기고 이걸 그린다 — OS 커서를 코드로 옮기는 방법은
+    // 없으니, 빨려드는 느낌은 화면에 그리는 수밖에 없다.
+    let aim: { x: number; y: number } | null = null;
+    let grab = 0; // 0 = 자유, 1 = 붙잡힘. 사이 값이 끌려가는 중이다.
     // 포커스 전환 진행도. 0 = 계 전체, 1 = 기억 하나에 붙음.
     let ft = 0;
     // 시간 배율. 무언가를 겨누고 있으면 계가 멈춘다 —
@@ -426,6 +440,47 @@ export function OrbitalMap({
         }
       }
       raf = requestAnimationFrame(frame);
+    }
+
+    /** 조준점. 자유로울 때는 작은 십자, 붙잡히면 고리가 조여들며 색이 켜진다.
+     *  대상 위에 정확히 겹치므로 고리는 천체보다 조금 크게 남겨 가리지 않는다. */
+    function drawAim() {
+      if (!aim) return;
+      const g = grab;
+      ctx!.save();
+      ctx!.strokeStyle = `rgba(99,230,210,${0.35 + g * 0.55})`;
+      ctx!.lineWidth = 1;
+
+      if (g > 0.02) {
+        // 붙잡힘 — 고리. 조여들수록 작아진다.
+        const r = 22 - g * 8;
+        ctx!.globalAlpha = g;
+        ctx!.beginPath();
+        ctx!.arc(aim.x, aim.y, r, 0, Math.PI * 2);
+        ctx!.stroke();
+        // 네 방향 짧은 눈금 — 고리만 있으면 후광과 섞여 안 보인다
+        for (let i = 0; i < 4; i++) {
+          const a = (i * Math.PI) / 2;
+          ctx!.beginPath();
+          ctx!.moveTo(aim.x + Math.cos(a) * (r + 3), aim.y + Math.sin(a) * (r + 3));
+          ctx!.lineTo(aim.x + Math.cos(a) * (r + 7), aim.y + Math.sin(a) * (r + 7));
+          ctx!.stroke();
+        }
+      }
+
+      // 자유로울 때의 십자. 붙잡히면 옅어진다.
+      ctx!.globalAlpha = 1 - g * 0.75;
+      ctx!.beginPath();
+      ctx!.moveTo(aim.x - 6, aim.y);
+      ctx!.lineTo(aim.x - 2, aim.y);
+      ctx!.moveTo(aim.x + 2, aim.y);
+      ctx!.lineTo(aim.x + 6, aim.y);
+      ctx!.moveTo(aim.x, aim.y - 6);
+      ctx!.lineTo(aim.x, aim.y - 2);
+      ctx!.moveTo(aim.x, aim.y + 2);
+      ctx!.lineTo(aim.x, aim.y + 6);
+      ctx!.stroke();
+      ctx!.restore();
     }
 
     function step(now: number) {
@@ -735,20 +790,26 @@ export function OrbitalMap({
       }
 
       // ── 판독 대상 ──
-      let found: string | null = null;
+      const near = mouse ? nearest(mouse) : null;
+      const found: string | null = near?.id ?? null;
+
+      // ── 조준점 ──
+      // 붙잡힘의 세기는 거리에 반비례한다. 가장자리에서는 거의 안 끌리고
+      // 안으로 들어올수록 급히 빨려든다 — 경계에서 딱 달라붙으면 튀어 보인다.
       if (mouse) {
-        let best = Infinity;
-        for (const [id, p] of hit) {
-          const d = Math.hypot(p.x - mouse.x, p.y - mouse.y);
-          if (d < p.r && d < best) {
-            best = d;
-            found = id;
-          }
-        }
+        const pull = near ? pullAt(near.d / (near.p.r * CAPTURE)) : 0;
+        grab += (pull - grab) * (reduced ? 1 : 0.28);
+        const tx = near ? mouse.x + (near.p.x - mouse.x) * grab : mouse.x;
+        const ty = near ? mouse.y + (near.p.y - mouse.y) * grab : mouse.y;
+        aim = aim && !reduced
+          ? { x: aim.x + (tx - aim.x) * 0.42, y: aim.y + (ty - aim.y) * 0.42 }
+          : { x: tx, y: ty };
+      } else {
+        aim = null;
+        grab = 0;
       }
       if (found !== hovered) {
         hovered = found;
-        canvas!.style.cursor = found ? "pointer" : "crosshair";
         const p = found ? hit.get(found) : null;
         if (!found || !p) setProbe(null);
         else if (p.kind === "maxis") {
@@ -793,6 +854,8 @@ export function OrbitalMap({
         probeRef.current.style.transform = `translate(${p.x + 18}px, ${p.y - 12}px)`;
       }
 
+      // 조준점은 마지막에. 무엇보다 위에 있어야 가려지지 않는다.
+      drawAim();
     }
 
     function onMove(e: MouseEvent) {
@@ -806,16 +869,24 @@ export function OrbitalMap({
     // 마우스를 옮기자마자 누르면 아직 프레임이 안 돌아 null 인 채로 남는다 —
     // 빠르게 움직여 누르는 사용자에게는 클릭이 통째로 씹힌다.
     function pickAt(pt: { x: number; y: number }): string | null {
+      return nearest(pt)?.id ?? null;
+    }
+
+    /** 가장 가까운 대상과 그 거리. 판정 반경을 CAPTURE 배로 넓혀 잡는다 —
+     *  조준점이 빨려드는 범위와 실제로 눌리는 범위가 다르면, 붙잡힌 것처럼
+     *  보이는데 클릭은 빗나가는 최악의 상태가 된다. 하나의 값으로 둘 다 쓴다. */
+    function nearest(pt: { x: number; y: number }) {
       let best = Infinity;
-      let found: string | null = null;
+      let found: { id: string; p: (typeof hit) extends Map<string, infer V> ? V : never } | null =
+        null;
       for (const [id, p] of hit) {
         const d = Math.hypot(p.x - pt.x, p.y - pt.y);
-        if (d < p.r && d < best) {
+        if (d < p.r * CAPTURE && d < best) {
           best = d;
-          found = id;
+          found = { id, p };
         }
       }
-      return found;
+      return found ? { ...found, d: best } : null;
     }
 
     // 클릭 좌표는 이벤트에서 직접 읽는다. 마지막으로 기록된 mouse 를 쓰면
