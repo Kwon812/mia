@@ -11,33 +11,12 @@ import { characters, dialogues, experiences, sessions } from '@na/db';
 import type { StateResponse } from '@na/shared';
 import { db } from '@/lib/db';
 import { getUserByExtensionKey } from '@/lib/api-auth';
+import { getKstDayBoundary } from '@/lib/date';
 
-const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
-const DAY_MS = 24 * 60 * 60 * 1000;
+// "오늘" 경계는 lib/date.ts 의 getKstDayBoundary 를 단일 소스로 쓴다
+// (KST 새벽 4시 — 계획서 04장 day 규칙. 중복 구현 금지).
+const DAY_MS = 24 * 60 * 60 * 1000; // days_together 계산용 (24시간 단위)
 
-// "오늘"의 경계는 자정이 아니라 KST 새벽 4시다(계획서 04장 day 규칙).
-// 새벽 작업이 자정을 넘겨도 하루로 묶이게 하려는 의도.
-//
-// 구현: now 를 KST 오프셋만큼 밀어 "UTC 게터로 KST 벽시계 값을 읽는" 트릭을 쓴다.
-// 그 벽시계 시각이 4시 이전이면 전날 04:00 KST, 이후면 당일 04:00 KST 가 경계다.
-// 마지막에 다시 KST 오프셋을 빼서 실제 UTC 시각(Date)으로 되돌린다.
-function getKstDayBoundary(now = new Date()): Date {
-  const kstWallClock = new Date(now.getTime() + KST_OFFSET_MS);
-  const kstHour = kstWallClock.getUTCHours();
-  const dayOffset = kstHour < 4 ? -1 : 0;
-
-  const boundaryAsKstWallClock = Date.UTC(
-    kstWallClock.getUTCFullYear(),
-    kstWallClock.getUTCMonth(),
-    kstWallClock.getUTCDate() + dayOffset,
-    4,
-    0,
-    0,
-    0,
-  );
-
-  return new Date(boundaryAsKstWallClock - KST_OFFSET_MS);
-}
 
 export async function GET(req: Request) {
   try {

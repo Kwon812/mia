@@ -16,7 +16,6 @@ import type { SessionDraft, SessionPayloadLike } from './session';
 
 const ALARM_SESSION_CHECK = 'sessionCheck';
 const ALARM_RETRY = 'retry';
-const ALARM_DIARY = 'diary';
 
 // handleRetry(10분 알람)에서 'sending' 상태가 이 시간 이상 멈춰 있으면 고아로
 // 보고 재전송한다 (계획서 03장 "전송 안정성" — 응답 대기 중 상태를 메모리가
@@ -28,28 +27,15 @@ const STALE_SENDING_MS = 5 * 60 * 1000;
 // 초반 튜닝 기간에 특히 중요하다. retry 알람에서 기한 지난 것을 지운다.
 const ARCHIVE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 
-// 다음 새벽 3시(로컬 타임)의 epoch ms 를 계산한다.
-function nextThreeAm(): number {
-  const now = new Date();
-  const next = new Date(now);
-  next.setHours(3, 0, 0, 0);
-  if (next.getTime() <= now.getTime()) {
-    next.setDate(next.getDate() + 1);
-  }
-  return next.getTime();
-}
 
 function registerAlarms(): void {
   // 계획서 03장의 compress(5분) 알람은 없다 — 1차 압축은 content script 의
   // 10초 집계가, 2차 압축은 sessionCheck(1분)의 draft 흡수가 이미 담당한다.
   // rawEvents 는 흡수 즉시 삭제되므로 별도 압축 단계가 필요 없어졌다.
   void chrome.alarms.clear('compress'); // 구버전이 등록해둔 잔재 정리
+  void chrome.alarms.clear('diary'); // 일기는 서버 야간 배치 담당 — 확장 알람 불필요
   chrome.alarms.create(ALARM_SESSION_CHECK, { periodInMinutes: 1 });
   chrome.alarms.create(ALARM_RETRY, { periodInMinutes: 10 });
-  chrome.alarms.create(ALARM_DIARY, {
-    when: nextThreeAm(),
-    periodInMinutes: 1440,
-  });
 }
 
 async function registerExtensionKey(): Promise<void> {
@@ -233,10 +219,6 @@ async function handleRetry(): Promise<void> {
   }
 }
 
-async function handleDiary(): Promise<void> {
-  // TODO: 하루치 세션을 모아 다이어리 생성 요청을 서버로 보낸다.
-}
-
 /**
  * onStartup — 브라우저 재시작 시:
  * 1) 'sending' 으로 멈춰있던 고아 pending 을 'failed' 로 강등 (retry 알람이
@@ -275,9 +257,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       break;
     case ALARM_RETRY:
       void handleRetry();
-      break;
-    case ALARM_DIARY:
-      void handleDiary();
       break;
   }
 });

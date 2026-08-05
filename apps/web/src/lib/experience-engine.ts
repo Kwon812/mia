@@ -42,6 +42,12 @@ const MODEL = 'claude-haiku-4-5';
 
 const TOOL_NAME = 'record_experience';
 
+// 프롬프트에 넣는 날짜는 KST 달력일로 — UTC slice 를 쓰면 KST 새벽 사용이
+// 하루 이르게 표기되어 LLM 이 "어제 썼다"를 "그저께 썼다"로 오해한다.
+function kstYmd(date: Date): string {
+  return new Date(date.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 // v2 — compressed_log 에 검색 쿼리(queries)와 페이지 제목(segments[].title),
 // 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
 // (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
@@ -299,7 +305,7 @@ function buildUserMessage(
 ): string {
   const skillsList =
     existingSkills.length > 0
-      ? existingSkills.map((s) => `- ${s.name} (마지막 사용: ${s.lastUsedAt.toISOString().slice(0, 10)})`).join('\n')
+      ? existingSkills.map((s) => `- ${s.name} (마지막 사용: ${kstYmd(s.lastUsedAt)})`).join('\n')
       : '(아직 기록된 스킬 없음)';
 
   const recentList =
