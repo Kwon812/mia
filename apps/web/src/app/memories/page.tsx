@@ -1,10 +1,11 @@
 import { redirect } from "next/navigation";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
-import { experienceSkills, memories, userSkills } from "@na/db";
+import { and, desc, eq, isNull } from "drizzle-orm";
+import { memories } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { formatKstYmd, formatKstMonthLabel } from "@/lib/date";
 import { Head, Shell, Empty } from "@/components/shell";
+import { loadSkillsByMemory } from "@/lib/memory-skills";
 
 type Memory = Awaited<ReturnType<typeof loadMemories>>[number];
 
@@ -14,65 +15,6 @@ async function loadMemories(userId: string) {
     .from(memories)
     .where(and(eq(memories.userId, userId), isNull(memories.forgottenAt)))
     .orderBy(desc(memories.occurredAt));
-}
-
-/** 그 기억을 만든 경험에서 쓴 스킬 — 비중 순, 그때 처음이었는지 표시. */
-type MemorySkill = { name: string; weight: number; firstTime: boolean };
-
-/**
- * 기억마다 스킬 목록을 만든다.
- *
- * "그때 처음이었나"는 다시 계산하지 않는다 — user_skills.first_used_at 이
- * 그 스킬을 처음 쓴 세션의 시작 시각이고, experiences.occurred_at 도 같은
- * 값이다. 둘이 같으면 그 경험에서 처음 쓴 것이다. 과거 경험을 훑을 필요가 없다.
- *
- * 이 정보는 저장하지 않는다. 기억의 trigger 가 new_skill 이라는 사실만 남기고,
- * "무슨 스킬?"은 읽을 때 만든다 — 저장하면 재구축 때마다 어긋날 값이 하나 는다.
- */
-async function loadSkillsByMemory(
-  userId: string,
-  items: Memory[],
-): Promise<Map<string, MemorySkill[]>> {
-  const expIds = items.map((m) => m.experienceId).filter((id): id is string => id != null);
-  if (expIds.length === 0) return new Map();
-
-  const [rows, owned] = await Promise.all([
-    db
-      .select({
-        experienceId: experienceSkills.experienceId,
-        name: experienceSkills.skillName,
-        weight: experienceSkills.weight,
-      })
-      .from(experienceSkills)
-      .where(inArray(experienceSkills.experienceId, expIds)),
-    db
-      .select({ name: userSkills.skillName, firstUsedAt: userSkills.firstUsedAt })
-      .from(userSkills)
-      .where(eq(userSkills.userId, userId)),
-  ]);
-
-  const firstUsed = new Map(owned.map((s) => [s.name, s.firstUsedAt.getTime()]));
-  const occurredAt = new Map(
-    items.filter((m) => m.experienceId).map((m) => [m.experienceId!, m.occurredAt.getTime()]),
-  );
-
-  const byExp = new Map<string, MemorySkill[]>();
-  for (const r of rows) {
-    const list = byExp.get(r.experienceId) ?? [];
-    list.push({
-      name: r.name,
-      weight: r.weight,
-      firstTime: firstUsed.get(r.name) === occurredAt.get(r.experienceId),
-    });
-    byExp.set(r.experienceId, list);
-  }
-  for (const list of byExp.values()) list.sort((a, b) => b.weight - a.weight);
-
-  const byMemory = new Map<string, MemorySkill[]>();
-  for (const m of items) {
-    if (m.experienceId) byMemory.set(m.id, byExp.get(m.experienceId) ?? []);
-  }
-  return byMemory;
 }
 
 function groupByMonth(items: Memory[]): [string, Memory[]][] {

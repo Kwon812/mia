@@ -13,6 +13,7 @@ import { getCurrentUser } from "@/lib/current-user";
 import { getCurrentDialogueSlot, getKstDayBoundary, kstDaysTogether, DAY_MS } from "@/lib/date";
 import { deriveEmotion, type EmotionExperienceInput, type EmotionSkillInput } from "@/lib/emotion";
 import { effective, loadCorrections } from "@/lib/corrections";
+import { loadSkillsByMemory } from "@/lib/memory-skills";
 import { NameForm } from "@/components/name-form";
 import { MapStage } from "./map-stage";
 import type { AskQuestion } from "@/components/ask-card";
@@ -188,9 +189,12 @@ export default async function Home() {
   // 'thread_complete' 기억은 특히 한 경험이 아니라 그 작업 전체를 가리킨다.
   // 이미 불러온 expRows 안에서 찾으므로 추가 쿼리가 없다(그 대신 220건 상한
   // 바깥의 오래된 경험은 위성으로 나타나지 않는다 — 알려진 한계).
-  const moons: MemoryBody[] = memoryRows
-    .filter((m) => m.forgottenAt == null)
-    .map((m) => {
+  // 기억을 남긴 근거(무슨 스킬이 처음이었나). 지도의 판독값·상세 패널이 쓴다 —
+  // trigger=new_skill 만 보여주면 "무슨 스킬?"에 답하는 게 화면에 없다.
+  const liveMemories = memoryRows.filter((m) => m.forgottenAt == null);
+  const skillsByMemory = await loadSkillsByMemory(user.userId, liveMemories);
+
+  const moons: MemoryBody[] = liveMemories.map((m) => {
       const referenced = expRows.filter(
         (e) => e.id === m.experienceId || (m.threadId != null && e.threadId === m.threadId),
       );
@@ -206,6 +210,10 @@ export default async function Home() {
         ageDays: Math.max(0, (now - m.occurredAt.getTime()) / DAY_MS),
         referencedIds: referenced.map((e) => e.id),
         sourceId: m.experienceId,
+        skills: (skillsByMemory.get(m.id) ?? []).map((sk) => ({
+          name: sk.name,
+          firstTime: sk.firstTime,
+        })),
       };
     });
 

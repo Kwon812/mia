@@ -48,6 +48,9 @@ export type MemoryBody = {
   referencedIds: string[];
   /** 그중 이 기억을 실제로 만든 경험 (memories.experience_id). 나머지는 같은 작업에서 딸려온 것들 */
   sourceId: string | null;
+  /** 그 경험에서 쓴 스킬(비중 내림차순). firstTime 이 이 기억을 남긴 근거다 —
+   *  trigger=new_skill 만으로는 "무슨 스킬?"에 답할 수 없다. */
+  skills: { name: string; firstTime: boolean }[];
 };
 
 /**
@@ -279,9 +282,13 @@ export function OrbitalMap({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [probe, setProbe] = useState<{ x: number; y: number; text: string; sub: string } | null>(
-    null,
-  );
+  const [probe, setProbe] = useState<{
+    x: number;
+    y: number;
+    text: string;
+    sub: string;
+    skills?: { name: string; firstTime: boolean }[];
+  } | null>(null);
   const [focus, setFocus] = useState<OrbitBody | null>(null);
   const [picked, setPicked] = useState<Body | null>(null);
 
@@ -1035,6 +1042,9 @@ export function OrbitalMap({
               m.kind === "thread"
                 ? `갈래 · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건`
                 : `기억 · ${tag(m.trigger)} · 중요도 ${m.importance} · 근거 ${m.referencedIds.length}건`,
+            // 스킬을 먼저 보여주고 내용을 그 아래에 둔다 — trigger 가 왜
+            // 그 값인지(무슨 스킬이 처음이었나)를 제목보다 먼저 읽어야 한다.
+            skills: m.kind === "memory" ? m.skills : undefined,
           });
         } else {
           const b = byId.get(found)!;
@@ -1206,6 +1216,24 @@ export function OrbitalMap({
           style={{ transform: `translate(${probe.x + 18}px, ${probe.y - 12}px)` }}
         >
           <div className="readout mb-1.5 text-[11.5px] tracking-[0.16em] text-lum-3">{probe.sub}</div>
+          {/* 스킬을 위에, 내용을 아래에 둔다. 그 사이를 헤어라인으로 가른다 —
+              trigger 가 왜 그 값인지를 제목보다 먼저 읽어야 한다. */}
+          {probe.skills && probe.skills.length > 0 && (
+            <>
+              <div className="mb-2 flex flex-wrap gap-x-2 gap-y-1">
+                {probe.skills.map((sk) => (
+                  <span
+                    key={sk.name}
+                    className={`readout text-[11.5px] ${sk.firstTime ? "text-lum-0" : "text-lum-3"}`}
+                  >
+                    {sk.name}
+                    {sk.firstTime && <span className="ml-1 text-lum-2">처음</span>}
+                  </span>
+                ))}
+              </div>
+              <div className="mb-2 h-px" style={{ background: "rgba(160,185,220,0.16)" }} />
+            </>
+          )}
           <div className="font-sans text-[14.5px] leading-snug text-lum-0">{probe.text}</div>
         </div>
       )}
@@ -1220,7 +1248,37 @@ export function OrbitalMap({
                 : `${tag(focus.trigger)} · 근거 ${focus.referencedIds.length}건`}
             </div>
             <h2 className="text-[18px] font-medium text-lum-0">{focus.title}</h2>
-            {/*<p className="utterance mt-3 text-[15px] text-lum-1">{focus.body}</p>*/}
+
+            {/* 이 기억을 남긴 근거. 제목 바로 아래에 두고 본문과는 헤어라인으로
+                가른다 — 무엇이 처음이었나가 먼저, 무슨 일이 있었나가 그다음이다. */}
+            {focus.kind === "memory" && focus.skills.length > 0 && (
+              <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1.5">
+                {focus.skills.map((sk) => (
+                  <span
+                    key={sk.name}
+                    className={[
+                      "readout rounded-sm border px-1.5 py-0.5 text-[12px]",
+                      sk.firstTime
+                        ? "border-[rgba(160,185,220,0.34)] text-lum-0"
+                        : "border-[rgba(160,185,220,0.12)] text-lum-3",
+                    ].join(" ")}
+                  >
+                    {sk.name}
+                    {sk.firstTime && <span className="ml-1 text-lum-2">처음</span>}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {focus.kind === "memory" && focus.body && (
+              <>
+                <div
+                  className="mx-auto mt-5 h-px w-24"
+                  style={{ background: "rgba(160,185,220,0.16)" }}
+                />
+                <p className="utterance mt-4 text-[15px] text-lum-1">{focus.body}</p>
+              </>
+            )}
 
             {/* 색 범례 — 색만 칠하고 무슨 뜻인지 안 적으면 그냥 알록달록한 점이 된다.
                 무엇의 범례인지도 적어야 한다. 색점만 늘어놓으면 태그로 읽힌다. */}
