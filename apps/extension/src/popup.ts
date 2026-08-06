@@ -13,6 +13,16 @@ import type { SessionSnapshot } from './snapshot';
 // 남은 시간·경과 시간이 매초 흘러야 살아있는 화면이 된다.
 const REFRESH_MS = 1000;
 
+/** 마감 사유. 버려진 세션이 왜 그 길이였는지를 말해준다 —
+ *  switch 로 잘린 조각인지, 그냥 짧게 끝난 것인지. */
+const CLOSE_REASON_LABEL: Record<string, string> = {
+  idle: '무활동',
+  switch: '맥락이탈',
+  maxlen: '4시간',
+  day: '날짜경계',
+  shutdown: '종료',
+};
+
 const SKIP_REASON_LABEL: Record<string, string> = {
   too_short: '10분 미만',
   low_activity: '활동 점수 부족',
@@ -205,13 +215,14 @@ function renderFooter(root: HTMLElement, snap: SessionSnapshot): void {
   // 왜 버려졌는지까지 보여준다. 개수만으로는 손쓸 데를 못 찾는다 —
   // '10분 미만'이 쌓이면 세션이 잘게 끊기고 있다는 신호다(맥락 이탈 판정이
   // 예민하면 앞 조각이 10분을 못 채우고 통째로 사라진다).
-  const reasons = Object.entries(snap.queue.skipReasons ?? {}).sort((a, b) => b[1] - a[1]);
-  if (reasons.length > 0) {
+  for (const it of snap.queue.skippedItems ?? []) {
+    const t = new Date(it.at);
+    const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
     foot.append(
       el(
         'div',
         'foot-row foot-warn',
-        reasons.map(([r, n]) => `${SKIP_REASON_LABEL[r] ?? r} ${n}건`).join(' · '),
+        `${hm} · ${it.durationMin}분 · ${CLOSE_REASON_LABEL[it.closeReason] ?? it.closeReason} · ${SKIP_REASON_LABEL[it.skipReason] ?? it.skipReason}`,
       ),
     );
   }

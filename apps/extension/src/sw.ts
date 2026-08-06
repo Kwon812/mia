@@ -525,6 +525,16 @@ async function buildSessionSnapshot(now: number): Promise<SessionSnapshot> {
         if (a.skipReason) acc[a.skipReason] = (acc[a.skipReason] ?? 0) + 1;
         return acc;
       }, {}),
+      skippedItems: archived
+        .filter((a) => a.skipReason !== null)
+        .sort((a, b) => b.closedAt - a.closedAt)
+        .slice(0, 5)
+        .map((a) => ({
+          at: a.closedAt,
+          durationMin: Number(a.session?.duration_min ?? 0),
+          closeReason: String(a.session?.close_reason ?? '-'),
+          skipReason: a.skipReason as string,
+        })),
     },
     rawEvents: rawEventCount,
     connected: Boolean(extensionKey),

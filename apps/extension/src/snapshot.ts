@@ -51,6 +51,12 @@ export interface SnapshotQueue {
   /** 탈락 사유별 개수. 개수만 보면 "왜 버려졌나"를 알 수 없다 —
    *  10분 미만이 대부분이면 세션이 잘게 끊기고 있다는 뜻이라 규칙을 봐야 한다. */
   skipReasons: Record<string, number>;
+  /** 버려진 것들의 내역. 최근 것부터.
+   *
+   *  탈락 사유만으로는 손쓸 데를 못 정한다 — '10분 미만'이 switch 로 잘린
+   *  앞 조각이면 끊는 규칙이 작업을 죽인 것이고, 그냥 잠깐 훑고 만 것이면
+   *  버려지는 게 맞다. 마감 사유를 함께 봐야 그 둘이 갈린다. */
+  skippedItems: { at: number; durationMin: number; closeReason: string; skipReason: string }[];
 }
 
 export interface SessionSnapshot {
