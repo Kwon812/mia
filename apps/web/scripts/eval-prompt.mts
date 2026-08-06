@@ -292,17 +292,35 @@ async function run(c: Case) {
       domains: { 'github.com': 1800 }, compressedLog: { tags: [], queries: [], segments: [] } } as any,
     SKILLS as any,
     [
-      { summary: '고친 것', category: 'study', outcome: 'explore', corrected: true },
-      { summary: '안 고친 것', category: 'dev', outcome: 'success' },
+      { summary: '고친 것', category: 'study', outcome: 'explore', isFirstTime: true, corrected: true },
+      { summary: '안 고친 것', category: 'dev', outcome: 'success', isFirstTime: false },
     ] as any,
     [] as any,
   );
   const problems: string[] = [];
-  if (!msg.includes('[study/explore] [사람이 고침] 고친 것')) {
-    problems.push('교정된 경험에 [사람이 고침] 표시가 없다');
+  if (!msg.includes('[study/explore/처음] [사람이 고침] 고친 것')) {
+    problems.push('교정된 경험에 [사람이 고침] 표시 또는 is_first_time 이 없다');
   }
-  if (msg.includes('[dev/success] [사람이 고침]')) {
+  if (msg.includes('[dev/success/해봄] [사람이 고침]')) {
     problems.push('교정되지 않은 경험에 표시가 잘못 붙었다');
+  }
+
+  // 교정 패턴 집계 — 최근 3건 창에 갇히지 않는 유일한 경로라, 빠지면
+  // 사흘 전 교정이 모델에게 영영 안 보인다.
+  const withPatterns = buildUserMessage(
+    { primaryCategory: 'dev', durationMin: 30, closeReason: 'idle', activityScore: 360,
+      domains: { 'github.com': 1800 }, compressedLog: { tags: [], queries: [], segments: [] } } as any,
+    SKILLS as any, [] as any, [] as any,
+    [{ field: 'outcome', from: 'explore', to: 'stuck', count: 3 }] as any,
+  );
+  if (!withPatterns.includes('### 네가 바로잡힌 판정')) {
+    problems.push('교정 패턴 섹션이 없다');
+  }
+  if (!withPatterns.includes('outcome: explore → stuck (3회)')) {
+    problems.push('교정 패턴 줄 형식이 어긋났다');
+  }
+  if (msg.includes('### 네가 바로잡힌 판정')) {
+    problems.push('교정이 없는데 패턴 섹션이 붙었다');
   }
   if (problems.length > 0) {
     console.error('✗ 프롬프트 조립 검증 실패');

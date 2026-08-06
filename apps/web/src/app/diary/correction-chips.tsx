@@ -32,8 +32,16 @@ export function CorrectionChip({ experienceId, field, value, corrected }: Props)
   const { title, options } = FIELD_OPTIONS[field];
 
   function choose(next: string) {
-    setError(null);
     setOpen(false);
+    // 지금 값을 다시 누른 것은 교정이 아니다. 훑어보려고 열었다가 그대로
+    // 닫는 동작이 대부분이라, 이걸 기록하면 "사람이 보고 맞다고 했다"는
+    // 확인 라벨이 통째로 못 믿을 값이 된다.
+    //
+    // 의도가 분명한 확인은 캐릭터 질문(층 2)에서 받는다 — 그건 물음에 답한
+    // 것이라 훑어보다 누른 것과 섞이지 않는다.
+    if (next === value) return;
+
+    setError(null);
     startTransition(async () => {
       const res = await correctExperience(experienceId, field, next);
       if (res.error) setError(res.error);

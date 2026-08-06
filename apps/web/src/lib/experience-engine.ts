@@ -14,7 +14,7 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
 import {
   DIALOGUE_SLOTS,
   EXPERIENCE_OUTCOMES,
@@ -37,7 +37,13 @@ import {
   type ExperienceOutput,
 } from '@na/shared';
 import { db } from './db';
-import { effective, isCorrected, loadCorrections } from './corrections';
+import {
+  effective,
+  isCorrected,
+  loadCorrectionPatterns,
+  loadCorrections,
+  type CorrectionPattern,
+} from './corrections';
 import { calculateMemoryScore, type RecentExperienceSummary } from './memory-score';
 
 // ------------------------------------------------------------
@@ -107,6 +113,13 @@ compressed_log 에는 구간(segments)마다 도메인·카테고리·시각 외
 뜻이다. 같은 실수를 반복하지 마라 — 예를 들어 사람이 지난 경험의 outcome 을
 explore 에서 stuck 으로 고쳤다면, 이번에도 비슷한 상황에서 explore 로
 도망가고 있지 않은지 다시 보라.
+
+"### 네가 바로잡힌 판정" 이 있으면 그건 **네 판정 버릇의 통계**다. 개별 경험이
+아니라 "무엇을 무엇으로 몇 번 고쳤는가"의 분포이므로, 이번 세션의 내용과
+직접 연결짓지 마라. 대신 그 방향으로 기울어 있지 않은지 자신을 점검하는 데
+쓴다 — "outcome: explore → stuck (3회)" 라면, 이번에도 explore 를 고르려는
+순간 "정말 목표가 없었나, 아니면 판단이 안 서서 도망가는 중인가"를 되묻는다.
+횟수가 많을수록 그 버릇이 굳어 있다는 뜻이다.
 
 queries 는 문자열 목록이 아니라 {q, n, first, last} 객체 목록이다 — q 는 검색어, **n 은 그
 검색어가 반복된 횟수**, first/last 는 처음·마지막 등장 시각이다. **n 이 크고 first~last
@@ -430,6 +443,11 @@ interface RecentExperienceRow {
   summary: string;
   category: string;
   outcome: string | null;
+  /** 목록에 함께 적는다. 안 적으면 이 값만 교정됐을 때 [사람이 고침] 표시는
+   *  붙는데 줄에는 바뀐 게 하나도 안 보여, 모델이 무엇이 고쳐졌는지 알 수 없다.
+   *  is_first_time 은 기억(memories) 생성 경로를 여닫는 값이고 v3 에서 판정
+   *  기준을 완화한 자리라, 사람 교정이 특히 값진 필드이기도 하다. */
+  isFirstTime?: boolean;
   /** 이 경험의 판정을 사람이 고쳤는가. 프롬프트에서 declared 로 표시된다 —
    *  표시가 없으면 모델은 자기가 예전에 낸 값과 구분하지 못한다. */
   corrected?: boolean;
@@ -471,6 +489,9 @@ export function buildUserMessage(
   existingSkills: ExistingSkillRow[],
   recentExperiences: RecentExperienceRow[],
   activeThreads: ActiveThreadRow[],
+  /** 사람이 바로잡은 판정의 집계. 기본값이 빈 배열인 것은 재처리·평가
+   *  스크립트가 이 인자를 넘기지 않아도 돌게 하기 위함이다. */
+  correctionPatterns: CorrectionPattern[] = [],
 ): string {
   const skillsList =
     existingSkills.length > 0
@@ -485,10 +506,22 @@ export function buildUserMessage(
             // 사람이 정정한 값과 자기가 예전에 낸 값을 구분하지 못하고,
             // 프롬프트의 우선순위 규칙이 걸릴 대상 자체가 사라진다.
             const mark = e.corrected ? ' [사람이 고침]' : '';
-            return `${i + 1}. [${e.category}/${e.outcome ?? '-'}]${mark} ${e.summary}`;
+            // 교정 가능한 세 필드를 전부 적는다. 하나라도 빠지면 그 필드만
+            // 고쳤을 때 표시는 붙는데 줄은 그대로라, 무엇이 고쳐졌는지 알 수 없다.
+            const first = e.isFirstTime === undefined ? '' : `/${e.isFirstTime ? '처음' : '해봄'}`;
+            return `${i + 1}. [${e.category}/${e.outcome ?? '-'}${first}]${mark} ${e.summary}`;
           })
           .join('\n')
       : '(아직 기록된 경험 없음)';
+
+  // 개별 경험이 아니라 분포다. 최근 경험 3건 창에 교정이 갇히는 문제를 푼다 —
+  // 여긴 안 늙어서, 사흘 전에 고친 것도 계속 보인다.
+  const patternList =
+    correctionPatterns.length > 0
+      ? correctionPatterns
+          .map((p) => `- ${p.field}: ${p.from} → ${p.to} (${p.count}회)`)
+          .join('\n')
+      : null;
 
   return [
     '## 기존 컨텍스트',
@@ -498,6 +531,9 @@ export function buildUserMessage(
     '### 최근 경험 3건 (최신순)',
     recentList,
     '',
+    ...(patternList
+      ? ['### 네가 바로잡힌 판정 (사람이 고친 것)', patternList, '']
+      : []),
     '### 진행 중인 작업(thread) 목록 (최근 활동순, 최대 5개)',
     buildActiveThreadsList(activeThreads),
     '',
@@ -553,10 +589,16 @@ export async function processSession(sessionId: string, userId: string): Promise
         summary: experiences.summary,
         category: experiences.category,
         outcome: experiences.outcome,
+        isFirstTime: experiences.isFirstTime,
         occurredAt: experiences.occurredAt,
       })
       .from(experiences)
-      .where(eq(experiences.userId, userId))
+      // **이 세션보다 앞선 것만.** 확장이 오프라인이었다가 사흘 뒤에 세션을
+      // 보내면, 유저 조건만 걸었을 때 "최근 경험 3건"에 그 세션보다 나중에
+      // 일어난 경험이 들어간다 — 모델이 미래를 보고 판정하는 셈이다.
+      // dry-reprocess.mts 는 이미 같은 필터를 걸고 있어서, 이게 없으면
+      // 같은 세션을 재처리했을 때 라이브 때와 다른 컨텍스트로 판정된다.
+      .where(and(eq(experiences.userId, userId), lt(experiences.occurredAt, session.startedAt)))
       .orderBy(desc(experiences.occurredAt))
       .limit(3);
 
@@ -564,11 +606,16 @@ export async function processSession(sessionId: string, userId: string): Promise
     // 그대로고, 유효값은 읽을 때 만든다(lib/corrections.ts). 이걸 안 하면
     // 사용자가 어제 고쳐놓은 outcome 을 모델이 오늘 다시 자기 값으로 보고
     // 같은 실수를 반복한다 — 교정이 아무 데도 안 쓰이는 라벨 더미가 된다.
-    const recentCorrections = await loadCorrections(recentExperienceRows.map((e) => e.id));
+    const [recentCorrections, correctionPatterns] = await Promise.all([
+      loadCorrections(recentExperienceRows.map((e) => e.id)),
+      loadCorrectionPatterns(userId),
+    ]);
     const recentForPrompt: RecentExperienceRow[] = recentExperienceRows.map((e) => ({
       summary: e.summary,
       category: effective(recentCorrections, e.id, 'category', e.category),
       outcome: effective(recentCorrections, e.id, 'outcome', e.outcome ?? ''),
+      isFirstTime:
+        effective(recentCorrections, e.id, 'is_first_time', String(e.isFirstTime)) === 'true',
       corrected:
         isCorrected(recentCorrections, e.id, 'category') ||
         isCorrected(recentCorrections, e.id, 'outcome') ||
@@ -652,7 +699,13 @@ export async function processSession(sessionId: string, userId: string): Promise
       messages: [
         {
           role: 'user',
-          content: buildUserMessage(sessionForPrompt, skillRowsForPrompt, recentForPrompt, activeThreadRows),
+          content: buildUserMessage(
+            sessionForPrompt,
+            skillRowsForPrompt,
+            recentForPrompt,
+            activeThreadRows,
+            correctionPatterns,
+          ),
         },
       ],
     });

@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { getCurrentDialogueSlot, getKstDayBoundary, kstDaysTogether, DAY_MS } from "@/lib/date";
 import { deriveEmotion, type EmotionExperienceInput, type EmotionSkillInput } from "@/lib/emotion";
+import { effective, loadCorrections } from "@/lib/corrections";
 import { NameForm } from "@/components/name-form";
 import { MapStage } from "./map-stage";
 import type { AskQuestion } from "@/components/ask-card";
@@ -109,10 +110,19 @@ export default async function Home() {
     skillNamesByExperience.set(row.experienceId, list);
   }
 
+  // 사람이 고친 판정을 겹친다. 이게 없으면 /diary 에서 "이건 막힌 게 아니라
+  // 해낸 거야"라고 세 건을 고쳐도 홈의 캐릭터는 계속 답답해한다
+  // (emotion.ts 의 stuck 3연속 규칙이 원본 outcome 을 본다). 고쳐도 아무것도
+  // 안 달라지면 아무도 안 누르고, 그러면 declared 가 쌓이지 않는다.
+  const homeCorrections = await loadCorrections([
+    ...new Set([...recentExperienceRows.map((e) => e.id), ...expRows.map((e) => e.id)]),
+  ]);
+
   const emotionExperiences: EmotionExperienceInput[] = recentExperienceRows.map((e) => ({
     occurredAt: e.occurredAt,
-    outcome: e.outcome,
-    isFirstTime: e.isFirstTime,
+    outcome: effective(homeCorrections, e.id, "outcome", e.outcome),
+    isFirstTime:
+      effective(homeCorrections, e.id, "is_first_time", String(e.isFirstTime)) === "true",
     skillNames: skillNamesByExperience.get(e.id) ?? [],
   }));
 
@@ -156,11 +166,12 @@ export default async function Home() {
     summary: e.summary,
     occurredAt: e.occurredAt.getTime(),
     ageDays: Math.max(0, (now - e.occurredAt.getTime()) / DAY_MS),
-    outcome: e.outcome,
-    category: e.category,
+    outcome: effective(homeCorrections, e.id, "outcome", e.outcome),
+    category: effective(homeCorrections, e.id, "category", e.category),
     memoryScore: e.memoryScore,
     threadId: e.threadId,
-    isFirstTime: e.isFirstTime,
+    isFirstTime:
+      effective(homeCorrections, e.id, "is_first_time", String(e.isFirstTime)) === "true",
     remembered: memoryByExp.has(e.id),
     forgotten: memoryByExp.get(e.id) != null,
   }));
