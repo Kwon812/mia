@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+const env = fs.readFileSync('../web/.env.local', 'utf8');
+const pick = (k: string) => env.match(new RegExp(`${k}="?([^"\n]+)"?`))?.[1] ?? '';
+process.env.DATABASE_URL = pick('DATABASE_URL');
+process.env.ANTHROPIC_API_KEY = pick('ANTHROPIC_API_KEY');
+const { createDb } = await import('@na/db');
+const { recomputePersonality } = await import('./src/jobs/personality');
+const { refreshCharacterCache } = await import('./src/jobs/character-cache');
+const db = createDb(process.env.DATABASE_URL!);
+await recomputePersonality(db);
+await refreshCharacterCache(db);

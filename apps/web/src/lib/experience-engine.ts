@@ -68,33 +68,6 @@ function kstYmd(date: Date): string {
   return new Date(date.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-/**
- * 마지막 글자에 받침이 있는가 — 조사(을/를) 선택에 쓴다.
- *
- * 스킬 이름은 사용자·모델이 자유롭게 쓰는 값이라 한글·영문·숫자가 다 온다.
- *   한글  유니코드 음절에서 종성을 직접 계산한다(정확).
- *   영문  한국어로 읽었을 때 받침으로 끝나는 글자만 추린다 — Python(파이썬),
- *         Vercel(베르셀), npm(엔피엠). 나머지는 대개 모음으로 끝난다
- *         (Docker→도커, React→리액트, Supabase→수파베이스). **추정이라 완벽하지
- *         않다**(ZEP→젭 은 받침인데 p 라 놓친다). 조사 하나가 어색해질 뿐이라
- *         감수한다 — 이걸 정확히 하려면 발음 사전이 필요하다.
- *   숫자  읽는 소리 기준(1 일, 3 삼, 6 육, 7 칠, 8 팔, 0 영 → 받침).
- */
-function hasFinalConsonant(word: string): boolean {
-  const c = word.trim().slice(-1);
-  if (!c) return false;
-  const code = c.charCodeAt(0);
-  if (code >= 0xac00 && code <= 0xd7a3) return (code - 0xac00) % 28 !== 0;
-  if (/[0-9]/.test(c)) return '136780'.includes(c);
-  if (/[a-zA-Z]/.test(c)) return 'nmlNML'.includes(c);
-  return false;
-}
-
-/** "Supabase를", "Python을" — 목적격 조사를 붙인다. */
-function withObjectParticle(word: string): string {
-  return `${word}${hasFinalConsonant(word) ? '을' : '를'}`;
-}
-
 // v3 — 두 가지를 고쳤다. 둘 다 "기준을 안 주면 모델은 가장 안전한 값으로 도망간다"는
 //      같은 실패였다.
 //      (1) is_first_time 판정 완화. v2 까지는 이 값이 거의 true 로 나오지 않아
@@ -849,9 +822,35 @@ export async function processSession(sessionId: string, userId: string): Promise
       .map((sk) => sk.name);
     const dormantSkillReturned = dormantSkillNames.length > 0;
 
+    /**
+     * "이번에 처음 다뤘나" — **규칙이 먼저고 모델이 보탠다.**
+     *
+     * 프롬프트가 이 값의 기준을 "보유 스킬 목록에 없던 것을 다뤘는가"로
+     * 정의했는데, 그건 추론이 아니라 **비교 연산**이다. 그런데 모델에게
+     * 물어보니 실측 5/5 로 어긋났다 — 심지어 보유 목록이 **텅 빈 첫 경험**
+     * 에서도 false 를 냈다. 규칙대로면 무조건 true 여야 하는 자리다.
+     *
+     * 모델은 대신 "이 사람에게 이 행위가 생애 처음인가"를 판단하고 있었다.
+     * 프롬프트의 "…없던 것을 이번에 **처음 시도했으면**" 이라는 표현과
+     * "도구뿐 아니라 주제·방식·환경도 대상이다" 라는 완화 문장이 기계적
+     * 기준을 주관적 판단으로 바꿔놓은 탓이다. v3 에서 인색함을 풀려고 넣은
+     * 문장이 오히려 본래 기준을 잡아먹었다(v2 6건 연속 false → v3 14건 연속 false).
+     *
+     * 그 결과 이 컬럼에 매달린 것들이 전부 죽어 있었다 —
+     *   기억 점수 +40 이 안 붙어 신규 스킬만으론 문턱(60)을 못 넘고,
+     *   감정 '흥분'(emotion.ts)이 발동하지 않고,
+     *   성격의 개척형↔숙련형 축(personality.ts)이 항상 숙련형 극단에 고정된다.
+     *   사흘에 스킬 8개가 새로 생긴 사용자가 "숙련형"으로 판정됐다.
+     *
+     * 프롬프트를 또 고치는 건 이미 한 번 실패한 방법이다. 확실히 아는 부분은
+     * 규칙이 채우고, 모델은 **규칙이 못 보는 것**(주제·방식·환경)만 보탠다.
+     * 그때 비로소 "도구뿐 아니라" 문장이 제 역할을 한다.
+     */
+    const isFirstTime = hasNewSkill || output.is_first_time;
+
     const memoryScoreResult = calculateMemoryScore({
       hasNewSkill,
-      isFirstTime: output.is_first_time,
+      isFirstTime,
       brokeThrough,
       dormantSkillReturned,
       daysSinceLastExperience,
@@ -895,7 +894,7 @@ export async function processSession(sessionId: string, userId: string): Promise
           detail: output.detail ?? null,
           category: output.category,
           outcome: output.outcome,
-          isFirstTime: output.is_first_time,
+          isFirstTime,
           memoryScore: memoryScoreResult.score,
         })
         .onConflictDoNothing({ target: experiences.sessionId })
@@ -1010,29 +1009,10 @@ export async function processSession(sessionId: string, userId: string): Promise
       // body·중요도). 지도에서 크기·반경·위성이 전부 같은 쌍둥이 둘이 된다.
       let newMemoriesCount = 0;
 
-      // 이 기억이 **왜 남았는지**를 한 문장으로. 두 블록이 함께 쓴다.
-      //
-      // 예전에는 title 이 output.summary 복사본이라, trigger 가 new_skill 인데
-      // 정작 무슨 스킬이 처음이었는지가 제목에 한 글자도 없었다(실측:
-      // trigger=new_skill · 신규=ZEP 메타버스 인데 제목은 "Army Sim 프로젝트를
-      // 확인한 후 …"). /memories 에서 태그와 요약문이 나란히 뜨는데 "무슨
-      // 스킬?"에 답하는 게 화면 어디에도 없었다.
-      //
-      // 규칙이 이미 아는 값을 쓸 뿐이라 LLM 호출이 늘지 않는다.
+      // 어느 규칙이 이 기억을 만들었는지가 곧 trigger 이고, 그 근거(무슨 스킬이
+      // 처음이었나)는 저장하지 않는다 — user_skills.first_used_at 이 그 경험
+      // 시각과 같으면 그때 처음 쓴 스킬이라, 화면이 읽을 때 정확히 가려낸다.
       const bd = memoryScoreResult.breakdown;
-      const firstSkill = newSkillNames[0] ?? primarySkillName;
-      const reason =
-        bd.hasNewSkill || bd.isFirstTime
-          ? firstSkill
-            ? `${withObjectParticle(firstSkill)} 처음 써봤다`
-            : '처음 해보는 것을 다뤘다'
-          : bd.brokeThrough
-            ? primarySkillName
-              ? `${primarySkillName}에서 막혔던 것을 뚫었다`
-              : '막혔던 것을 뚫었다'
-            : bd.dormantSkillReturned && dormantSkillNames[0]
-              ? `오랜만에 ${withObjectParticle(dormantSkillNames[0])} 다시 꺼냈다`
-              : null; // comeback 은 스킬이 아니라 공백 후 복귀라 붙일 이름이 없다
 
       // 강등된 attach 의 completed 는 무시한다. LLM 은 "그 기존 작업이 끝났다"고
       // 말한 것인데 그 작업은 존재하지 않았다 — 방금 만든 새 thread 를 즉시
@@ -1045,10 +1025,10 @@ export async function processSession(sessionId: string, userId: string): Promise
           threadId,
           experienceId: insertedExperience.id,
           occurredAt: session.startedAt,
-          // 완결 사실 + 그 과정에서 무엇이 처음이었나. 둘 다 한 줄에 담아
-          // 기억을 하나로 유지한다. trigger 는 thread_complete 로 둔다 —
-          // 완결이 더 큰 사건이라 궤도 방향은 그쪽이 맞다.
-          title: (reason ? `${threadTitle} · ${reason}` : threadTitle).slice(0, MAX_SUMMARY_LEN),
+          // 제목은 갈래 이름만. 무엇이 처음이었나는 화면이 스킬 칩으로 따로
+          // 보여준다(/memories) — 제목에 욱여넣으면 두 정보가 한 줄에 뭉쳐
+          // 어느 쪽도 안 읽힌다.
+          title: threadTitle.slice(0, MAX_SUMMARY_LEN),
           body: output.detail ?? output.summary,
           importance: clampImportance(memoryScoreResult.score),
           trigger: 'thread_complete',
@@ -1065,10 +1045,10 @@ export async function processSession(sessionId: string, userId: string): Promise
               ? 'revival'
               : 'comeback';
 
-        // 근거를 앞에 두고 요약을 뒤에 붙여, 목록에서 훑을 때의 맥락도 잃지 않는다.
-        const memoryTitle = (
-          reason ? `${reason} · ${output.summary}` : output.summary
-        ).slice(0, MAX_SUMMARY_LEN);
+        // 제목은 요약만. 근거(무슨 스킬이 처음이었나)는 화면이 칩으로 따로
+        // 보여준다 — user_skills.first_used_at 이 그 경험 시각과 같으면
+        // 그때 처음 쓴 스킬이라, 화면에서 추가 저장 없이 정확히 가려낼 수 있다.
+        const memoryTitle = output.summary.slice(0, MAX_SUMMARY_LEN);
 
         await tx.insert(memories).values({
           userId,
