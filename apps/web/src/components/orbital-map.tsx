@@ -77,9 +77,14 @@ export type ThreadBody = {
   experienceCount: number;
   /** 시작 시각 (반경의 근거) */
   occurredAt: number;
+  /** 완결 시각. active·abandoned 는 null */
+  completedAt: number | null;
   ageDays: number;
   /** 이 갈래에 속한 경험들 — 누르면 위성으로 펼쳐진다 */
   referencedIds: string[];
+  /** 이 갈래를 시작한 경험. 기억의 sourceId 와 같은 자리를 쓴다 —
+   *  펼쳤을 때 그 하나에 테두리가 그려진다. */
+  sourceId: string | null;
 };
 
 /** 주 궤도에 오르는 것들. 누르면 referencedIds 가 위성으로 펼쳐진다는 점이 같다. */
@@ -144,6 +149,9 @@ const SAT_FILL = 0.55;
  *  다른 어휘를 쓰게 되고, 값이 늘 때마다 번역을 빠뜨린다. 이 화면은 계기판이라
  *  등폭 대문자가 오히려 결에 맞는다. */
 const tag = (v: string | null | undefined) => (v ?? '—').toUpperCase();
+
+/** 에폭 ms → KST 날짜. 프로브와 상세가 같은 표기를 쓴다. */
+const ymd = (ms: number) => formatKstYmd(new Date(ms), ".");
 
 // 색 묶음. 카테고리는 열셋인데 검은 배경 위 작은 후광으로 구분되는 색은
 // 여덟이 한계다 — 열셋을 다 칠하면 서로 겹쳐 보여 색이 정보가 못 된다.
@@ -932,7 +940,10 @@ export function OrbitalMap({
       const ts = reduced ? 0 : satT;
 
       const target = focusRef.current ? 1 : 0;
-      ft += (target - ft) * 0.075;
+      // 들어갈 때와 나올 때의 속도를 나눈다. 들어가는 건 내가 고른 곳으로
+      // 가는 거라 빠른 게 시원한데, 나오는 건 "어디서 나왔는지"를 눈으로
+      // 따라가야 해서 같은 속도면 뚝 끊긴다.
+      ft += (target - ft) * (focusRef.current ? 0.075 : 0.04);
       if (Math.abs(target - ft) < 0.002) ft = target;
 
       // 관성. 손을 뗀 속도로 계속 미끄러지다 잦아든다. 감쇠도 프레임 수가
@@ -1138,7 +1149,9 @@ export function OrbitalMap({
             plane,
             ecc,
             color: colorOfCategory(b.category),
-            isSource: foc.kind === "memory" && b.id === foc.sourceId,
+            // 기억은 그 기억을 만든 경험, 갈래는 그 갈래를 시작한 경험.
+            // 둘 다 sourceId 한 자리를 쓴다.
+            isSource: b.id === foc.sourceId,
             x: cx + lx * pc - ly * ps,
             y: cy + lx * ps + ly * pc,
           };
@@ -1307,12 +1320,16 @@ export function OrbitalMap({
             text: clampSentence(m.title, PROBE_TEXT_LEN),
             sub:
               m.kind === "thread"
-                ? `갈래 · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건`
+                // 언제 시작해서 언제 끝났는지. 반경이 이미 "시작한 지"를
+                // 말하지만 그건 상대값이라, 날짜를 못 읽는다.
+                ? `갈래 · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)} 시작${
+                    m.completedAt ? ` → ${ymd(m.completedAt)} 완결` : ""
+                  }`
                 // '근거'가 아니라 '경험'이다. 근거는 이 기억을 만든 결정적인
                 // 경험 하나(sourceId)를 가리키는 말인데, 그건 펼친 화면 안에서
                 // 따로 드러난다. 여기 숫자는 같은 갈래에 속한 경험 전부라
                 // 근거라고 부르면 "결정적인 경험이 여섯 개"로 읽힌다.
-                : `기억 · ${tag(m.trigger)} · 중요도 ${m.importance} · 경험 ${m.referencedIds.length}건`,
+                : `기억 · ${tag(m.trigger)} · 중요도 ${m.importance} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)}`,
             // 스킬을 먼저 보여주고 내용을 그 아래에 둔다 — trigger 가 왜
             // 그 값인지(무슨 스킬이 처음이었나)를 제목보다 먼저 읽어야 한다.
             skills: m.kind === "memory" ? m.skills : undefined,
@@ -1680,8 +1697,10 @@ export function OrbitalMap({
           <div className="settle">
             <div className="tick mb-2">
               {focus.kind === "thread"
-                ? `갈래 · ${tag(focus.status)} · 경험 ${focus.referencedIds.length}건`
-                : `${tag(focus.trigger)} · 경험 ${focus.referencedIds.length}건`}
+                ? `갈래 · ${tag(focus.status)} · 경험 ${focus.referencedIds.length}건 · ${ymd(focus.occurredAt)} 시작${
+                    focus.completedAt ? ` → ${ymd(focus.completedAt)} 완결` : ""
+                  }`
+                : `${tag(focus.trigger)} · 경험 ${focus.referencedIds.length}건 · ${ymd(focus.occurredAt)}`}
             </div>
             <h2 className="text-[18px] font-medium text-lum-0">{focus.title}</h2>
 

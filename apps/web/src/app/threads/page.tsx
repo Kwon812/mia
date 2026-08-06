@@ -50,6 +50,7 @@ export default async function ThreadsPage() {
         status: threads.status,
         experienceCount: threads.experienceCount,
         startedAt: threads.startedAt,
+        completedAt: threads.completedAt,
       })
       .from(threads)
       .where(eq(threads.userId, user.userId))
@@ -120,8 +121,15 @@ export default async function ThreadsPage() {
     status: t.status,
     experienceCount: t.experienceCount,
     occurredAt: t.startedAt.getTime(),
+    completedAt: t.completedAt?.getTime() ?? null,
     ageDays: Math.max(0, (now - t.startedAt.getTime()) / DAY_MS),
     referencedIds: expIdsByThread.get(t.id) ?? [],
+    // 이 갈래를 시작한 경험 = 가장 오래된 것. expRows 가 occurred_at 내림차순
+    // 이라 목록의 마지막이 그것이다. 화면에서 테두리로 표시된다.
+    //
+    // threads.started_at 과 같은 시각이지만 저장하지는 않는다 — 재구축 때마다
+    // 어긋날 값이 하나 늘 뿐이고, 이미 있는 목록으로 정확히 계산된다.
+    sourceId: (expIdsByThread.get(t.id) ?? []).at(-1) ?? null,
   }));
 
   return (
