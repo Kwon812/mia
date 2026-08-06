@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { clampSentence } from "@na/shared";
+import { clampSentence, type ExperienceCategory } from "@na/shared";
 
 import { formatKstYmd } from "@/lib/date";
 
@@ -150,12 +150,7 @@ const tag = (v: string | null | undefined) => (v ?? '—').toUpperCase();
 // 드물게 나오는 것들을 한 색으로 모은다. 목록이 더 늘어도 묶음에 넣으면
 // 색 체계는 안 건드린다.
 // 두 가지를 피했다: 상호작용 색(#63E6D2, 청록)과 흰빛.
-export const CAT_GROUPS: {
-  key: string;
-  label: string;
-  cats: string[];
-  color: [number, number, number];
-}[] = [
+const CAT_GROUP_DEFS = [
   { key: 'dev', label: 'dev', cats: ['dev'], color: [130, 176, 235] },
   { key: 'docs', label: 'docs', cats: ['docs'], color: [230, 178, 96] },
   { key: 'study', label: 'study', cats: ['study'], color: [225, 130, 150] },
@@ -169,9 +164,46 @@ export const CAT_GROUPS: {
     color: [215, 140, 205],
   },
   { key: 'etc', label: 'etc', cats: ['search', 'etc'], color: [150, 165, 190] },
-];
+] as const satisfies readonly {
+  key: string;
+  label: string;
+  // string[] 이 아니라 enum 으로 좁힌다 — 오타('desing')나 없는 값('design')이
+  // 여기서 걸린다. 예전에는 그냥 통과해서 groupOfCategory 가 조용히 etc 로 떨궜다.
+  cats: readonly ExperienceCategory[];
+  color: readonly [number, number, number];
+}[];
 
-const GROUP_BY_CAT = new Map(CAT_GROUPS.flatMap((g) => g.cats.map((c) => [c, g] as const)));
+/** CAT_GROUPS 가 카테고리 열셋을 **남김없이** 덮는지 컴파일 타임에 확인한다.
+ *
+ *  안 덮인 값은 런타임에 조용히 etc 로 떨어진다 — 화면상 그 분야 전체가 방향도
+ *  색도 '기타'가 되는데 에러는 안 난다. EXPERIENCE_CATEGORIES 에 값을 하나
+ *  추가하고 여기 넣는 걸 잊으면 그 사고가 난다. 그래서 빌드가 먼저 깨지게 한다.
+ *
+ *  빠진 값이 있으면 아래 대입에서 "'빠진 category' 타입에 할당할 수 없다"가 뜨고,
+ *  에러 메시지에 빠진 이름이 그대로 찍힌다. */
+type UncoveredCategory = Exclude<
+  ExperienceCategory,
+  (typeof CAT_GROUP_DEFS)[number]['cats'][number]
+>;
+const _allCategoriesCovered: [UncoveredCategory] extends [never]
+  ? true
+  : ['CAT_GROUPS 에 빠진 category', UncoveredCategory] = true;
+void _allCategoriesCovered;
+
+// 리터럴 배열은 검사용이고, 밖으로는 지금까지와 같은 모양(쓰기 가능한 색 튜플)을
+// 내보낸다 — as const 의 readonly 가 캔버스 그리기 쪽까지 번지지 않게 한다.
+export const CAT_GROUPS: {
+  key: string;
+  label: string;
+  cats: readonly ExperienceCategory[];
+  color: [number, number, number];
+}[] = CAT_GROUP_DEFS.map((g) => ({ ...g, color: [...g.color] as [number, number, number] }));
+
+// 키는 일부러 string 이다. DB 의 category 는 열셋 enum 이지만 컬럼 자체는 자유
+// 텍스트라, 예전 데이터나 손으로 넣은 값이 들어와도 조회는 되고 etc 로 떨어져야 한다.
+const GROUP_BY_CAT = new Map<string, (typeof CAT_GROUPS)[number]>(
+  CAT_GROUPS.flatMap((g) => g.cats.map((c) => [c as string, g] as const)),
+);
 
 /** 카테고리 → 색 묶음. 목록에 없는 값(예전 데이터, 표기 흔들림)은 기타로 떨어진다. */
 export function groupOfCategory(cat: string) {
@@ -397,13 +429,18 @@ export function OrbitalMap({
      *  기억 배치는 한 칸도 건드리지 않는다. */
     function threadSectorOf(t: ThreadBody): number {
       const g = groupOfCategory(t.category);
-      const base = CAT_GROUPS.indexOf(g) * THREAD_SECTOR;
-      // 같은 묶음 안에서는 카테고리가 자리를 나눈다(media 의 music/entertainment
-      // 처럼 색이 같은 값들이 서로 겹치지 않게). 같은 카테고리끼리는 id 로 흩는다.
-      const within =
-        phaseOf(t.category) * THREAD_SECTOR * SECTOR_FILL +
-        (phaseOf(t.id) - 0.5) * THREAD_SECTOR * 0.14;
-      return base + within;
+      // 섹터 안을 묶음에 속한 카테고리 수만큼 슬롯으로 쪼갠다.
+      // dev 처럼 카테고리가 하나뿐인 묶음은 슬롯이 곧 섹터라, 그 안을 id 가 다 쓴다.
+      // media(entertainment·music)처럼 여럿이면 카테고리가 먼저 자리를 잡고
+      // 그 안을 id 가 채운다 — 색이 같아도 방향이 갈린다.
+      const slot = (THREAD_SECTOR * SECTOR_FILL) / g.cats.length;
+      const base =
+        CAT_GROUPS.indexOf(g) * THREAD_SECTOR +
+        Math.max(0, g.cats.indexOf(t.category as ExperienceCategory)) * slot;
+      // 같은 카테고리끼리는 id 가 슬롯을 채운다. 예전에는 여기에 카테고리를 또
+      // 넣었는데, 섹터가 이미 분야로 갈린 뒤라 대부분 상수였다 — dev 갈래 넷이
+      // 잔떨림 ±1.6도 안에서 겹쳤다. 없는 정보를 넣느라 있는 자리를 버린 셈이다.
+      return base + phaseOf(t.id) * slot;
     }
 
     const threadEls: Elem[] = threads.map((t) => {
