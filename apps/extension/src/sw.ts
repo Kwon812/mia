@@ -1,5 +1,6 @@
 import { API_BASE } from './config';
-import { db } from './db';
+import { db, type RawEvent } from './db';
+import { retryPendingRaw, uploadSessionRaw } from './raw';
 import {
   close,
   continueDraft,
@@ -7,6 +8,7 @@ import {
   idleGapBefore,
   ingest,
   isBlockedDomain,
+  redactPayload,
   sendSkipReason,
   shouldClose,
   timeUntilClose,
@@ -37,6 +39,17 @@ const STALE_SENDING_MS = 5 * 60 * 1000;
 // DB 의 LLM 출력과 대조해 세션 분할·필터 기준을 튜닝하는 용도라
 // 초반 튜닝 기간에 특히 중요하다. retry 알람에서 기한 지난 것을 지운다.
 const ARCHIVE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+
+// rawArchive(압축 전 원본 대기열) 보관 기간 — archive 와 같은 3일.
+// 업로드가 끝나면 로컬에 둘 이유가 없고, 실패해도 retry 가 10분마다 재시도하니
+// 3일이면 오프라인 복귀에 충분하다. 이 기한이 지나도 못 올린 원본은 버린다 —
+// 확장 IndexedDB 를 무한히 키우는 것보다 원본 일부 결손이 낫다.
+const RAW_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+
+/** 아직 어느 세션에도 배정되지 않은 원본의 sessionId 값.
+ *  null 이 아닌 빈 문자열인 이유는 db.ts 의 ArchivedRawEvent 주석 참고
+ *  (IndexedDB 는 null 을 인덱싱하지 않는다). */
+const RAW_UNASSIGNED = '';
 
 
 function registerAlarms(): void {
@@ -191,6 +204,62 @@ async function flushSession(payload: SessionPayloadLike): Promise<void> {
   });
 }
 
+/**
+ * 흡수가 끝난 rawEvents 를 **지우는 대신 rawArchive 로 옮긴다.**
+ *
+ * 예전에는 여기서 bulkDelete 였다. 그래서 원본은 세션 마감 시점이 아니라
+ * **1분 틱마다** 사라졌고, 세션이 닫힐 때쯤이면 이미 수십 번 지워진 뒤라
+ * "마감할 때 원본 한 벌 같이 보내기"가 성립하지 않았다.
+ *
+ * 순서는 이 파일의 다른 곳과 같은 원칙이다 — **저장 먼저, 삭제 나중.** 여기서는
+ * 한 트랜잭션으로 묶어 둘이 갈라지지 않게 한다. 중간에 죽으면 통째로 롤백되고
+ * rawEvents 가 남아 다음 틱에 다시 흡수된다(중복 흡수는 활동량이 살짝 부풀 뿐
+ * 데이터가 사라지지 않는다 — 유실보다 중복을 택하는 기존 판단과 같다).
+ */
+async function absorbRawEvents(events: readonly RawEvent[], sessionId: string): Promise<void> {
+  const stored = events.filter((e) => e.id !== undefined);
+  if (stored.length === 0) return;
+
+  await db.transaction('rw', db.rawEvents, db.rawArchive, async () => {
+    await db.rawArchive.bulkAdd(
+      stored.map((e) => ({
+        sessionId,
+        at: e.at,
+        kind: e.kind,
+        domain: e.domain,
+        payload: e.payload,
+        uploaded: 0 as const,
+      })),
+    );
+    await db.rawEvents.bulkDelete(stored.map((e) => e.id as number));
+  });
+}
+
+/**
+ * 아직 어느 세션에도 안 붙은 원본을 이 세션 몫으로 편입한다.
+ *
+ * 세션이 열리기 전에 들어온 이벤트(점수 0 짜리 배경 탭 갱신 등)는 draft 에
+ * 흡수되지 않고 버려지던 것들이다. 원본 보존 관점에서는 그것도 관측이라 남기는데,
+ * 세션에 안 붙으면 업로드 트리거가 영영 없어 3일 뒤 보관 기한에 조용히 사라진다.
+ * 마감 시점에 직전 미배정분을 쓸어담아 이 세션 파일에 함께 싣는다.
+ */
+async function claimUnassignedRaw(sessionId: string): Promise<void> {
+  await db.rawArchive.where('sessionId').equals(RAW_UNASSIGNED).modify({ sessionId });
+}
+
+/**
+ * 마감된 세션의 원본을 콜드 스토리지로 올린다.
+ *
+ * **전송 필터(skipReason)와 무관하게 항상 올린다.** 그 필터는 LLM 호출 비용
+ * 때문에 있는 것이고, 원본 보존은 비용과 상관이 없다 — 10분짜리 짧은 세션도
+ * "그 시간에 내가 뭘 했나"의 일부다.
+ */
+async function uploadClosedSessionRaw(sessionId: string): Promise<void> {
+  const extensionKey = await getExtensionKey();
+  if (!extensionKey) return; // 미등록 — retry 알람이 키를 받은 뒤 다시 집어간다
+  await uploadSessionRaw(sessionId, extensionKey);
+}
+
 /** 마감된 세션의 로컬 사본을 남긴다. 이게 유일한 내구성 기록이므로 반드시
  *  draft 정리보다 **먼저** 성공해야 한다 — 순서가 뒤면 draft 와 rawEvents 는
  *  지워졌는데 사본이 없어 세션이 통째로 사라진다(복구 경로 없음).
@@ -217,6 +286,13 @@ async function dispatchClosedSession(payload: SessionPayloadLike): Promise<void>
     skipReason,
     session: payload as unknown as Record<string, unknown>,
   });
+
+  // 이 경로(idle 갭 마감·브라우저 재시작 마감)의 원본도 마감 시 올린다.
+  // 여기 없으면 retry 알람이 10분 뒤 줍긴 하지만, 마감과 업로드가 멀어질수록
+  // 그 사이 확장이 제거되거나 보관 기한에 걸릴 창이 넓어진다.
+  // 이 시점의 db.rawEvents 는 아직 흡수 전이라(다음 세션 몫) 쓸려가지 않는다.
+  await claimUnassignedRaw(payload.id);
+  void uploadClosedSessionRaw(payload.id);
 
   if (skipReason === null) {
     void flushSession(payload);
@@ -268,13 +344,13 @@ async function handleSessionCheck(): Promise<void> {
   // 새로고침 배경 탭이 30분마다 duration_min=0 짜리 빈 세션을 만들어 archive 를
   // 채우기 때문이다. 이미 열려 있는 세션에는 문맥으로 흡수된다.
   if (!draft && !hasScoringEvent(rawEvents)) {
-    const ids = rawEvents.map((e) => e.id).filter((id): id is number => id !== undefined);
-    if (ids.length > 0) await db.rawEvents.bulkDelete(ids);
+    // 세션은 안 만들지만 관측 자체는 버리지 않는다 — 미배정으로 보관해두면
+    // 다음 세션이 마감될 때 claimUnassignedRaw 가 쓸어담는다.
+    await absorbRawEvents(rawEvents, RAW_UNASSIGNED);
     return;
   }
 
   const updated = ingest(draft, rawEvents, now);
-  const processedIds = rawEvents.map((e) => e.id).filter((id): id is number => id !== undefined);
 
   const reason = shouldClose(updated, now);
 
@@ -292,7 +368,7 @@ async function handleSessionCheck(): Promise<void> {
   // 유실과 중복 중 중복을 택한다.
   if (!reason) {
     await saveCurrentSession(updated);
-    if (processedIds.length > 0) await db.rawEvents.bulkDelete(processedIds);
+    await absorbRawEvents(rawEvents, updated.id);
     return;
   }
 
@@ -315,10 +391,14 @@ async function handleSessionCheck(): Promise<void> {
     // draft=null 로 ingest() 를 호출해 새 세션을 새로 시작한다.
     await saveCurrentSession(null);
   }
-  if (processedIds.length > 0) await db.rawEvents.bulkDelete(processedIds);
+  await absorbRawEvents(rawEvents, updated.id);
+  // 이 세션 앞에 떠돌던 미배정 원본까지 이 파일 몫으로 편입한 뒤 올린다.
+  await claimUnassignedRaw(updated.id);
 
   // 전송은 기다리지 않는다. 실패해도 archive 에 남아 있고 retry 알람이 맡는다.
   if (skipReason === null) void flushSession(payload);
+  // 원본은 전송 필터와 무관하게 올린다 (uploadClosedSessionRaw 주석 참고).
+  void uploadClosedSessionRaw(updated.id);
 }
 
 /**
@@ -330,10 +410,17 @@ async function handleRetry(): Promise<void> {
 
   // archive 보관 기한(3일) 지난 세션 사본 정리.
   await db.archive.where('closedAt').below(now - ARCHIVE_RETENTION_MS).delete();
+  // rawArchive 도 같은 기한. 세션 최대 길이가 4시간(maxlen)이라 진행 중인
+  // 세션의 원본이 여기 걸릴 일은 없다.
+  await db.rawArchive.where('at').below(now - RAW_RETENTION_MS).delete();
 
   const extensionKey = await getExtensionKey();
   if (!extensionKey) {
     void registerExtensionKey();
+  } else {
+    // 못 올린 원본 재시도. 마감 경로와 달리 여기서는 여러 세션이 밀려 있을 수
+    // 있어(오프라인 복귀) 순차로 소수만 집는다.
+    void retryPendingRaw(extensionKey);
   }
 
   const pendings = await db.pending.toArray();
@@ -513,7 +600,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       at: Date.now(),
       kind: 'activity',
       domain,
-      payload: {
+      // ⚠️ 리댁션은 **저장 직전**에 건다 (session/redact.ts). 여기가 원본(rawArchive)과
+      // 압축본(compressed_log)의 공통 상류라, 이 한 곳만 막으면 양쪽에 다 걸린다.
+      // GitHub 시크릿 편집 URL 처럼 허용 도메인 안에서 새어나오는 비밀 문자열이
+      // 대상이다 — 그게 실제로 경험 detail 을 거쳐 일기까지 올라간 적이 있다.
+      payload: redactPayload({
         scrolls: message.scrolls,
         clicks: message.clicks,
         keys: message.keys,
@@ -527,7 +618,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         title: message.title,
         path: message.path,
         query: message.query,
-      },
+      }),
     })
     .then(
       () => sendResponse({ ok: true }),
@@ -555,7 +646,11 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
       kind: 'tab_activated',
       domain,
       // tabs 권한으로 얻는 tab.title 도 의도 컨텍스트로 함께 저장한다.
-      payload: { tabId: activeInfo.tabId, windowId: activeInfo.windowId, title: tab.title },
+      payload: redactPayload({
+        tabId: activeInfo.tabId,
+        windowId: activeInfo.windowId,
+        title: tab.title,
+      }),
     });
   });
 });
@@ -574,6 +669,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     domain,
     // tab.active 를 그대로 실어보낸다 — 예외 C(백그라운드 재생) 판정에 쓰인다.
     // tab.title 도 함께 저장 — normalizeEvent 가 title 로 매핑한다.
-    payload: { tabId, url: tab.url, active: tab.active, title: tab.title },
+    // url 은 전체 주소라 경로·쿼리가 통째로 들어있다 — redactPayload 가 그 안까지 지운다.
+    payload: redactPayload({ tabId, url: tab.url, active: tab.active, title: tab.title }),
   });
 });

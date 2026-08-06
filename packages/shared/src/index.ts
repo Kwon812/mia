@@ -1,4 +1,5 @@
 export * from './session';
+export * from './assertion';
 export * from './experience';
 export * from './register';
 export * from './state';

@@ -2,5 +2,6 @@
 
 export * from './types';
 export * from './categories';
+export * from './redact';
 export * from './rules';
 export * from './builder';
