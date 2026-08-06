@@ -548,10 +548,19 @@ export function OrbitalMap({
     let baseUnit = 1;
     let zoom = 1;
     let zoomTarget = 1;
-    // 커서 밑에 있던 지점을 붙들어 둔다. 확대가 이징으로 여러 프레임에 걸쳐
-    // 일어나므로, 매 프레임 이 지점이 제자리에 오도록 cx·cy 를 다시 푼다.
-    // 이게 없으면 화면 한가운데를 향해서만 커져서 "겨눈 곳으로 들어간다"가 안 된다.
-    let anchor: { wx: number; wy: number; sx: number; sy: number } | null = null;
+    // 이동. 배율과 **같은 시계로 같이 이징**해야 한다.
+    //
+    // 처음에는 "커서 밑 지점"을 붙들어 두고 매 프레임 cx·cy 를 역산했는데,
+    // 배율이 정확히 1 로 떨어지는 순간 그 지점을 놓으면서 중심이 한 프레임에
+    // 튀었다 — 축소해서 원래대로 돌아올 때 화면이 뚝 끊겼다. 배율만 이징하고
+    // 이동은 이징하지 않았으니 둘이 어긋난 것이다.
+    //
+    // 이동을 제 값으로 두고 같이 수렴시키면 그 불연속이 원천적으로 없다.
+    // 배율이 1 로 가면 이동 목표도 0 이라 둘이 나란히 가운데로 돌아온다.
+    let offX = 0;
+    let offY = 0;
+    let offXTarget = 0;
+    let offYTarget = 0;
     let dpr = 1;
     let raf = 0;
     let mouse: { x: number; y: number } | null = null;
@@ -589,23 +598,17 @@ export function OrbitalMap({
       // 궤도면이 제각기 기울어 있으므로 어떤 궤도든 세로로 설 수 있다.
       // FLATTEN 을 믿고 세로 여유를 크게 잡으면 화면 밖으로 나간다.
       baseUnit = (Math.min(w / 2, h / 2) * 0.88) / maxA;
-      // 창 크기가 바뀌면 붙들어 둔 지점의 화면 좌표가 무의미해진다. 놓고
+      // 창 크기가 바뀌면 이동량의 근거(그때의 화면 좌표)가 무의미해진다.
       // 가운데로 되돌린다 — 확대 배율은 지킨다.
-      anchor = null;
+      offX = offY = offXTarget = offYTarget = 0;
       applyCamera();
     }
 
-    /** zoom 과 anchor 로부터 cx·cy·unit 을 푼다. 매 프레임 그리기 전에 부른다. */
+    /** zoom·off 로부터 cx·cy·unit 을 푼다. 매 프레임 그리기 전에 부른다. */
     function applyCamera() {
       unit = baseUnit * zoom;
-      if (anchor) {
-        // 붙들어 둔 세계 좌표가 그때 그 화면 좌표에 오도록 중심을 옮긴다.
-        cx = anchor.sx - anchor.wx * unit;
-        cy = anchor.sy - anchor.wy * unit;
-      } else {
-        cx = w / 2;
-        cy = h / 2;
-      }
+      cx = w / 2 + offX;
+      cy = h / 2 + offY;
     }
 
     function orbitPoint(el: Elem, t: number) {
@@ -810,13 +813,17 @@ export function OrbitalMap({
 
       // 확대는 프레임 수가 아니라 시간으로 수렴시킨다. 계수 곱셈(z += (t-z)*k)은
       // 화면 주사율에 따라 속도가 달라져서, 120Hz 에서는 60Hz 의 두 배로 빨라진다.
-      if (zoom !== zoomTarget) {
-        zoom += (zoomTarget - zoom) * (1 - Math.pow(0.0012, dt));
+      // 배율과 이동은 **같은 계수**를 쓴다 — 따로 놀면 확대하는 동안 겨눈 지점이
+      // 미끄러지고, 돌아올 때 한쪽이 먼저 도착해 끊겨 보인다.
+      const k = 1 - Math.pow(0.0012, dt);
+      if (zoom !== zoomTarget || offX !== offXTarget || offY !== offYTarget) {
+        zoom += (zoomTarget - zoom) * k;
+        offX += (offXTarget - offX) * k;
+        offY += (offYTarget - offY) * k;
         if (Math.abs(zoomTarget - zoom) < 0.0015) zoom = zoomTarget;
+        if (Math.abs(offXTarget - offX) < 0.3) offX = offXTarget;
+        if (Math.abs(offYTarget - offY) < 0.3) offY = offYTarget;
       }
-      // 배율이 1 로 돌아오면 붙들어 둔 지점을 놓는다. 안 놓으면 확대를 다
-      // 풀었는데도 계가 화면 가운데가 아닌 곳에 남는다.
-      if (zoom === 1 && zoomTarget === 1) anchor = null;
       applyCamera();
 
       ctx!.clearRect(0, 0, w, h);
@@ -1305,6 +1312,8 @@ export function OrbitalMap({
         // 상태에서 Escape 를 눌러 포커스만 풀리면 어디로 돌아가야 할지
         // 알려주는 게 화면에 없다.
         zoomTarget = 1;
+        offXTarget = 0;
+        offYTarget = 0;
       }
     }
 
@@ -1331,9 +1340,24 @@ export function OrbitalMap({
       const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomTarget * Math.exp(-dy * 0.0016)));
       if (next === zoomTarget) return;
 
-      // 커서 밑의 지점을 **지금 화면 기준**으로 붙든다. 이징 중에 또 굴려도
-      // 그 순간의 실제 좌표에서 다시 잡으므로 튀지 않는다.
-      anchor = { wx: (sx - cx) / unit, wy: (sy - cy) / unit, sx, sy };
+      if (next === 1) {
+        // 원래 배율로 돌아오면 가운데로도 같이 돌아온다. 둘이 같은 계수로
+        // 수렴하므로 도착 시점이 정확히 맞는다.
+        offXTarget = 0;
+        offYTarget = 0;
+      } else {
+        // 커서 밑의 지점이 **끝난 뒤에도 그 자리에 있도록** 이동 목표를 푼다.
+        // 지금 좌표에서 계산하므로 이징 도중에 또 굴려도 튀지 않는다.
+        const wx = (sx - cx) / unit;
+        const wy = (sy - cy) / unit;
+        const u = baseUnit * next;
+        // 질량중심이 화면 밖으로 나가지 않게 가둔다. 중심은 이름표가 붙어 있는
+        // 계의 기준점이라, 사라지면 지금 어디를 보고 있는지 알 수가 없다.
+        const mx = w / 2 - 40;
+        const my = h / 2 - 40;
+        offXTarget = Math.max(-mx, Math.min(mx, sx - wx * u - w / 2));
+        offYTarget = Math.max(-my, Math.min(my, sy - wy * u - h / 2));
+      }
       zoomTarget = next;
     }
 
