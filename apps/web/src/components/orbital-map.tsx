@@ -109,10 +109,10 @@ const SECTOR = Math.PI / TRIGGER_ORDER.length;
 const SECTOR_FILL = 0.55;
 
 // ── 갈래(thread) ──
-// 방향은 status. 고정 개수라 나눠도 뭉개지지 않는다(trigger·outcome 과 같은 위계).
-const STATUS_ORDER = ["active", "completed", "abandoned"];
-const THREAD_SECTOR = Math.PI / STATUS_ORDER.length;
 // 이심률 — 그 작업이 어떤 상태인지가 궤도의 안정성이 된다.
+// 방향은 분야가 가져갔다(THREAD_SECTOR, CAT_GROUPS 아래). status 는 값이 셋인데
+// 실제로는 거의 전부 active 라, 방향에 실으면 섹터가 하나로 뭉쳐 아무것도
+// 못 읽는다. 개수가 고정이라도 **분포가 쏠린 값**은 방향에 못 쓴다.
 const ECC_STATUS: Record<string, number> = {
   completed: 0.05, // 끝냈다. 자리를 잡았다.
   active: 0.22, // 아직 돌고 있다
@@ -177,6 +177,17 @@ const GROUP_BY_CAT = new Map(CAT_GROUPS.flatMap((g) => g.cats.map((c) => [c, g] 
 export function groupOfCategory(cat: string) {
   return GROUP_BY_CAT.get(cat) ?? CAT_GROUPS[CAT_GROUPS.length - 1];
 }
+
+/** 갈래의 궤도면을 가르는 값. 색과 **같은 묶음**을 쓴다.
+ *
+ *  카테고리 열셋을 그대로 나누면 섹터가 13.8도라 눈으로 못 읽는다(위성이 45도,
+ *  기억이 36도다). 그래서 색이 이미 쓰고 있는 여덟 묶음으로 가른다 — 22.5도.
+ *
+ *  방향과 색이 같은 값을 말하게 되지만 낭비가 아니다. 갈래에는 위성의 outcome
+ *  같은 제2의 고정 축이 없고(threads 에 결과 컬럼이 없다), 남은 후보인 status 는
+ *  분포가 active 로 쏠려 방향에 실으면 축이 통째로 죽는다. 한 값을 방향과 색
+ *  둘로 같이 말하면 어느 쪽으로 세든 해석이 갈리지 않는다. */
+const THREAD_SECTOR = Math.PI / CAT_GROUPS.length;
 
 /** 카테고리 → 색. 등장 순서와 무관하게 언제나 같은 색이다 —
  *  예전에는 화면에 있는 값들을 정렬해 순서대로 팔레트를 나눠줬는데,
@@ -380,12 +391,18 @@ export function OrbitalMap({
       return base + within + (phaseOf(m.id) - 0.5) * 0.08;
     }
 
-    /** 갈래의 궤도면. 방향은 status — trigger·outcome 과 같은 위계(고정 개수)다.
-     *  기억의 sectorOf 와 완전히 별개다. 기억 배치는 한 칸도 건드리지 않는다. */
+    /** 갈래의 궤도면. 섹터는 분야의 색 묶음이 가르고, 그 안의 자리는 카테고리가
+     *  잡는다 — 기억을 눌렀을 때 위성이 outcome 으로 갈리고 그 안에서 category 로
+     *  흩어지는 것과 똑같은 위계다. 기억의 sectorOf 와는 완전히 별개고,
+     *  기억 배치는 한 칸도 건드리지 않는다. */
     function threadSectorOf(t: ThreadBody): number {
-      const idx = STATUS_ORDER.indexOf(t.status);
-      const base = (idx < 0 ? STATUS_ORDER.length - 1 : idx) * THREAD_SECTOR;
-      const within = phaseOf(t.id) * THREAD_SECTOR * SECTOR_FILL;
+      const g = groupOfCategory(t.category);
+      const base = CAT_GROUPS.indexOf(g) * THREAD_SECTOR;
+      // 같은 묶음 안에서는 카테고리가 자리를 나눈다(media 의 music/entertainment
+      // 처럼 색이 같은 값들이 서로 겹치지 않게). 같은 카테고리끼리는 id 로 흩는다.
+      const within =
+        phaseOf(t.category) * THREAD_SECTOR * SECTOR_FILL +
+        (phaseOf(t.id) - 0.5) * THREAD_SECTOR * 0.14;
       return base + within;
     }
 

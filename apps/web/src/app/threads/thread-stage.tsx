@@ -107,7 +107,7 @@ export function ThreadStage({
           <div className="readout mt-3 text-[13px] leading-relaxed text-lum-2">
             반경 = 시작한 지 · 크기 = 경험 수
             <br />
-            방향·이심률 = 상태 · 색 = 분야
+            방향·색 = 분야 · 이심률 = 상태
             <br />
             누르면 속한 경험이 위성으로 · 방향 = 결과
           </div>
