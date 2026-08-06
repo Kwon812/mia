@@ -1269,12 +1269,19 @@ export function OrbitalMap({
         const p = found ? hit.get(found) : null;
         if (!found || !p) setProbe(null);
         else if (p.kind === "maxis") {
-          const tr = found.slice(6);
-          const inGroup = memories.filter((m) => m.trigger === tr).length;
+          const key = found.slice(6);
+          // 축이 무엇을 뜻하는지가 화면마다 다르다 — 메인은 기억의 trigger,
+          // /threads 는 갈래의 분야다. 그리기는 axisKeyOf 로 합쳐놨는데 여기만
+          // memories.trigger 로 세고 있어서, 갈래 화면에서는 세는 대상도 없고
+          // (memories=[]) 키도 안 맞아 늘 0건이었다. 같은 함수로 센다.
+          const onAxis = [...memories, ...threads].filter((o) => axisKeyOf(o) === key);
           setProbe({
             x: p.x,
             y: p.y,
-            text: `${tag(tr)} 로 남은 기억 ${inGroup}건`,
+            text:
+              threads.length > 0
+                ? `${tag(key)} 분야의 갈래 ${onAxis.length}건`
+                : `${tag(key)} 로 남은 기억 ${onAxis.length}건`,
             sub: "이 방향의 궤도들",
           });
         } else if (p.kind === "axis") {
