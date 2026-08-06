@@ -943,6 +943,26 @@ export async function processSession(sessionId: string, userId: string): Promise
             // 오염된다.
             lastActivityAt: sql`GREATEST(${threads.lastActivityAt}, ${session.startedAt.toISOString()}::timestamptz)`,
             experienceCount: sql`${threads.experienceCount} + 1`,
+            // 분야를 다시 센다 — 갈래의 category 는 "연 첫 경험의 판정"이 아니라
+            // "지금까지 무엇을 한 작업인가"여야 한다.
+            //
+            // attach 판정 기준은 카테고리가 아니라 **대상**이다(프롬프트: "분야가
+            // 같다는 것은 attach 의 근거가 아니다"). 그래서 한 갈래 안에 여러
+            // 분야가 섞이는 게 정상이고, 첫 판정으로 고정하면 어긋난다 —
+            // 문서만 읽으며 시작한 개발 작업이 영원히 docs 로 남는다.
+            //
+            // 이 값은 프롬프트의 활성 갈래 목록에도 그대로 실린다. 화면에서만
+            // 고치면 모델은 계속 옛 값을 본다.
+            //
+            // 방금 INSERT 한 경험이 같은 트랜잭션 안에 있으므로 이번 것까지 세어진다.
+            // 동률이면 이름순 — 매번 같은 값이 나와야 색이 흔들리지 않는다.
+            category: sql`coalesce((
+              select e.category from ${experiences} e
+              where e.thread_id = ${threadId}
+              group by e.category
+              order by count(*) desc, e.category asc
+              limit 1
+            ), ${threads.category})`,
           })
           .where(eq(threads.id, threadId));
       }

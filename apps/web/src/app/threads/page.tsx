@@ -85,21 +85,18 @@ export default async function ThreadsPage() {
   }
 
   /**
-   * 갈래의 분야는 **속한 경험들의 최빈 category** 로 만든다.
+   * 갈래의 분야를 **속한 경험들의 최빈 category** 로 다시 만든다.
    *
-   * threads.category 는 그 갈래를 **연 첫 경험**의 판정으로 고정돼 있고
-   * (experience-engine 의 action='new' 시점) 이후 경험이 붙어도 갱신되지 않는다.
-   * 그런데 attach 판정 기준은 카테고리가 아니라 **대상**이라(프롬프트: "분야가
-   * 같다는 것은 attach 의 근거가 아니다") 한 갈래 안에 여러 분야가 섞이는 게 정상이다.
+   * 저장된 threads.category 도 같은 규칙으로 갱신된다 — 엔진이 attach 마다
+   * 다시 센다(experience-engine 의 attach UPDATE). 그러니 여기서 또 세는 건
+   * 중복처럼 보이지만, 세는 **대상이 다르다.**
    *
-   *   1일차 문서만 읽음 → docs → 갈래 생성(category=docs)
-   *   2·3일차 구현·디버깅 → dev → attach
-   *   ⇒ 저장된 값은 docs, 실제 분포는 dev 우세
+   *   DB   : experiences.category — 모델의 판정(inferred)
+   *   여기 : bodies[].category    — 그 위에 사람 교정을 겹친 값(declared)
    *
-   * 문서로 시작한 개발 작업이 영원히 docs 색으로 남는다. 그래서 저장된 값을
-   * 쓰지 않고 읽을 때 겹쳐서 만든다 — 기억의 dominantCategory 와 같은 규칙이라
-   * "색 = 분야"가 화면 전체에서 한 뜻이 되고, /diary 의 교정도 따라온다
-   * (bodies 의 category 가 이미 교정을 반영한 값이다).
+   * 엔진은 corrections 를 보지 않는다(세션 처리 시점에는 교정이 아직 없다).
+   * /diary 에서 분야를 고쳤는데 갈래 색이 안 따라오면 "고쳐도 아무것도 안
+   * 달라진다"가 되므로, 화면은 교정을 반영한 값으로 다시 센다.
    *
    * 이미 불러온 expRows 안에서 세므로 추가 쿼리가 없다.
    */
