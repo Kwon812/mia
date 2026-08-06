@@ -73,8 +73,17 @@ export function ThreadStage({
             진행 중 {activeCount} · 전체 {threads.length}
           </div>
           <div className="mt-3 h-px w-28" style={{ background: "var(--color-lum-4)" }} />
-          <div className="readout mt-3 max-w-[24ch] text-[13px] leading-relaxed text-lum-2">
-            여러 날에 걸쳐 하나로 이어진 일. 누르면 그 일에 속한 경험이 전부 펼쳐진다.
+          {/* "여러 날에 걸쳐 이어진 일"이라고만 적어뒀었다. 그런데 엔진은
+              attach 아니면 new 둘 중 하나만 내서, 이어붙일 게 없으면 혼자짜리
+              갈래를 판다 — 실제로 경험 1건짜리 갈래가 있다. 이어짐은 결과지
+              조건이 아니다. 개수로 정의하면 그런 갈래를 보고 "이건 왜 여기
+              있지"가 된다.
+              둘째 줄은 상태 셋(active·completed·abandoned)이 왜 있는지를 말한다
+              — 화면 어디에도 그 설명이 없었다. */}
+          <div className="readout mt-3 max-w-[26ch] text-[13px] leading-relaxed text-lum-2">
+            하나의 일. 경험 하나로 끝나기도 하고 여러 날에 걸쳐 이어지기도 한다.
+            <br />
+            <span className="text-lum-3">끝나면 기억이 되고, 놓으면 멈춘 별로 남는다.</span>
           </div>
         </div>
       </div>
