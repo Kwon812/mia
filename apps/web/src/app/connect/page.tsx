@@ -25,8 +25,8 @@ export default async function ConnectPage() {
               ["03", "chrome.storage.local.get('extensionKey') 를 입력해 나온 값을 복사한다."],
             ].map(([n, text]) => (
               <li key={n} className="grid grid-cols-[auto_1fr] gap-4">
-                <span className="readout text-[10.5px] text-lum-4">{n}</span>
-                <span className="text-[13px] leading-relaxed text-lum-1">{text}</span>
+                <span className="readout text-[12px] text-lum-4">{n}</span>
+                <span className="text-[14.5px] leading-relaxed text-lum-1">{text}</span>
               </li>
             ))}
           </ol>

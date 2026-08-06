@@ -57,13 +57,13 @@ export function ConnectForm() {
         placeholder="na_..."
         autoComplete="off"
         spellCheck={false}
-        className="w-full max-w-md border border-lum-4 bg-vac-2 px-3.5 py-2.5 font-mono text-[13px] text-lum-0 outline-none focus:border-sig"
+        className="w-full max-w-md border border-lum-4 bg-vac-2 px-3.5 py-2.5 font-mono text-[14.5px] text-lum-0 outline-none focus:border-sig"
       />
-      {error && <p className="font-mono text-[12px] text-sig">{error}</p>}
+      {error && <p className="font-mono text-[13.5px] text-sig">{error}</p>}
       <button
         type="submit"
         disabled={isPending}
-        className="self-start border border-sig px-5 py-2.5 font-mono text-[11px] tracking-[0.16em] text-sig transition-colors hover:bg-sig hover:text-vac disabled:opacity-40"
+        className="self-start border border-sig px-5 py-2.5 font-mono text-[12.5px] tracking-[0.16em] text-sig transition-colors hover:bg-sig hover:text-vac disabled:opacity-40"
       >
         {isPending ? "연결하는 중..." : "연결하기"}
       </button>

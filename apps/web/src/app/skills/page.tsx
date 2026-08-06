@@ -54,7 +54,7 @@ export default async function SkillsPage() {
                     >
                       <div>
                         <div className="flex items-baseline gap-2.5">
-                          <span className="text-[14.5px] text-lum-0">{skill.skillName}</span>
+                          <span className="text-[15.5px] text-lum-0">{skill.skillName}</span>
                           {isNew && <span className="tick text-sig">신규</span>}
                         </div>
                         {/* 광도 막대 — 색이 아니라 밝기로 크기를 말한다 */}
@@ -67,11 +67,11 @@ export default async function SkillsPage() {
                             }}
                           />
                         </div>
-                        <div className="readout mt-2 text-[10px] text-lum-4">
+                        <div className="readout mt-2 text-[11.5px] text-lum-4">
                           {skill.useCount}회 · 최종 {formatKstYmd(skill.lastUsedAt, ".")}
                         </div>
                       </div>
-                      <span className="readout text-[17px] text-lum-0">{skill.points}</span>
+                      <span className="readout text-[18px] text-lum-0">{skill.points}</span>
                     </div>
                   );
                 })}

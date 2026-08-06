@@ -31,9 +31,9 @@ function Readout({
   return (
     <div className={`settle ${className}`} style={{ "--d": `${delay}ms` } as React.CSSProperties}>
       <div className="tick mb-1.5">{label}</div>
-      <div className="readout text-[26px] leading-none text-lum-0">
+      <div className="readout text-[27px] leading-none text-lum-0">
         {value}
-        {unit && <span className="ml-1 text-[12px] text-lum-2">{unit}</span>}
+        {unit && <span className="ml-1 text-[13.5px] text-lum-2">{unit}</span>}
       </div>
     </div>
   );
@@ -117,12 +117,12 @@ export function MapStage({
       <div className="pointer-events-none absolute left-5 top-8">
         <div className="settle">
           <div className="tick mb-2">관측 대상</div>
-          <div className="readout text-[15px] tracking-[0.06em] text-lum-0">{name}</div>
-          <div className="readout mt-1.5 text-[12px] text-lum-1">
+          <div className="readout text-[16px] tracking-[0.06em] text-lum-0">{name}</div>
+          <div className="readout mt-1.5 text-[13.5px] text-lum-1">
             LV {String(level).padStart(2, "0")} · {daysTogether}일째 · {emotion}
           </div>
           <div className="mt-3 h-px w-28" style={{ background: "var(--color-lum-4)" }} />
-          <div className="readout mt-3 text-[11.5px] leading-relaxed text-lum-2" title={emotionReason}>
+          <div className="readout mt-3 text-[13px] leading-relaxed text-lum-2" title={emotionReason}>
             {emotionReason}
           </div>
         </div>
@@ -132,9 +132,9 @@ export function MapStage({
       <div className="pointer-events-none absolute right-8 top-8 text-right">
         <div className="settle" style={{ "--d": "80ms" } as React.CSSProperties}>
           <div className="tick mb-2">궤도상 기억</div>
-          <div className="readout text-[15px] text-lum-0">
+          <div className="readout text-[16px] text-lum-0">
             {memories.length}
-            <span className="ml-1 text-[12px] text-lum-2">/ 경험 {counts.experience}</span>
+            <span className="ml-1 text-[13.5px] text-lum-2">/ 경험 {counts.experience}</span>
           </div>
 
           {/* 색 범례. 궤도 축에 이름은 적혀 있지만 그건 "그 방향이 무엇인가"이지
@@ -143,7 +143,7 @@ export function MapStage({
           <div className="mt-3 flex flex-col items-end gap-1.5">
             {memoryGroups.map(({ key, label, color: col }) => (
               <span key={key} className="flex items-center gap-2">
-                <span className="readout text-[11.5px] uppercase text-lum-1">{label}</span>
+                <span className="readout text-[13px] uppercase text-lum-1">{label}</span>
                 <span
                   className="inline-block h-1.5 w-1.5 rounded-full"
                   style={{
@@ -156,7 +156,7 @@ export function MapStage({
           </div>
 
           <div className="mt-3 ml-auto h-px w-28" style={{ background: "var(--color-lum-4)" }} />
-          <div className="readout mt-3 text-[11.5px] leading-relaxed text-lum-2">
+          <div className="readout mt-3 text-[13px] leading-relaxed text-lum-2">
             반경 = 경과일 · 크기 = 중요도
             <br />
             방향·이심률 = 종류 · 색 = 근거의 주된 분야
@@ -199,7 +199,7 @@ export function MapStage({
           }}
         >
           <p
-            className="utterance settle text-[17px]"
+            className="utterance settle text-[18px]"
             style={{ "--d": "420ms" } as React.CSSProperties}
           >
             {dialogue}

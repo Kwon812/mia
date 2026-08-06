@@ -57,7 +57,7 @@ html {
 body {
   color: var(--color-lum-1);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14.5px;
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
   word-break: keep-all;
@@ -67,7 +67,7 @@ body {
    등폭이 주역이다. 값은 정렬돼야 읽히고, 정렬되려면 등폭이어야 한다. */
 .tick {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12.5px;
   /* 자간을 줄였다. 0.22em 은 한글에서 글자가 흩어져 오히려 안 읽힌다 */
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -152,7 +152,7 @@ body {
 
 .rail-label {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 12px;
   letter-spacing: 0.2em;
   white-space: nowrap;
   opacity: 0;

@@ -56,7 +56,7 @@ export default async function MemoriesPage() {
                     className="settle field grid grid-cols-[auto_1fr] gap-x-6 py-6"
                     style={{ "--d": `${i * 45}ms` } as React.CSSProperties}
                   >
-                    <div className="readout w-24 text-[10.5px] leading-relaxed text-lum-3">
+                    <div className="readout w-24 text-[12px] leading-relaxed text-lum-3">
                       {formatKstYmd(m.occurredAt, ".")}
                       <br />
                       <span className="text-lum-4">중요도 {m.importance}</span>
@@ -64,8 +64,8 @@ export default async function MemoriesPage() {
                       <span className="text-lum-4">{m.trigger}</span>
                     </div>
                     <div>
-                      <h2 className="mb-2 text-[15px] font-medium text-lum-0">{m.title}</h2>
-                      <p className="utterance text-[14.5px] text-lum-1">{m.body}</p>
+                      <h2 className="mb-2 text-[16px] font-medium text-lum-0">{m.title}</h2>
+                      <p className="utterance text-[15.5px] text-lum-1">{m.body}</p>
                     </div>
                   </article>
                 ))}

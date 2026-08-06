@@ -65,9 +65,9 @@ export default async function PersonalityPage() {
                   style={{ "--d": `${i * 45}ms` } as React.CSSProperties}
                 >
                   <div className="mb-3 flex items-baseline justify-between">
-                    <span className="readout text-[11.5px] text-lum-2">{axis.left}</span>
-                    <span className="readout text-[13px] text-lum-0">{signed(cur)}</span>
-                    <span className="readout text-[11.5px] text-lum-2">{axis.right}</span>
+                    <span className="readout text-[13px] text-lum-2">{axis.left}</span>
+                    <span className="readout text-[14.5px] text-lum-0">{signed(cur)}</span>
+                    <span className="readout text-[13px] text-lum-2">{axis.right}</span>
                   </div>
                   {/* 눈금 위의 지표. 중앙이 0. */}
                   <div className="relative h-5">
@@ -98,7 +98,7 @@ export default async function PersonalityPage() {
             })}
           </div>
 
-          <div className="readout mt-10 flex flex-wrap gap-x-8 gap-y-2 text-[10px] text-lum-3">
+          <div className="readout mt-10 flex flex-wrap gap-x-8 gap-y-2 text-[11.5px] text-lum-3">
             <span>현재 {formatKstYmd(latest.computedAt, ".")}</span>
             {previous && <span>이전 {formatKstYmd(previous.computedAt, ".")}</span>}
             <span>표본 {latest.sampleSize} 세션 · 2주 이동평균</span>

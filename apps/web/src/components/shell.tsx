@@ -14,9 +14,9 @@ export function Head({ tick, title, note }: { tick: string; title: string; note?
   return (
     <div className="settle mb-14">
       <div className="tick mb-3">{tick}</div>
-      <h1 className="text-[24px] font-medium tracking-[-0.02em] text-lum-0">{title}</h1>
+      <h1 className="text-[25px] font-medium tracking-[-0.02em] text-lum-0">{title}</h1>
       {note && (
-        <p className="readout mt-2.5 max-w-[46ch] text-[11.5px] leading-relaxed text-lum-3">
+        <p className="readout mt-2.5 max-w-[46ch] text-[13px] leading-relaxed text-lum-3">
           {note}
         </p>
       )}
@@ -26,5 +26,5 @@ export function Head({ tick, title, note }: { tick: string; title: string; note?
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <p className="readout text-[11.5px] text-lum-3">{children}</p>;
+  return <p className="readout text-[13px] text-lum-3">{children}</p>;
 }

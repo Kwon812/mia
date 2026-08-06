@@ -1094,8 +1094,8 @@ export function OrbitalMap({
           className="probe"
           style={{ transform: `translate(${probe.x + 18}px, ${probe.y - 12}px)` }}
         >
-          <div className="readout mb-1.5 text-[10px] tracking-[0.16em] text-lum-3">{probe.sub}</div>
-          <div className="font-sans text-[13px] leading-snug text-lum-0">{probe.text}</div>
+          <div className="readout mb-1.5 text-[11.5px] tracking-[0.16em] text-lum-3">{probe.sub}</div>
+          <div className="font-sans text-[14.5px] leading-snug text-lum-0">{probe.text}</div>
         </div>
       )}
 
@@ -1106,8 +1106,8 @@ export function OrbitalMap({
             <div className="tick mb-2">
               {tag(focus.trigger)} · 근거 {focus.referencedIds.length}건
             </div>
-            <h2 className="text-[17px] font-medium text-lum-0">{focus.title}</h2>
-            {/*<p className="utterance mt-3 text-[14px] text-lum-1">{focus.body}</p>*/}
+            <h2 className="text-[18px] font-medium text-lum-0">{focus.title}</h2>
+            {/*<p className="utterance mt-3 text-[15px] text-lum-1">{focus.body}</p>*/}
 
             {/* 색 범례 — 색만 칠하고 무슨 뜻인지 안 적으면 그냥 알록달록한 점이 된다.
                 무엇의 범례인지도 적어야 한다. 색점만 늘어놓으면 태그로 읽힌다. */}
@@ -1153,7 +1153,7 @@ export function OrbitalMap({
               경험 · {formatKstYmd(new Date(picked.occurredAt), ".")} ·{" "}
               {tag(picked.outcome)} · M{picked.memoryScore}
             </div>
-            <p className="font-sans text-[14px] leading-relaxed text-lum-0">{picked.summary}</p>
+            <p className="font-sans text-[15px] leading-relaxed text-lum-0">{picked.summary}</p>
           </div>
         </div>
       )}

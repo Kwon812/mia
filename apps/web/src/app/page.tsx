@@ -27,7 +27,7 @@ export default async function Home() {
       <main className="flex min-h-screen flex-col items-center justify-center px-6">
         <div className="settle flex flex-col items-center">
           <span className="mb-8 h-2 w-2 rounded-full bg-lum-0 shadow-[0_0_24px_6px_rgba(200,230,255,.5)]" />
-          <p className="utterance mb-10 text-[19px]">…</p>
+          <p className="utterance mb-10 text-[20px]">…</p>
           <span className="tick mb-6">중심에 이름이 없다</span>
           <NameForm />
         </div>

@@ -75,7 +75,7 @@ export default async function DiaryPage() {
                 className="settle field grid grid-cols-[auto_1fr] gap-x-6 py-7"
                 style={{ "--d": `${i * 45}ms` } as React.CSSProperties}
               >
-                <time className="readout w-24 text-[10.5px] leading-relaxed text-lum-3">
+                <time className="readout w-24 text-[12px] leading-relaxed text-lum-3">
                   {formatDotDate(log.logDate)}
                   {log.emotion && (
                     <>
@@ -85,9 +85,9 @@ export default async function DiaryPage() {
                   )}
                 </time>
                 <div>
-                  <p className="utterance text-[15px]">{log.summary}</p>
+                  <p className="utterance text-[16px]">{log.summary}</p>
                   {(log.learned?.length ?? 0) > 0 && (
-                    <div className="readout mt-4 flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] text-lum-3">
+                    <div className="readout mt-4 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-lum-3">
                       {log.learned!.map((item) => (
                         <span key={item}>+ {item}</span>
                       ))}
@@ -96,7 +96,7 @@ export default async function DiaryPage() {
 
                   {rows.length > 0 && (
                     <div className="mt-6 flex flex-col gap-2.5">
-                      <div className="tick text-[9.5px] text-lum-4">그날의 판정</div>
+                      <div className="tick text-[11px] text-lum-4">그날의 판정</div>
                       {rows.map((e) => {
                         const outcome = effective(corrections, e.id, "outcome", e.outcome ?? "explore");
                         const category = effective(corrections, e.id, "category", e.category);

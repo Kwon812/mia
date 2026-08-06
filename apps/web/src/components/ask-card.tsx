@@ -51,8 +51,8 @@ export function AskCard({ question }: { question: AskQuestion }) {
 
   return (
     <div className="settle field mt-10 py-6">
-      <div className="tick mb-3 text-[9.5px] text-lum-4">묻고 싶은 게 하나 있어</div>
-      <p className="utterance text-[14.5px]">{question.text}</p>
+      <div className="tick mb-3 text-[11px] text-lum-4">묻고 싶은 게 하나 있어</div>
+      <p className="utterance text-[15.5px]">{question.text}</p>
 
       {/* 질문이 "맞아?" 라서 긍정 버튼이 먼저 와야 한다. 선택지 13개를 그대로
           깔면 묻는 말과 선택지가 어긋나고, 무엇보다 **의도적인 확인**이라는
@@ -65,7 +65,7 @@ export function AskCard({ question }: { question: AskQuestion }) {
               type="button"
               disabled={pending}
               onClick={() => answer(question.modelValue)}
-              className="readout rounded-sm border border-[rgba(160,185,220,0.34)] px-2.5 py-1 text-[10.5px] text-lum-0 transition-colors hover:border-[rgba(160,185,220,0.6)] disabled:opacity-40"
+              className="readout rounded-sm border border-[rgba(160,185,220,0.34)] px-2.5 py-1 text-[12px] text-lum-0 transition-colors hover:border-[rgba(160,185,220,0.6)] disabled:opacity-40"
             >
               맞아
             </button>
@@ -73,7 +73,7 @@ export function AskCard({ question }: { question: AskQuestion }) {
               type="button"
               disabled={pending}
               onClick={() => setShowOptions(true)}
-              className="readout rounded-sm border border-[rgba(160,185,220,0.16)] px-2.5 py-1 text-[10.5px] text-lum-2 transition-colors hover:border-[rgba(160,185,220,0.38)] hover:text-lum-0 disabled:opacity-40"
+              className="readout rounded-sm border border-[rgba(160,185,220,0.16)] px-2.5 py-1 text-[12px] text-lum-2 transition-colors hover:border-[rgba(160,185,220,0.38)] hover:text-lum-0 disabled:opacity-40"
             >
               아니야
             </button>
@@ -90,7 +90,7 @@ export function AskCard({ question }: { question: AskQuestion }) {
                 type="button"
                 disabled={pending}
                 onClick={() => answer(o.value)}
-                className="readout rounded-sm border border-[rgba(160,185,220,0.16)] px-2 py-1 text-[10.5px] text-lum-2 transition-colors hover:border-[rgba(160,185,220,0.38)] hover:text-lum-0 disabled:opacity-40"
+                className="readout rounded-sm border border-[rgba(160,185,220,0.16)] px-2 py-1 text-[12px] text-lum-2 transition-colors hover:border-[rgba(160,185,220,0.38)] hover:text-lum-0 disabled:opacity-40"
               >
                 {o.label}
               </button>
@@ -99,13 +99,13 @@ export function AskCard({ question }: { question: AskQuestion }) {
           type="button"
           disabled={pending}
           onClick={skip}
-          className="readout ml-1 px-1.5 py-1 text-[10.5px] text-lum-4 transition-colors hover:text-lum-2 disabled:opacity-40"
+          className="readout ml-1 px-1.5 py-1 text-[12px] text-lum-4 transition-colors hover:text-lum-2 disabled:opacity-40"
         >
           모르겠어
         </button>
       </div>
 
-      {error && <p className="readout mt-3 text-[10px] text-lum-3">{error}</p>}
+      {error && <p className="readout mt-3 text-[11.5px] text-lum-3">{error}</p>}
     </div>
   );
 }

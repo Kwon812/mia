@@ -72,8 +72,8 @@ export function CorrectionRow({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
-        <span className="readout w-11 shrink-0 pt-0.5 text-[10px] text-lum-4">{time}</span>
-        <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-lum-2">{summary}</span>
+        <span className="readout w-11 shrink-0 pt-0.5 text-[11.5px] text-lum-4">{time}</span>
+        <span className="min-w-0 flex-1 text-[14px] leading-relaxed text-lum-2">{summary}</span>
         <span className="flex shrink-0 gap-1">
           {FIELD_ORDER.map((field) => (
             <button
@@ -84,7 +84,7 @@ export function CorrectionRow({
               aria-label={`${FIELD_OPTIONS[field].title} 고치기 — 지금 ${labelOf(field, values[field])}`}
               aria-expanded={open === field}
               className={[
-                "readout rounded-sm border px-1.5 py-0.5 text-[10.5px] transition-colors",
+                "readout rounded-sm border px-1.5 py-0.5 text-[12px] transition-colors",
                 open === field
                   ? "border-[rgba(160,185,220,0.5)] text-lum-0"
                   : "border-[rgba(160,185,220,0.14)] hover:border-[rgba(160,185,220,0.34)]",
@@ -106,14 +106,14 @@ export function CorrectionRow({
           ref={panelRef}
           className="ml-[3.25rem] flex flex-wrap items-center gap-1 border-l border-[rgba(160,185,220,0.12)] py-1.5 pl-3"
         >
-          <span className="readout mr-1 text-[10px] text-lum-4">{FIELD_OPTIONS[open].title}</span>
+          <span className="readout mr-1 text-[11.5px] text-lum-4">{FIELD_OPTIONS[open].title}</span>
           {FIELD_OPTIONS[open].options.map((o) => (
             <button
               key={o.value}
               type="button"
               onClick={() => choose(open, o.value)}
               className={[
-                "readout rounded-sm px-1.5 py-0.5 text-[10.5px] whitespace-nowrap transition-colors",
+                "readout rounded-sm px-1.5 py-0.5 text-[12px] whitespace-nowrap transition-colors",
                 o.value === values[open]
                   ? "bg-[rgba(160,185,220,0.14)] text-lum-0"
                   : "text-lum-2 hover:bg-[rgba(160,185,220,0.1)] hover:text-lum-0",
@@ -125,14 +125,14 @@ export function CorrectionRow({
           <button
             type="button"
             onClick={() => setOpen(null)}
-            className="readout ml-1 px-1 py-0.5 text-[10px] text-lum-4 transition-colors hover:text-lum-2"
+            className="readout ml-1 px-1 py-0.5 text-[11.5px] text-lum-4 transition-colors hover:text-lum-2"
           >
             닫기
           </button>
         </div>
       )}
 
-      {error && <span className="readout ml-[3.25rem] text-[10px] text-lum-3">{error}</span>}
+      {error && <span className="readout ml-[3.25rem] text-[11.5px] text-lum-3">{error}</span>}
     </div>
   );
 }
