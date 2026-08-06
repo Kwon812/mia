@@ -9,6 +9,7 @@ import {
   groupOfCategory,
   type Body,
   type MemoryBody,
+  type ThreadBody,
 } from "@/components/orbital-map";
 import { AskCard, type AskQuestion } from "@/components/ask-card";
 
@@ -42,6 +43,7 @@ function Readout({
 export function MapStage({
   bodies,
   memories,
+  threads,
   name,
   level,
   daysTogether,
@@ -55,6 +57,8 @@ export function MapStage({
 }: {
   bodies: Body[];
   memories: MemoryBody[];
+  /** 갈래 — 여러 날에 걸쳐 이어진 작업. 누르면 종속 경험이 위성으로. */
+  threads: ThreadBody[];
   name: string;
   level: number;
   daysTogether: number;
@@ -104,6 +108,7 @@ export function MapStage({
         <OrbitalMap
           bodies={bodies}
           memories={memories}
+          threads={threads}
           centerLabel={name}
           onFocusChange={handleFocusChange}
         />
@@ -156,12 +161,14 @@ export function MapStage({
           </div>
 
           <div className="mt-3 ml-auto h-px w-28" style={{ background: "var(--color-lum-4)" }} />
+          {/* 계에 두 종류가 뜬다. 안쪽이 기억, 바깥이 갈래다 — 범례가 기억만
+              설명하면 바깥 궤도가 무엇인지 화면 어디에도 안 적힌 게 된다. */}
           <div className="readout mt-3 text-[13px] leading-relaxed text-lum-2">
-            반경 = 경과일 · 크기 = 중요도
+            안쪽 = 기억 · 반경 = 경과일 · 크기 = 중요도
             <br />
-            방향·이심률 = 종류 · 색 = 근거의 주된 분야
+            바깥 = 갈래 · 크기 = 경험 수 · 방향 = 상태
             <br />
-            누르면 근거가 위성으로 · 방향 = 결과, 색 = 분야
+            색 = 분야 · 누르면 속한 경험이 위성으로
           </div>
         </div>
       </div>

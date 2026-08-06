@@ -34,6 +34,7 @@ export type Body = {
 };
 
 export type MemoryBody = {
+  kind: "memory";
   id: string;
   /** 같은 작업에서 나온 기억끼리 궤도 방향을 공유하기 위한 값 */
   threadId: string | null;
@@ -48,6 +49,37 @@ export type MemoryBody = {
   /** 그중 이 기억을 실제로 만든 경험 (memories.experience_id). 나머지는 같은 작업에서 딸려온 것들 */
   sourceId: string | null;
 };
+
+/**
+ * 갈래 — 여러 날에 걸쳐 하나로 이어진 작업(threads).
+ *
+ * 기억이 "남은 것"이라면 갈래는 "이어지는 것"이다. 그래서 기억과 같은 계에
+ * 뜨되 **바깥 궤도**를 돈다 — 기억 여럿을 아우르는 더 큰 구조라는 뜻이고,
+ * 기존 기억 배치를 한 칸도 건드리지 않는다는 실리도 있다.
+ *
+ * 방향은 status 다. trigger·outcome 과 같은 위계 — 값이 고정 개수라 나눠도
+ * 뭉개지지 않는다. 지금은 데이터가 어려 전부 active 라 한 방향에 모이지만,
+ * completed 가 하나 나오는 순간 방향이 갈리는 것 자체가 정보다.
+ * 색은 기억과 달리 자기 category 를 그대로 쓴다(갈래는 분야를 스스로 갖는다).
+ */
+export type ThreadBody = {
+  kind: "thread";
+  id: string;
+  title: string;
+  category: string;
+  /** active | completed | abandoned */
+  status: string;
+  /** 이 갈래에 붙은 경험 수 — 크기가 된다 */
+  experienceCount: number;
+  /** 시작 시각 (반경의 근거) */
+  occurredAt: number;
+  ageDays: number;
+  /** 이 갈래에 속한 경험들 — 누르면 위성으로 펼쳐진다 */
+  referencedIds: string[];
+};
+
+/** 주 궤도에 오르는 것들. 누르면 referencedIds 가 위성으로 펼쳐진다는 점이 같다. */
+export type OrbitBody = MemoryBody | ThreadBody;
 
 const ECC: Record<string, number> = {
   success: 0.06,
@@ -66,11 +98,25 @@ const NEUTRAL: [number, number, number] = [150, 165, 190];
 // 그래서 굵은 분할은 trigger, 그 안에서의 자리는 thread 가 맡는다.
 export const TRIGGER_ORDER = ['new_skill', 'thread_complete', 'breakthrough', 'revival', 'comeback'];
 
-// 갈래를 π 로 나눈다(2π 가 아니라). 타원은 180도 돌리면 자기 자신이라
+// 섹터를 π 로 나눈다(2π 가 아니라). 타원은 180도 돌리면 자기 자신이라
 // 그 너머는 같은 방향으로 보인다 — 실제로 쓸 수 있는 각도는 절반뿐이다.
 const SECTOR = Math.PI / TRIGGER_ORDER.length;
-// 갈래 사이에 빈 각도를 남겨야 다섯 무리가 서로 구분된다.
+// 섹터 사이에 빈 각도를 남겨야 다섯 무리가 서로 구분된다.
 const SECTOR_FILL = 0.55;
+
+// ── 갈래(thread) ──
+// 방향은 status. 고정 개수라 나눠도 뭉개지지 않는다(trigger·outcome 과 같은 위계).
+const STATUS_ORDER = ["active", "completed", "abandoned"];
+const THREAD_SECTOR = Math.PI / STATUS_ORDER.length;
+// 이심률 — 그 작업이 어떤 상태인지가 궤도의 안정성이 된다.
+const ECC_STATUS: Record<string, number> = {
+  completed: 0.05, // 끝냈다. 자리를 잡았다.
+  active: 0.22, // 아직 돌고 있다
+  abandoned: 0.46, // 놓았다. 궤도가 풀렸다
+};
+/** 갈래는 기억 바깥을 돈다. 기억 여럿을 아우르는 더 큰 구조라는 뜻이고,
+ *  같은 각도에 겹쳐도 반경이 달라 판정(hit)이 섞이지 않는다. */
+const THREAD_BAND = 1.34;
 
 // 기억의 이심률 — 그 기억이 어떻게 남았는지가 궤도의 안정성이 된다.
 const ECC_TRIGGER: Record<string, number> = {
@@ -141,6 +187,7 @@ export function colorOfCategory(cat: string): [number, number, number] {
  *  기억과 경험이 같은 팔레트를 공유해 — 파란 기억을 누르면 파란 위성이
  *  많다 — 두 화면이 하나의 색 언어로 묶인다.
  *  동률이면 이름 순으로 고정한다. 렌더마다 색이 바뀌면 안 된다. */
+/** 기억의 색은 근거의 주된 분야에서 온다. 갈래는 자기 category 가 있어 이 함수를 안 탄다. */
 export function dominantCategory(m: MemoryBody, byId: Map<string, Body>): string | null {
   const tally = new Map<string, number>();
   for (const id of m.referencedIds) {
@@ -211,17 +258,21 @@ type Elem = {
   lum: number;
   size: number;
   color: [number, number, number];
-  mem: MemoryBody;
+  /** 이 궤도에 올라온 대상. 기억이거나 갈래다. */
+  mem: OrbitBody;
 };
 
 export function OrbitalMap({
   bodies,
   memories,
+  threads,
   centerLabel,
   onFocusChange,
 }: {
   bodies: Body[];
   memories: MemoryBody[];
+  /** 갈래 — 기억과 같은 계를 돌되 바깥 궤도에 뜬다. 누르면 종속 경험이 위성으로. */
+  threads: ThreadBody[];
   centerLabel: string;
   /** 기억 하나에 붙었는지. 지도 바깥(계기판)이 읽는 상태에 맞춰 물러나도록. */
   onFocusChange?: (focused: boolean) => void;
@@ -231,7 +282,7 @@ export function OrbitalMap({
   const [probe, setProbe] = useState<{ x: number; y: number; text: string; sub: string } | null>(
     null,
   );
-  const [focus, setFocus] = useState<MemoryBody | null>(null);
+  const [focus, setFocus] = useState<OrbitBody | null>(null);
   const [picked, setPicked] = useState<Body | null>(null);
 
   useEffect(() => {
@@ -242,7 +293,7 @@ export function OrbitalMap({
   pickedRef.current = picked;
 
   // 렌더 루프가 읽는 최신 포커스. 상태를 클로저에 가두지 않기 위해 ref 로 둔다.
-  const focusRef = useRef<MemoryBody | null>(null);
+  const focusRef = useRef<OrbitBody | null>(null);
   focusRef.current = focus;
 
   useEffect(() => {
@@ -255,8 +306,10 @@ export function OrbitalMap({
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const byId = new Map(bodies.map((b) => [b.id, b]));
     // 기억의 색은 근거의 주된 분야에서 온다. 분야→색은 고정 표라 전역이다.
-    const colorOf = (m: MemoryBody) => {
-      const dom = dominantCategory(m, byId);
+    const colorOf = (o: OrbitBody) => {
+      // 갈래는 자기 분야를 갖는다. 기억은 근거들의 주된 분야에서 빌려온다.
+      if (o.kind === "thread") return colorOfCategory(o.category);
+      const dom = dominantCategory(o, byId);
       return dom ? colorOfCategory(dom) : NEUTRAL;
     };
 
@@ -275,6 +328,38 @@ export function OrbitalMap({
       const within = phaseOf(m.threadId ?? m.id) * SECTOR * SECTOR_FILL;
       return base + within + (phaseOf(m.id) - 0.5) * 0.08;
     }
+
+    /** 갈래의 궤도면. 방향은 status — trigger·outcome 과 같은 위계(고정 개수)다.
+     *  기억의 sectorOf 와 완전히 별개다. 기억 배치는 한 칸도 건드리지 않는다. */
+    function threadSectorOf(t: ThreadBody): number {
+      const idx = STATUS_ORDER.indexOf(t.status);
+      const base = (idx < 0 ? STATUS_ORDER.length - 1 : idx) * THREAD_SECTOR;
+      const within = phaseOf(t.id) * THREAD_SECTOR * SECTOR_FILL;
+      return base + within;
+    }
+
+    const threadEls: Elem[] = threads.map((t) => {
+      // 바깥 궤도. 기억 여럿을 아우르는 더 큰 구조라는 뜻이고, 같은 각도에
+      // 겹쳐도 반경이 달라 판정(hit)이 섞이지 않는다.
+      const a = radiusOf(t.ageDays) * THREAD_BAND;
+      const p = phaseOf(t.id);
+      return {
+        kind: "mem" as const,
+        id: t.id,
+        a,
+        e: ECC_STATUS[t.status] ?? 0.22,
+        omega: p * Math.PI * 2,
+        plane: threadSectorOf(t),
+        theta0: p * Math.PI * 2,
+        n: speedOf(a),
+        lum: 1,
+        color: colorOf(t),
+        // 크기는 붙은 경험 수 — 얼마나 오래 붙들고 있는 일인가.
+        // 기억의 importance(1~10)와 자릿수를 맞춰 로그로 누른다.
+        size: 4 + Math.log1p(t.experienceCount) * 3.4,
+        mem: t,
+      };
+    });
 
     const els: Elem[] = memories.map((m) => {
       const a = radiusOf(m.ageDays);
@@ -300,8 +385,23 @@ export function OrbitalMap({
       };
     });
 
+    els.push(...threadEls);
+
     // 기억이 하나도 없으면 궤도가 없다. 축척이 0 으로 무너지지 않게 바닥값을 둔다.
     const maxA = els.reduce((mx, e) => Math.max(mx, e.a * (1 + e.e)), 0.5);
+
+    /** trigger 는 기억만 갖는다. 갈래를 이 축 계산에 넣으면 ACTIVE 같은
+     *  라벨의 축이 기억 축들 사이에 끼어 두 어휘가 한 범례에 섞인다.
+     *  갈래는 궤도만 돌고 축은 갖지 않는다 — 기존 규칙을 안 건드린다는 뜻이다. */
+    const triggerOf = (o: OrbitBody) => (o.kind === "memory" ? o.trigger : null);
+    /** 포커스 원의 크기 근거. 기억은 중요도, 갈래는 붙은 경험 수. */
+    const weightOf = (o: OrbitBody) =>
+      o.kind === "memory" ? o.importance : Math.log1p(o.experienceCount) * 4.2;
+
+    /** 주 궤도에 올라온 것 전부. 기억과 갈래를 id 로 함께 찾는다. */
+    const orbitById = new Map<string, OrbitBody>();
+    for (const m of memories) orbitById.set(m.id, m);
+    for (const t of threads) orbitById.set(t.id, t);
 
     let w = 0;
     let h = 0;
@@ -316,7 +416,7 @@ export function OrbitalMap({
     // 없으니, 빨려드는 느낌은 화면에 그리는 수밖에 없다.
     // 그리기용 포커스. focus 가 null 이 돼도 ft 가 0 에 닿을 때까지 남는다 —
     // 안 그러면 나가는 순간 대상이 사라져 되돌아가는 모핑이 안 그려진다.
-    let shownFoc: MemoryBody | null = null;
+    let shownFoc: OrbitBody | null = null;
     let aim: { x: number; y: number } | null = null;
     let grab = 0; // 0 = 자유, 1 = 붙잡힘. 사이 값이 끌려가는 중이다.
     // 포커스 전환 진행도. 0 = 계 전체, 1 = 기억 하나에 붙음.
@@ -592,10 +692,12 @@ export function OrbitalMap({
         // 축이 궤도보다 먼저다 — 선은 배경이지 대상이 아니다.
         const mAxis = new Map<string, { sum: number; n: number }>();
         for (const el of els) {
-          const acc = mAxis.get(el.mem.trigger) ?? { sum: 0, n: 0 };
+          const tr = triggerOf(el.mem);
+          if (tr == null) continue; // 갈래는 축을 갖지 않는다
+          const acc = mAxis.get(tr) ?? { sum: 0, n: 0 };
           acc.sum += el.plane;
           acc.n += 1;
-          mAxis.set(el.mem.trigger, acc);
+          mAxis.set(tr, acc);
         }
         // 라벨 폭까지 감안해 화면 안에 가둔다. min(w,h)*1.02 로 잡으면 세로가
         // 긴 뷰포트(태블릿 세로)에서 가로축 라벨이 캔버스 밖으로 나가고,
@@ -641,7 +743,7 @@ export function OrbitalMap({
           }
         }
 
-        for (const el of els) drawOrbit(el, sysAlpha, litTrigger === el.mem.trigger);
+        for (const el of els) drawOrbit(el, sysAlpha, litTrigger != null && litTrigger === triggerOf(el.mem));
         // 깊이 정렬. 기울여 본 평면이므로 화면 아래쪽(y > cy)이 관찰자에게
         // 가까운 쪽이다. 뒤쪽을 먼저, 중심을, 그다음 앞쪽을 그려야 앞을 지나는
         // 천체가 중심 위로 지나간다 — 안 그러면 전부 중심 뒤로 숨는다.
@@ -650,7 +752,7 @@ export function OrbitalMap({
         for (const { el, p } of placed) {
           if (p.y > cy) continue; // 앞쪽은 나중에
           if (foc && el.id === foc.id) continue; // 모핑 중인 대상은 따로 그린다
-          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || litTrigger === el.mem.trigger, sysAlpha, t);
+          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litTrigger != null && litTrigger === triggerOf(el.mem)), sysAlpha, t);
         }
 
         // 질량 중심
@@ -671,7 +773,7 @@ export function OrbitalMap({
         for (const { el, p } of placed) {
           if (p.y <= cy) continue; // 뒤쪽은 이미 그렸다
           if (foc && el.id === foc.id) continue;
-          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || litTrigger === el.mem.trigger, sysAlpha, t);
+          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litTrigger != null && litTrigger === triggerOf(el.mem)), sysAlpha, t);
         }
         ctx!.restore();
 
@@ -737,7 +839,7 @@ export function OrbitalMap({
             plane,
             ecc,
             color: colorOfCategory(b.category),
-            isSource: b.id === foc.sourceId,
+            isSource: foc.kind === "memory" && b.id === foc.sourceId,
             x: cx + lx * pc - ly * ps,
             y: cy + lx * ps + ly * pc,
           };
@@ -851,7 +953,7 @@ export function OrbitalMap({
 
         // 두 화면을 통틀어 계속 존재하는 유일한 것. 사라졌다 나타나는 게
         // 아니라 자리를 옮기며 자란다 — 이게 모핑이다. 그래서 알파도 1 이다.
-        const toR = 18 + foc.importance * 1.2;
+        const toR = 18 + weightOf(foc) * 1.2;
         // 출발 크기도 계가 그렸을 크기와 같아야 넘겨주는 지점이 안 튄다.
         const fromR = focEl ? focEl.size : toR;
         drawMemory(
@@ -920,7 +1022,7 @@ export function OrbitalMap({
             sub: "이 방향의 궤도들",
           });
         } else if (p.kind === "mem" || p.kind === "focus") {
-          const m = memories.find((x) => x.id === found);
+          const m = orbitById.get(found);
           // 데이터가 갱신되며 이 기억이 빠졌을 수 있다(야간 배치의 망각 마킹 등).
           // 단언으로 두면 undefined.title 에서 프레임이 죽고, try/catch 가 삼켜
           // 그 프레임의 조준점까지 통째로 안 그려진다 — 커서가 사라진다.
@@ -929,7 +1031,10 @@ export function OrbitalMap({
             x: p.x,
             y: p.y,
             text: m.title,
-            sub: `기억 · ${tag(m.trigger)} · 중요도 ${m.importance} · 근거 ${m.referencedIds.length}건`,
+            sub:
+              m.kind === "thread"
+                ? `갈래 · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건`
+                : `기억 · ${tag(m.trigger)} · 중요도 ${m.importance} · 근거 ${m.referencedIds.length}건`,
           });
         } else {
           const b = byId.get(found)!;
@@ -998,7 +1103,7 @@ export function OrbitalMap({
       if (!p) return;
       if (p.kind === "axis" || p.kind === "maxis") return; // 축은 겨누기만 한다
       if (p.kind === "mem") {
-        setFocus(memories.find((m) => m.id === hovered) ?? null);
+        setFocus(orbitById.get(hovered) ?? null);
         setPicked(null); // 다른 기억으로 옮겨가면 이전 선택은 의미가 없다
       } else if (p.kind === "focus") {
         setFocus(null);
@@ -1035,7 +1140,7 @@ export function OrbitalMap({
       canvas.removeEventListener("click", onClick);
       window.removeEventListener("keydown", onKey);
     };
-  }, [bodies, memories]);
+  }, [bodies, memories, threads]);
 
   const probeRef = useRef<HTMLDivElement>(null);
 
@@ -1046,7 +1151,11 @@ export function OrbitalMap({
   // 답이 없다.
   const focusDominantGroup = focus
     ? (() => {
-        const dom = dominantCategory(focus, new Map(bodies.map((b) => [b.id, b])));
+        // 갈래는 자기 분야를 갖는다. 기억만 근거들에서 빌려온다.
+        const dom =
+          focus.kind === "thread"
+            ? focus.category
+            : dominantCategory(focus, new Map(bodies.map((b) => [b.id, b])));
         return dom ? groupOfCategory(dom).key : null;
       })()
     : null;
@@ -1082,7 +1191,7 @@ export function OrbitalMap({
           focus ? "mt-9" : "mt-6"
         }`}
       >
-        <span className="tick">{focus ? "기억" : centerLabel}</span>
+        <span className="tick">{focus ? (focus.kind === "thread" ? "갈래" : "기억") : centerLabel}</span>
         {!focus && memories.length === 0 && (
           <div className="tick mt-3 opacity-60">아직 궤도에 남은 것이 없다</div>
         )}
@@ -1104,7 +1213,9 @@ export function OrbitalMap({
         <div className="pointer-events-none absolute left-1/2 top-16 w-full max-w-lg -translate-x-1/2 px-6 text-center">
           <div className="settle">
             <div className="tick mb-2">
-              {tag(focus.trigger)} · 근거 {focus.referencedIds.length}건
+              {focus.kind === "thread"
+                ? `갈래 · ${tag(focus.status)} · 경험 ${focus.referencedIds.length}건`
+                : `${tag(focus.trigger)} · 근거 ${focus.referencedIds.length}건`}
             </div>
             <h2 className="text-[18px] font-medium text-lum-0">{focus.title}</h2>
             {/*<p className="utterance mt-3 text-[15px] text-lum-1">{focus.body}</p>*/}
@@ -1132,7 +1243,7 @@ export function OrbitalMap({
                     <span
                       className="tick"
                       style={{ color: isCenter ? "var(--color-lum-0)" : "var(--color-lum-2)" }}
-                      title={isCenter ? "이 기억의 주된 분야 — 중심이 쓰는 색" : undefined}
+                      title={isCenter ? "주된 분야 — 중심이 쓰는 색" : undefined}
                     >
                       {g.label}
                     </span>
