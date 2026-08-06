@@ -212,17 +212,28 @@ export default async function Home() {
     expIdsByThread.set(e.threadId, list);
   }
 
-  const threadBodies: ThreadBody[] = threadRows.map((t) => ({
-    kind: "thread" as const,
-    id: t.id,
-    title: t.title,
-    category: t.category,
-    status: t.status,
-    experienceCount: t.experienceCount,
-    occurredAt: t.startedAt.getTime(),
-    ageDays: Math.max(0, (now - t.startedAt.getTime()) / DAY_MS),
-    referencedIds: expIdsByThread.get(t.id) ?? [],
-  }));
+  // **기억이 대표하고 있는 갈래는 뺀다.** thread_id 가 있는 기억은 누르면 그
+  // 갈래의 경험 전부로 펼쳐지므로(위 moons 의 e.threadId === m.threadId),
+  // 갈래를 따로 띄우면 완전히 같은 위성을 보여주는 천체가 둘이 된다.
+  // 잊힌 기억(forgotten_at)은 지도에서 사라지니 대표 자격도 없다 — 그때는
+  // 갈래가 다시 나타나 그 작업이 화면에서 통째로 증발하지 않는다.
+  const representedByMemory = new Set(
+    memoryRows.filter((m) => m.forgottenAt == null && m.threadId).map((m) => m.threadId!),
+  );
+
+  const threadBodies: ThreadBody[] = threadRows
+    .filter((t) => !representedByMemory.has(t.id))
+    .map((t) => ({
+      kind: "thread" as const,
+      id: t.id,
+      title: t.title,
+      category: t.category,
+      status: t.status,
+      experienceCount: t.experienceCount,
+      occurredAt: t.startedAt.getTime(),
+      ageDays: Math.max(0, (now - t.startedAt.getTime()) / DAY_MS),
+      referencedIds: expIdsByThread.get(t.id) ?? [],
+    }));
 
   // 기억이 참조하는 경험들. memories 는 experience_id 하나만 직접 가리키지만,
   // thread_id 가 있으면 그 작업에 속한 경험 전부가 이 기억의 근거다 —
