@@ -1363,7 +1363,19 @@ export function OrbitalMap({
       // mouseup 뒤에 click 이 온다. 끌었으면 그걸 삼킨다.
       swallowClick = dragDist > DRAG_SLOP;
       // 문턱 아래로만 움직였으면 클릭이지 던진 게 아니다.
-      if (!swallowClick) flingX = flingY = 0;
+      if (!swallowClick) {
+        flingX = flingY = 0;
+        return;
+      }
+      // 속도는 mousemove 에서만 갱신된다. 그래서 확 끌다가 **멈춘 채로**
+      // 떼면 이벤트가 안 오는 동안 아까 속도가 그대로 남아 있다가 튀어나간다
+      // — 손은 서 있는데 화면만 날아가는 셈이다.
+      // 마지막 움직임 이후 흐른 시간만큼 죽인다. 90ms 넘게 멈춰 있었으면
+      // 던진 게 아니라 놓은 것이다.
+      const idle = performance.now() - dragLastT;
+      const keep = Math.max(0, 1 - idle / 90);
+      flingX *= keep;
+      flingY *= keep;
     }
 
     function onMove(e: MouseEvent) {
@@ -1496,6 +1508,16 @@ export function OrbitalMap({
         // 수렴하므로 도착 시점이 정확히 맞는다.
         offXTarget = 0;
         offYTarget = 0;
+      } else if (next < zoomTarget) {
+        // 축소는 **화면 한가운데** 기준이다. 커서에 맞춰 줄이면 화면 밖으로
+        // 나가려는 방향으로 계가 끌려가서, 물러나는 게 아니라 딴 데로 밀려난다.
+        // 들어갈 때는 겨눈 곳이 목적지지만 나올 때는 목적지가 없다 — 지금
+        // 보고 있는 화면이 그대로 작아지는 게 맞다.
+        //
+        // 화면 중심의 세계 좌표를 고정하면 offset 이 배율에 비례해 줄어든다.
+        const ratio = next / zoomTarget;
+        offXTarget *= ratio;
+        offYTarget *= ratio;
       } else {
         // 커서 밑의 지점이 **끝난 뒤에도 그 자리에 있도록** 이동 목표를 푼다.
         // 지금 좌표에서 계산하므로 이징 도중에 또 굴려도 튀지 않는다.
