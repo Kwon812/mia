@@ -122,7 +122,10 @@ const SECTOR_FILL = 0.55;
 const ECC_STATUS: Record<string, number> = {
   completed: 0.05, // 끝냈다. 자리를 잡았다.
   active: 0.22, // 아직 돌고 있다
-  abandoned: 0.46, // 놓았다. 궤도가 풀렸다
+  // 놓았다. 궤도선을 아예 안 그리고 회전도 멈추므로 이심률은 자리만 흔든다 —
+  // 0 으로 둬야 반경이 곧 "시작한 지"가 된다. 0.46 이던 시절에는 궤도 위
+  // 어디서 얼어붙었느냐에 따라 같은 나이가 0.54~1.46배로 흩어졌다.
+  abandoned: 0,
 };
 /** 갈래는 기억 바깥을 돈다. 기억 여럿을 아우르는 더 큰 구조라는 뜻이고,
  *  같은 각도에 겹쳐도 반경이 달라 판정(hit)이 섞이지 않는다. */
@@ -491,7 +494,12 @@ export function OrbitalMap({
         omega: p * Math.PI * 2,
         plane: threadSectorOf(t),
         theta0: p * Math.PI * 2,
-        n: speedOf(a),
+        // 놓은 갈래는 멈춘다. 이 화면은 전부가 천천히 도는 곳이라 하나만 서
+        // 있으면 눈이 바로 잡는다 — "30일간 아무도 안 건드린 일"이라는 뜻과
+        // 정확히 맞는다. 이심률 하나로는 그 뜻이 화면에서 안 읽혔다(타원이
+        // 얼마나 찌그러졌는지는 나란히 놓고 봐야 아는데, 갈래마다 방향도
+        // 반경도 달라 비교가 안 된다).
+        n: t.status === "abandoned" ? 0 : speedOf(a),
         lum: 1,
         color: colorOf(t),
         // 크기는 붙은 경험 수 — 얼마나 오래 붙들고 있는 일인가.
@@ -1058,7 +1066,12 @@ export function OrbitalMap({
           canHit: ez < 0.02,
         });
 
-        for (const el of els) drawOrbit(el, sysAlpha, litAxis != null && litAxis === axisKeyOf(el.mem));
+        for (const el of els) {
+          // 놓은 갈래는 궤도선을 안 그린다. 도는 것을 그만뒀으니 그릴 궤도가
+          // 없다 — 멈춘 점 하나만 남아 그냥 별처럼 보인다.
+          if (el.mem.kind === "thread" && el.mem.status === "abandoned") continue;
+          drawOrbit(el, sysAlpha, litAxis != null && litAxis === axisKeyOf(el.mem));
+        }
         // 깊이 정렬. 기울여 본 평면이므로 화면 아래쪽(y > cy)이 관찰자에게
         // 가까운 쪽이다. 뒤쪽을 먼저, 중심을, 그다음 앞쪽을 그려야 앞을 지나는
         // 천체가 중심 위로 지나간다 — 안 그러면 전부 중심 뒤로 숨는다.
