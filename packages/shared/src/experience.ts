@@ -44,7 +44,7 @@ const experienceSkillSchema = z.object({
 export const MAX_DIALOGUE_LEN = 80;
 
 /**
- * 문장 경계에서 자른다.
+ * 문장 경계에서 자른다. 대사(80자)와 요약(100자) 둘 다 이 규칙을 쓴다.
  *
  * 그냥 slice 하면 한복판에서 끊겨 화면에 그대로 드러난다 — 실측:
  *   "…threads 테이블들을 살펴봤어. 아"
@@ -55,7 +55,7 @@ export const MAX_DIALOGUE_LEN = 80;
  * 상한 안쪽 마지막 문장부호까지만 남기고, 그게 너무 앞이면(문장이 하나도
  * 안 끝났으면) 마지막 어절에서 끊고 말줄임표를 붙인다.
  */
-export function clampDialogue(text: string, max = MAX_DIALOGUE_LEN): string {
+export function clampSentence(text: string, max: number): string {
   const t = text.trim();
   if (t.length <= max) return t;
 
@@ -82,7 +82,7 @@ const experienceDialogueSchema = z.object({
   //
   // 대사는 파이프라인에서 가장 안 중요한 값이다(LLM 창작물이고 슬롯당 1행씩
   // 덮어써진다). 그게 가장 중요한 값을 죽이면 안 된다.
-  text: z.string().transform((s) => clampDialogue(s)),
+  text: z.string().transform((s) => clampSentence(s, MAX_DIALOGUE_LEN)),
 });
 
 // thread 부착 판정 — 세션 종료 시 Experience Engine 안에서 함께 결정한다

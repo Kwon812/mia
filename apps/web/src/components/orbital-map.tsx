@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { formatKstYmd } from "@/lib/date";
 
@@ -203,6 +203,36 @@ export function dominantCategory(m: MemoryBody, byId: Map<string, Body>): string
 }
 
 
+/**
+ * 판독값을 겨눈 지점 옆에 놓되 **화면 밖으로 나가지 않게** 한다.
+ *
+ * 예전에는 항상 오른쪽 아래(x+18, y-12)로만 나갔다. 지도 컨테이너가
+ * overflow-hidden 이라 오른쪽·아래 가장자리 천체를 겨누면 판독값이 그대로
+ * 잘려나갔다 — 제목이 길수록(기억 제목은 100자까지) 더 많이 잘린다.
+ *
+ * 자리가 없으면 반대쪽으로 뒤집고, 그래도 안 되면 가장자리에 붙인다.
+ * 크기를 매번 읽는 이유는 내용에 따라 높이가 달라지기 때문이다(스킬 칩 줄 수).
+ */
+const PROBE_GAP = 18;
+const PROBE_EDGE = 8;
+function placeProbe(el: HTMLElement, x: number, y: number): void {
+  const parent = el.parentElement;
+  if (!parent) return;
+  const pw = parent.clientWidth;
+  const ph = parent.clientHeight;
+  const bw = el.offsetWidth;
+  const bh = el.offsetHeight;
+
+  let px = x + PROBE_GAP;
+  if (px + bw > pw - PROBE_EDGE) px = x - PROBE_GAP - bw; // 왼쪽으로 뒤집는다
+  px = Math.min(Math.max(px, PROBE_EDGE), Math.max(PROBE_EDGE, pw - PROBE_EDGE - bw));
+
+  let py = y - 12;
+  py = Math.min(Math.max(py, PROBE_EDGE), Math.max(PROBE_EDGE, ph - PROBE_EDGE - bh));
+
+  el.style.transform = `translate(${px}px, ${py}px)`;
+}
+
 /** id → [0,1). 렌더마다 위상이 튀지 않도록 결정적으로 뽑는다. */
 function phaseOf(id: string): number {
   let h = 2166136261;
@@ -295,6 +325,15 @@ export function OrbitalMap({
   useEffect(() => {
     onFocusChange?.(focus != null);
   }, [focus, onFocusChange]);
+
+  // 판독값 DOM. 렌더 루프와 아래 레이아웃 이펙트가 함께 잡는다.
+  const probeRef = useRef<HTMLDivElement>(null);
+
+  // 판독값은 내용에 따라 크기가 달라져(스킬 칩 줄 수·제목 길이) 그려본 뒤에야
+  // 잘리는지 알 수 있다. 그린 직후 같은 프레임에 다시 놓아 깜빡임이 없다.
+  useLayoutEffect(() => {
+    if (probe && probeRef.current) placeProbe(probeRef.current, probe.x, probe.y);
+  }, [probe]);
   // 렌더 루프가 읽는 최신 선택. 마우스가 떠나도 고른 것은 켜진 채로 남는다.
   const pickedRef = useRef<Body | null>(null);
   pickedRef.current = picked;
@@ -1057,7 +1096,7 @@ export function OrbitalMap({
         }
       } else if (found && probeRef.current) {
         const p = hit.get(found)!;
-        probeRef.current.style.transform = `translate(${p.x + 18}px, ${p.y - 12}px)`;
+        placeProbe(probeRef.current, p.x, p.y);
       }
 
       // 조준점은 마지막에. 무엇보다 위에 있어야 가려지지 않는다.
@@ -1152,7 +1191,6 @@ export function OrbitalMap({
     };
   }, [bodies, memories, threads]);
 
-  const probeRef = useRef<HTMLDivElement>(null);
 
   // 지금 펼친 기억의 근거들이 어떤 카테고리인지 — 범례에 쓴다.
   // 캔버스 안의 배분과 같은 함수를 써야 색이 어긋나지 않는다.
