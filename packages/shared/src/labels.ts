@@ -26,6 +26,7 @@ export const CATEGORY_LABEL: Record<(typeof EXPERIENCE_CATEGORIES)[number], stri
   music: '음악',
   shopping: '쇼핑',
   productivity: '정리',
+  design: '디자인',
   news: '뉴스',
   finance: '금융',
   etc: '기타',

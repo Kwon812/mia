@@ -402,6 +402,7 @@ const CATEGORY_DOMAIN: Record<ExperienceCategory, SkillDomain> = {
   docs: 'programming',
   study: 'life',
   music: 'art',
+  design: 'art',
   entertainment: 'life',
   community: 'life',
   news: 'life',

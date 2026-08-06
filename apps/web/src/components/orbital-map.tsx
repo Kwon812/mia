@@ -184,6 +184,9 @@ const CAT_GROUP_DEFS = [
   { key: 'ai', label: 'AI', cats: ['ai'], color: [160, 130, 220] },
   { key: 'community', label: 'community', cats: ['community'], color: [235, 148, 100] },
   { key: 'media', label: 'media', cats: ['entertainment', 'music'], color: [140, 195, 120] },
+  // 만드는 일. 색상환에서 study 분홍(348°)과 life 자홍(309°) 사이가 비어 있어
+  // 거기를 쓴다 — 옆 두 색과 40도 가까이 벌어져 검은 배경에서 갈린다.
+  { key: 'design', label: 'design', cats: ['design'], color: [200, 120, 190] },
   {
     key: 'life',
     label: 'life',

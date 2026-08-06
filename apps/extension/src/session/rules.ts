@@ -45,7 +45,19 @@ export function eventScore(e: ActivityEvent): number {
  * - 예외 A(보조 도메인 흡수): COMPANION 도메인은 항상 제외한다 (활성/비활성 무관).
  * - 예외 C(백그라운드 재생): BACKGROUND_AUDIO 도메인은 활성 탭이 아닐 때만 제외한다.
  */
+/** 아무 데도 안 간 이벤트. 카테고리 투표에서 빼야 한다.
+ *
+ *  'newtab' 은 chrome://newtab/ 의 hostname 이고, 'etc' 는 raw.domain 이 비어
+ *  올 때의 기본값이다(tabs.onActivated 가 url 없이 오는 경우 — normalizeEvent).
+ *  둘 다 "탭을 하나 열었다"는 것뿐인데 한 표를 행사한다.
+ *
+ *  실데이터 16세션을 되짚어보니 **아홉 건에서 이 경유지가 우세 카테고리를
+ *  가져갔다.** 한 세션에서는 ChatGPT 로 25분을 보내는 동안 그 사이에 뜬 새 탭
+ *  두 개가 "25분간 etc 에 머물렀다"로 읽혀 가짜 switch 를 만들었다. */
+const WAYPOINT_DOMAINS = ['newtab', 'etc'];
+
 function isRelevantForCategory(e: ActivityEvent): boolean {
+  if (WAYPOINT_DOMAINS.includes(e.domain)) return false;
   if (isCompanionDomain(e.domain)) return false;
   if (isBackgroundAudioDomain(e.domain) && !e.isActiveTab) return false;
   return true;

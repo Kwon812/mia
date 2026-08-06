@@ -24,6 +24,7 @@ export const EXPERIENCE_CATEGORIES = [
   'music',
   'shopping',
   'productivity',
+  'design',
   'news',
   'finance',
   'etc',

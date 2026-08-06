@@ -20,6 +20,7 @@ export const CATEGORIES = {
   MUSIC: 'music', // 음악
   SHOPPING: 'shopping', // 쇼핑
   PRODUCTIVITY: 'productivity', // 생산성
+  DESIGN: 'design', // 디자인·창작
   NEWS: 'news', // 뉴스
   FINANCE: 'finance', // 금융
   ETC: DEFAULT_CATEGORY,
@@ -47,6 +48,17 @@ export const CATEGORY_MAP: Record<string, string> = {
   'kubernetes.io': CATEGORIES.DEV,
   'supabase.com': CATEGORIES.DEV,
   'localhost': CATEGORIES.DEV, // 로컬 개발 서버
+  // 배포 호스트는 **접미사로** 잡는다. 개별 서브도메인을 적으면 배포할 때마다
+  // 새 이름이 생겨 영원히 못 따라간다 — 실측에서 *.vercel.app 두 개가 27분을
+  // etc 로 흘렸다. categorize 가 longest-suffix 라 'vercel.app' 한 줄이면
+  // mia-web-nine.vercel.app 도 걸린다.
+  'vercel.app': CATEGORIES.DEV,
+  'netlify.app': CATEGORIES.DEV,
+  'pages.dev': CATEGORIES.DEV,
+  'github.io': CATEGORIES.DEV,
+  'render.com': CATEGORIES.DEV,
+  'goorm.io': CATEGORIES.DEV, // 클라우드 IDE
+  'claude.com': CATEGORIES.DEV, // platform.claude.com — API 콘솔. 물어보는 게 아니라 만드는 일이다
 
   // ── 학습 ──
   'inflearn.com': CATEGORIES.STUDY,
@@ -56,6 +68,7 @@ export const CATEGORY_MAP: Record<string, string> = {
   'fastcampus.co.kr': CATEGORIES.STUDY,
   'programmers.co.kr': CATEGORIES.STUDY,
   'leetcode.com': CATEGORIES.STUDY,
+  'zep.us': CATEGORIES.STUDY, // 메타버스 교육·행사 공간
 
   // ── 문서 ──
   'developer.mozilla.org': CATEGORIES.DOCS, // COMPANION
@@ -76,8 +89,26 @@ export const CATEGORY_MAP: Record<string, string> = {
   'duckduckgo.com': CATEGORIES.SEARCH,
   'naver.com': CATEGORIES.SEARCH,
 
+  // ── 디자인·창작 ──
+  // 스킬 쪽은 이미 programming/art/life 로 갈리는데 세션 카테고리에는 art 가
+  // 없어서 두 체계가 어긋나 있었다. design → art 로 이어진다(CATEGORY_DOMAIN).
+  'figma.com': CATEGORIES.DESIGN,
+  'adobe.com': CATEGORIES.DESIGN,
+  'canva.com': CATEGORIES.DESIGN,
+  'dribbble.com': CATEGORIES.DESIGN,
+  'behance.net': CATEGORIES.DESIGN,
+  'sketch.com': CATEGORIES.DESIGN,
+  'framer.com': CATEGORIES.DESIGN,
+
   // ── 커뮤니티 ──
   'reddit.com': CATEGORIES.COMMUNITY,
+  // naver.com 이 search 라 하위가 전부 검색으로 잡혔다. 카페·블로그는 커뮤니티다.
+  'cafe.naver.com': CATEGORIES.COMMUNITY,
+  'blog.naver.com': CATEGORIES.COMMUNITY,
+  'tistory.com': CATEGORIES.COMMUNITY,
+  'velog.io': CATEGORIES.COMMUNITY,
+  'brunch.co.kr': CATEGORIES.COMMUNITY,
+  'discord.com': CATEGORIES.COMMUNITY,
   'news.ycombinator.com': CATEGORIES.COMMUNITY,
   'clien.net': CATEGORIES.COMMUNITY,
   'dcinside.com': CATEGORIES.COMMUNITY,
@@ -113,6 +144,9 @@ export const CATEGORY_MAP: Record<string, string> = {
 
   // ── 생산성 ──
   'notion.so': CATEGORIES.PRODUCTIVITY,
+  'notion.com': CATEGORIES.PRODUCTIVITY, // app.notion.com — 실제로 쓰는 건 이쪽이다
+  'padlet.com': CATEGORIES.PRODUCTIVITY,
+  'miro.com': CATEGORIES.PRODUCTIVITY,
   'slack.com': CATEGORIES.PRODUCTIVITY,
   'trello.com': CATEGORIES.PRODUCTIVITY,
   'asana.com': CATEGORIES.PRODUCTIVITY,
