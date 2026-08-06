@@ -527,6 +527,20 @@ export function OrbitalMap({
     let cx = 0;
     let cy = 0;
     let unit = 1;
+    // 확대. 화면 전체가 cx·cy·unit 세 값에서 나오므로(판정 좌표까지 포함),
+    // 캔버스 변환을 덧씌우는 대신 그 세 값을 바꾼다 — 그러면 궤도·축·조준
+    // 판정이 저절로 같이 움직인다. 변환을 씌웠다면 hit 맵을 역변환해야 했다.
+    //
+    // 천체 크기는 확대해도 안 커진다. 이 화면의 문제는 "작아서 안 보인다"가
+    // 아니라 "겹쳐서 못 고른다"라(갈래 스물여섯이 0.3도 안에 몰린다),
+    // 점 사이를 벌리는 게 확대의 목적이다. 점까지 같이 커지면 헛일이 된다.
+    let baseUnit = 1;
+    let zoom = 1;
+    let zoomTarget = 1;
+    // 커서 밑에 있던 지점을 붙들어 둔다. 확대가 이징으로 여러 프레임에 걸쳐
+    // 일어나므로, 매 프레임 이 지점이 제자리에 오도록 cx·cy 를 다시 푼다.
+    // 이게 없으면 화면 한가운데를 향해서만 커져서 "겨눈 곳으로 들어간다"가 안 된다.
+    let anchor: { wx: number; wy: number; sx: number; sy: number } | null = null;
     let dpr = 1;
     let raf = 0;
     let mouse: { x: number; y: number } | null = null;
@@ -561,11 +575,26 @@ export function OrbitalMap({
       canvas!.style.width = `${w}px`;
       canvas!.style.height = `${h}px`;
       ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
-      cx = w / 2;
-      cy = h / 2;
       // 궤도면이 제각기 기울어 있으므로 어떤 궤도든 세로로 설 수 있다.
       // FLATTEN 을 믿고 세로 여유를 크게 잡으면 화면 밖으로 나간다.
-      unit = (Math.min(w / 2, h / 2) * 0.88) / maxA;
+      baseUnit = (Math.min(w / 2, h / 2) * 0.88) / maxA;
+      // 창 크기가 바뀌면 붙들어 둔 지점의 화면 좌표가 무의미해진다. 놓고
+      // 가운데로 되돌린다 — 확대 배율은 지킨다.
+      anchor = null;
+      applyCamera();
+    }
+
+    /** zoom 과 anchor 로부터 cx·cy·unit 을 푼다. 매 프레임 그리기 전에 부른다. */
+    function applyCamera() {
+      unit = baseUnit * zoom;
+      if (anchor) {
+        // 붙들어 둔 세계 좌표가 그때 그 화면 좌표에 오도록 중심을 옮긴다.
+        cx = anchor.sx - anchor.wx * unit;
+        cy = anchor.sy - anchor.wy * unit;
+      } else {
+        cx = w / 2;
+        cy = h / 2;
+      }
     }
 
     function orbitPoint(el: Elem, t: number) {
@@ -767,6 +796,17 @@ export function OrbitalMap({
       const target = focusRef.current ? 1 : 0;
       ft += (target - ft) * 0.075;
       if (Math.abs(target - ft) < 0.002) ft = target;
+
+      // 확대는 프레임 수가 아니라 시간으로 수렴시킨다. 계수 곱셈(z += (t-z)*k)은
+      // 화면 주사율에 따라 속도가 달라져서, 120Hz 에서는 60Hz 의 두 배로 빨라진다.
+      if (zoom !== zoomTarget) {
+        zoom += (zoomTarget - zoom) * (1 - Math.pow(0.0012, dt));
+        if (Math.abs(zoomTarget - zoom) < 0.0015) zoom = zoomTarget;
+      }
+      // 배율이 1 로 돌아오면 붙들어 둔 지점을 놓는다. 안 놓으면 확대를 다
+      // 풀었는데도 계가 화면 가운데가 아닌 곳에 남는다.
+      if (zoom === 1 && zoomTarget === 1) anchor = null;
+      applyCamera();
 
       ctx!.clearRect(0, 0, w, h);
       hit.clear();
@@ -1237,7 +1277,40 @@ export function OrbitalMap({
       if (e.key === "Escape") {
         setFocus(null);
         setPicked(null);
+        // 확대도 같이 푼다. 빠져나오는 키가 하나여야 한다 — 확대해 들어간
+        // 상태에서 Escape 를 눌러 포커스만 풀리면 어디로 돌아가야 할지
+        // 알려주는 게 화면에 없다.
+        zoomTarget = 1;
       }
+    }
+
+    /** 확대 범위. 아래로는 딱 맞춤(1)까지만 — 그보다 줄이면 화면 가장자리에
+     *  빈 검은 띠만 늘어난다. 위로 8배면 갈래 스물여섯이 몰린 0.3도 구간이
+     *  2.4도로 벌어져 하나씩 겨눌 수 있다. */
+    const ZOOM_MIN = 1;
+    const ZOOM_MAX = 8;
+
+    function onWheel(e: WheelEvent) {
+      // 페이지가 같이 스크롤되면 지도 위에서 휠을 굴릴 수가 없다.
+      // passive:false 로 걸어야 preventDefault 가 먹는다.
+      e.preventDefault();
+
+      const r = canvas!.getBoundingClientRect();
+      const sx = e.clientX - r.left;
+      const sy = e.clientY - r.top;
+
+      // 트랙패드 핀치는 ctrlKey 가 붙은 wheel 로 온다. deltaMode 0=픽셀,
+      // 1=줄, 2=페이지 — 줄/페이지 단위로 오는 마우스 휠을 픽셀로 환산하지
+      // 않으면 한 칸에 화면이 통째로 튄다.
+      const unitPx = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
+      const dy = e.deltaY * unitPx * (e.ctrlKey ? 3 : 1);
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomTarget * Math.exp(-dy * 0.0016)));
+      if (next === zoomTarget) return;
+
+      // 커서 밑의 지점을 **지금 화면 기준**으로 붙든다. 이징 중에 또 굴려도
+      // 그 순간의 실제 좌표에서 다시 잡으므로 튀지 않는다.
+      anchor = { wx: (sx - cx) / unit, wy: (sy - cy) / unit, sx, sy };
+      zoomTarget = next;
     }
 
     resize();
@@ -1251,6 +1324,7 @@ export function OrbitalMap({
     window.addEventListener("mousemove", onMove);
     document.addEventListener("mouseleave", onLeave);
     canvas.addEventListener("click", onClick);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("keydown", onKey);
 
     return () => {
@@ -1259,6 +1333,7 @@ export function OrbitalMap({
       window.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseleave", onLeave);
       canvas.removeEventListener("click", onClick);
+      canvas.removeEventListener("wheel", onWheel);
       window.removeEventListener("keydown", onKey);
     };
   }, [bodies, memories, threads]);
