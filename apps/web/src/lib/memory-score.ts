@@ -121,3 +121,45 @@ export function calculateMemoryScore(input: MemoryScoreInput): MemoryScoreResult
 
   return { score, breakdown };
 }
+
+// ------------------------------------------------------------
+// 기억의 중요도
+// ------------------------------------------------------------
+
+export const MEMORY_SCORE_THRESHOLD = 60;
+const MAX_MEMORY_SCORE = 200;
+
+/** 경험 하나의 점수를 1~10 으로 옮긴다. */
+export function clampImportance(score: number): number {
+  const t = (score - MEMORY_SCORE_THRESHOLD) / (MAX_MEMORY_SCORE - MEMORY_SCORE_THRESHOLD);
+  return Math.min(10, Math.max(1, 1 + Math.round(t * 9)));
+}
+
+/**
+ * 기억의 중요도 — **근거 전체로 다시 잰다.**
+ *
+ * 예전에는 근거가 붙을 때마다 `max(기존, 새것) + 1` 로 올렸다. 두 가지가 틀렸다.
+ *   · 올라가기만 한다. 교정으로 근거의 점수가 낮아져도 안 내려가서, 오래 살아남은
+ *     기억은 전부 10 에 수렴한다 — 크기 축이 죽는다.
+ *   · +1 이 근거의 세기와 무관하다. 20점짜리 여덟 개가 110점짜리 하나보다 무겁다.
+ *
+ * 세 항목으로 나눈다. 각각 다른 것을 말한다.
+ *   그 순간이 얼마나 셌나   가장 센 근거의 점수
+ *   몇 번이나 남을 만했나   근거 수
+ *   얼마나 오래 붙들었나    갈래에 쌓인 경험 수
+ *
+ * 다시 재는 것이라 근거가 바뀌면 값이 따라오고, 재구축해도 같은 값이 나온다.
+ */
+export function memoryImportance(input: {
+  /** 근거가 된 경험들의 memory_score */
+  evidenceScores: number[];
+  /** 그 기억이 속한 갈래의 총 경험 수 */
+  threadExperienceCount: number;
+}): number {
+  const top = input.evidenceScores.length > 0 ? Math.max(...input.evidenceScores) : 0;
+  const raw =
+    clampImportance(top) +
+    Math.floor(input.evidenceScores.length / 2) +
+    Math.floor(input.threadExperienceCount / 6);
+  return Math.min(10, Math.max(1, raw));
+}

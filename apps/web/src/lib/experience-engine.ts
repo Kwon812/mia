@@ -49,7 +49,13 @@ import {
   loadCorrections,
   type CorrectionPattern,
 } from './corrections';
-import { calculateMemoryScore, type RecentExperienceSummary } from './memory-score';
+import {
+  MEMORY_SCORE_THRESHOLD,
+  calculateMemoryScore,
+  clampImportance,
+  memoryImportance,
+  type RecentExperienceSummary,
+} from './memory-score';
 
 // ------------------------------------------------------------
 // LLM 호출 설정
@@ -340,7 +346,6 @@ export const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
 // 없었다(50/40/30/20 조합상 두 개가 겹쳐야만 도달). is_first_time 이 잘 안 뜨면
 // 그 유일한 길마저 막혀서 하루 여섯 경험에 기억 0건이 나온다. 60 으로 낮추면
 // 신규 스킬 하나만으로는 여전히 부족하지만(50), 거기에 뭐라도 하나 겹치면 남는다.
-const MEMORY_SCORE_THRESHOLD = 60;
 
 /** 갈래에 경험이 이만큼 쌓이면 그 자체로 기억이 된다(trigger='deepened').
  *  6개월치 분포에서 상위 21%. 자세한 근거는 사용처 주석에 있다. */
@@ -361,7 +366,6 @@ const DORMANT_SKILL_DAYS = DORMANT_DAYS;
 
 /** 모든 가산항이 참일 때의 점수. 중요도 스케일의 위쪽 끝이다.
  *  50(새 스킬) + 40(처음) + 35(돌파) + 30(복귀) + 25(묵힌 스킬) + 20(긴 세션) */
-const MAX_MEMORY_SCORE = 200;
 
 /** 점수 → 중요도(1~10).
  *
@@ -373,10 +377,6 @@ const MAX_MEMORY_SCORE = 200;
  *
  *  문턱을 거치지 않는 thread_complete 기억은 60 미만일 수 있어 1 로 떨어진다 —
  *  다른 신호 없이 작업만 끝낸 기억이므로 그게 맞다. */
-export function clampImportance(score: number): number {
-  const t = (score - MEMORY_SCORE_THRESHOLD) / (MAX_MEMORY_SCORE - MEMORY_SCORE_THRESHOLD);
-  return Math.min(10, Math.max(1, 1 + Math.round(t * 9)));
-}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -531,8 +531,9 @@ async function upsertThreadMemory(
     occurredAt: Date;
     title: string;
     body: string;
-    importance: number;
     trigger: string;
+    /** 그 갈래에 지금까지 쌓인 경험 수. 중요도의 '얼마나 오래 붙들었나' 항이다. */
+    threadExperienceCount: number;
   },
 ): Promise<'created' | 'appended'> {
   const [existing] = await tx
@@ -552,6 +553,16 @@ async function upsertThreadMemory(
     )
     .limit(1);
 
+  /** 근거들의 점수. 중요도는 이걸로 매번 다시 잰다. */
+  async function scoresOf(ids: string[]): Promise<number[]> {
+    if (ids.length === 0) return [];
+    const rows = await tx
+      .select({ s: experiences.memoryScore })
+      .from(experiences)
+      .where(inArray(experiences.id, ids));
+    return rows.map((r) => r.s);
+  }
+
   if (!existing) {
     await tx.insert(memories).values({
       userId: args.userId,
@@ -561,7 +572,10 @@ async function upsertThreadMemory(
       occurredAt: args.occurredAt,
       title: args.title,
       body: args.body,
-      importance: args.importance,
+      importance: memoryImportance({
+        evidenceScores: await scoresOf([args.experienceId]),
+        threadExperienceCount: args.threadExperienceCount,
+      }),
       trigger: args.trigger,
       triggers: [args.trigger],
     });
@@ -582,8 +596,12 @@ async function upsertThreadMemory(
     .set({
       experienceIds: ids,
       triggers: trs,
-      // 근거가 쌓일수록 무겁다. 다만 개수만으로 10 에 닿지 않게 한 칸씩만.
-      importance: Math.min(10, Math.max(existing.importance, args.importance) + 1),
+      // 더하지 않고 **다시 잰다**. 예전에는 붙을 때마다 +1 이라 올라가기만 했고,
+      // 근거의 세기와 무관해서 20점짜리 여덟 개가 110점짜리 하나보다 무거웠다.
+      importance: memoryImportance({
+        evidenceScores: await scoresOf(ids),
+        threadExperienceCount: args.threadExperienceCount,
+      }),
       // occurred_at 은 안 건드린다. 그 일이 처음 남을 만해진 순간이고,
       // 지도의 반경(나이)이 그 값이라 덮으면 오래된 일이 최근으로 보인다.
       needsResummary: true,
@@ -1295,10 +1313,8 @@ export async function processSession(sessionId: string, userId: string): Promise
           occurredAt: session.startedAt,
           title: threadTitle,
           body: output.detail ?? output.summary,
-          // 점수를 못 쓴다 — 이 규칙이 잡으려는 게 애초에 점수 낮은 갈래라
-          // 전부 1이 된다. 얼마나 오래 붙들었나로 매긴다.
-          importance: Math.min(10, Math.max(1, 3 + Math.floor(attachedCount / 3))),
           trigger: 'deepened',
+          threadExperienceCount: attachedCount,
         });
         if (r === 'created') newMemoriesCount += 1;
       }
@@ -1325,8 +1341,9 @@ export async function processSession(sessionId: string, userId: string): Promise
           occurredAt: session.startedAt,
           title: memoryTitle,
           body: output.detail ?? output.summary,
-          importance: clampImportance(memoryScoreResult.score),
           trigger,
+          // 'new' 로 만든 갈래면 이번이 첫 경험이다.
+          threadExperienceCount: attachedCount ?? 1,
         });
         if (r === 'created') newMemoriesCount += 1;
       }

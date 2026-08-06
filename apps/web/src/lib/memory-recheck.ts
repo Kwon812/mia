@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { and, desc, eq, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { experienceSkills, experiences, memories, threads } from '@na/db';
 import { db } from './db';
 import { effective, loadCorrections } from './corrections';
@@ -32,7 +32,7 @@ import { effective, loadCorrections } from './corrections';
 //   repeatingPattern  ∓30  최근 3건과 분야·주요 스킬이 모두 같음
 // ============================================================
 
-const MEMORY_SCORE_THRESHOLD = 60;
+import { MEMORY_SCORE_THRESHOLD, memoryImportance } from './memory-score';
 
 /** 그 경험의 주된 스킬(비중 최대). 반복 패턴 판정에 쓴다. */
 async function primarySkillOf(experienceId: string): Promise<string | null> {
@@ -165,17 +165,32 @@ export async function recheckMemoryAfterCorrection(
 
   // 교정으로 넘긴 것이므로 이유는 사람이 말한 그 값이다.
   const trigger = after.isFirstTime && !before.isFirstTime ? 'new_skill' : brokeAfter ? 'breakthrough' : 'comeback';
-  const importance = Math.min(10, Math.max(1, 1 + Math.round(((score - 60) / 140) * 9)));
+
+  const [thr] = await db
+    .select({ n: threads.experienceCount })
+    .from(threads)
+    .where(eq(threads.id, exp.threadId));
+  const threadExperienceCount = thr?.n ?? 1;
 
   if (existing) {
+    const ids = [...existing.experienceIds, exp.id];
+    const rows = await db
+      .select({ s: experiences.memoryScore })
+      .from(experiences)
+      .where(inArray(experiences.id, ids));
     await db
       .update(memories)
       .set({
-        experienceIds: [...existing.experienceIds, exp.id],
+        experienceIds: ids,
         triggers: existing.triggers.includes(trigger)
           ? existing.triggers
           : [...existing.triggers, trigger],
-        importance: Math.min(10, Math.max(existing.importance, importance) + 1),
+        // 더하지 않고 다시 잰다. 다만 이 경험의 점수는 저장값(교정 전)이라
+        // 교정으로 오른 만큼은 안 잡힌다 — 근거 수와 갈래 깊이는 그대로 반영된다.
+        importance: memoryImportance({
+          evidenceScores: rows.map((r) => r.s),
+          threadExperienceCount,
+        }),
         needsResummary: true,
       })
       .where(eq(memories.id, existing.id));
@@ -190,7 +205,7 @@ export async function recheckMemoryAfterCorrection(
     occurredAt: exp.occurredAt,
     title: thread?.title ?? exp.summary,
     body: exp.detail ?? exp.summary,
-    importance,
+    importance: memoryImportance({ evidenceScores: [score], threadExperienceCount }),
     trigger,
     triggers: [trigger],
     // 새로 만든 것도 밤에 다듬는다 — 제목이 갈래 이름이라 근거와 어긋날 수 있다.

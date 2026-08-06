@@ -1,12 +1,12 @@
 "use server";
 
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { characters, experiences, memories, questions, threads } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { recordCorrection, type CorrectionField } from "@/lib/corrections";
-import { clampImportance } from "@/lib/experience-engine";
+import { memoryImportance } from "@/lib/memory-score";
 import { recheckMemoryAfterCorrection } from "@/lib/memory-recheck";
 import { FIELD_OPTIONS } from "@/lib/labels";
 
@@ -214,17 +214,26 @@ export async function completeThread(threadId: string): Promise<CorrectResult> {
       .limit(1);
 
     if (existing) {
+      const ids = existing.experienceIds.includes(last.id)
+        ? existing.experienceIds
+        : [...existing.experienceIds, last.id];
+      const scores = await tx
+        .select({ s: experiences.memoryScore })
+        .from(experiences)
+        .where(inArray(experiences.id, ids));
       await tx
         .update(memories)
         .set({
-          experienceIds: existing.experienceIds.includes(last.id)
-            ? existing.experienceIds
-            : [...existing.experienceIds, last.id],
+          experienceIds: ids,
           triggers: existing.triggers.includes("thread_complete")
             ? existing.triggers
             : [...existing.triggers, "thread_complete"],
-          // 끝냈다는 건 가장 센 이유다. 중요도를 두 칸 올린다.
-          importance: Math.min(10, existing.importance + 2),
+          // 더하지 않고 다시 잰다 — 엔진과 같은 규칙이라야 사람이 누른 것과
+          // 모델이 만든 것이 같은 크기로 보인다.
+          importance: memoryImportance({
+            evidenceScores: scores.map((r) => r.s),
+            threadExperienceCount: thread.experienceCount,
+          }),
           needsResummary: true,
         })
         .where(eq(memories.id, existing.id));
@@ -238,7 +247,10 @@ export async function completeThread(threadId: string): Promise<CorrectResult> {
         // 제목은 갈래 이름만. 엔진의 완결 기억과 같은 규칙이다.
         title: thread.title,
         body: last.detail ?? last.summary,
-        importance: clampImportance(last.memoryScore),
+        importance: memoryImportance({
+          evidenceScores: [last.memoryScore],
+          threadExperienceCount: thread.experienceCount,
+        }),
         trigger: "thread_complete",
         triggers: ["thread_complete"],
       });
