@@ -34,9 +34,22 @@ export type ExperienceCategory = (typeof EXPERIENCE_CATEGORIES)[number];
 export const EXPERIENCE_OUTCOMES = ['success', 'partial', 'stuck', 'explore'] as const;
 export const DIALOGUE_SLOTS = ['morning', 'afternoon', 'evening', 'night'] as const;
 
+/** 스킬이 어느 갈래의 능력인가. user_skills 를 화면에서 묶는 축이다. */
+export const SKILL_DOMAINS = ['programming', 'art', 'life'] as const;
+export type SkillDomain = (typeof SKILL_DOMAINS)[number];
+
 const experienceSkillSchema = z.object({
   name: z.string(),
   weight: z.int().min(1).max(10),
+  // 스킬마다 LLM 이 직접 고른다. 예전에는 코드가 **세션 category 하나를**
+  // 그 세션 스킬 전부에 똑같이 찍었다 — dev 세션에서 Figma 를 썼다고 Figma 가
+  // programming 이 됐다(실제로 그렇게 저장돼 있었다). 그렇다고 도구 이름
+  // 사전을 코드에 박으면 새 도구가 나올 때마다 사람이 목록을 채워야 한다.
+  // 이름을 뱉은 주체가 갈래도 안다 — 호출 한 번 안에서 같이 받는다.
+  //
+  // 하한을 두지 않는다: 모델이 빠뜨렸다고 경험 전체를 버리는 것이 더 큰 손실이라,
+  // 없으면 엔진이 category 로 물러난다(이 파일의 dialogues 와 같은 판단).
+  domain: z.enum(SKILL_DOMAINS).optional(),
 });
 
 /** 대사 길이 상한. dialogues.text 의 DB CHECK(char_length <= 80)와 같은 값이고,

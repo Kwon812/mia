@@ -204,10 +204,15 @@ export const experienceSkills = pgTable(
       .references(() => experiences.id, { onDelete: 'cascade' }),
     skillName: text('skill_name').notNull(), // 'TypeScript', 'Unity'
     weight: smallint('weight').notNull().default(1),
+    // 'programming' | 'art' | 'life' — 그 경험에서 LLM 이 판단한 갈래.
+    // NULL 이면 미판단(마이그레이션 이전 데이터, 또는 모델이 빠뜨린 경우).
+    // user_skills.domain 은 이 열의 최빈값이다.
+    domain: text('domain'),
   },
   (t) => [
     primaryKey({ columns: [t.experienceId, t.skillName] }),
     index('idx_expskill_name').on(t.skillName),
+    index('idx_expskill_domain').on(t.skillName, t.domain),
   ],
 );
 

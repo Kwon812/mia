@@ -6,7 +6,7 @@
 // temperature 0 이어도 실행마다 답이 갈리므로 여러 번 돌려 안정성도 함께 본다.
 import fs from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
-import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V4, buildUserMessage } from '../src/lib/experience-engine';
+import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V5, buildUserMessage } from '../src/lib/experience-engine';
 
 const RUNS = Number(process.argv[2] ?? 3);
 const env = fs.readFileSync('.env.local', 'utf8');
@@ -274,7 +274,7 @@ async function run(c: Case) {
   );
   const res = await client.messages.create({
     model: MODEL, max_tokens: 1024, temperature: 0,
-    system: SYSTEM_PROMPT_V4, tools: [RECORD_EXPERIENCE_TOOL],
+    system: SYSTEM_PROMPT_V5, tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content }],
   });

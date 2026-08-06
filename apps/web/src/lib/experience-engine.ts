@@ -36,7 +36,9 @@ import {
   calculateLevel,
   clampSentence,
   experienceOutputSchema,
+  type ExperienceCategory,
   type ExperienceOutput,
+  type SkillDomain,
 } from '@na/shared';
 import { db } from './db';
 import {
@@ -57,9 +59,10 @@ export const MODEL = 'claude-haiku-4-5';
 
 export const TOOL_NAME = 'record_experience';
 
-/** SYSTEM_PROMPT_V4 의 버전 번호. llm_outputs 에 남겨 프롬프트 간 비교의
- *  기준으로 쓴다 — 프롬프트를 고치면 여기도 올린다. */
-export const PROMPT_VERSION = 4;
+/** SYSTEM_PROMPT_V5 의 버전 번호. llm_outputs 에 남겨 프롬프트 간 비교의
+ *  기준으로 쓴다 — 프롬프트를 고치면 여기도 올린다.
+ *  v5: 스킬마다 domain 을 모델이 직접 고른다(예전에는 코드가 세션 category 를 복사). */
+export const PROMPT_VERSION = 5;
 
 /** 프롬프트에 넣는 보유 스킬 목록의 최대 개수. 판정용 집합과는 다르다. */
 const PROMPT_SKILL_LIMIT = 50;
@@ -88,7 +91,7 @@ function kstYmd(date: Date): string {
 // 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
 // (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
 // 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
-export const SYSTEM_PROMPT_V4 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
+export const SYSTEM_PROMPT_V5 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
@@ -188,6 +191,14 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
 - skills: 이번에 사용하거나 습득한 스킬과 비중(weight, 1~10). 기존 스킬 목록과 이름이
   겹치면 반드시 동일한 표기를 재사용한다 — "TS"·"타입스크립트"처럼 같은 스킬을 다른
   이름으로 만들어내지 않는다.
+  각 스킬에 domain 을 붙인다 — **그 스킬 자체가 어느 갈래의 능력인지**를 본다.
+  이번 세션이 무엇이었는지는 근거가 아니다.
+    programming : 소프트웨어를 만들고 돌리는 능력. 언어·프레임워크·DB·인프라·
+                  버전관리·배포·코딩 보조 도구.
+    art         : 만들어내는 능력. 디자인·그림·영상·사진·작곡·편집 도구.
+    life        : 그 밖의 생활·업무 능력. 메모·협업·문서·가계·학습 도구.
+  같은 세션에서 나온 스킬이라도 갈래는 서로 다를 수 있다 — 개발하다 Figma 를 썼으면
+  그 Figma 는 art 다. 애매하면 life 로 둔다.
 - dialogues: **반드시 4개** — morning, afternoon, evening, night 슬롯당 정확히 하나씩.
   하나라도 빠뜨리면 안 된다. 각각 이번 세션 내용을 반영해 캐릭터가 사용자에게 건네는
   자연스러운 한국어 반말 한 마디, 80자 이내. 시간대에 맞는 어감으로 쓴다
@@ -261,8 +272,14 @@ export const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
           properties: {
             name: { type: 'string', description: '스킬 이름. 기존 표기와 일치시킨다.' },
             weight: { type: 'integer', description: '이 경험에서 이 스킬의 비중. 1~10.' },
+            domain: {
+              type: 'string',
+              enum: ['programming', 'art', 'life'],
+              description:
+                '이 스킬 자체가 어느 갈래의 능력인가. 이번 세션이 무엇이었는지가 아니라 스킬의 성격으로 정한다.',
+            },
           },
-          required: ['name', 'weight'],
+          required: ['name', 'weight', 'domain'],
           additionalProperties: false,
         },
       },
@@ -361,67 +378,63 @@ function clampImportance(score: number): number {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // ------------------------------------------------------------
-// category → user_skills.domain 간단 매핑. 애매하면 'life'.
-// domain 은 스킬이 "처음 생성"될 때만 정해지고, 이후 upsert 에서는 바뀌지 않는다.
-// ------------------------------------------------------------
-const PROGRAMMING_KEYWORDS = [
-  '개발',
-  '코딩',
-  '코드',
-  '프로그래밍',
-  '디버그',
-  '리팩토링',
-  '버그',
-  '엔지니어링',
-  'dev',
-  'code',
-  'coding',
-  'program',
-  'engineer',
-  'debug',
-  'refactor',
-  'backend',
-  'frontend',
-  'api',
-  'typescript',
-  'javascript',
-  'python',
-];
+// 스킬의 domain 은 **LLM 이 스킬마다 직접 고른다**(experienceSkillSchema.domain).
+// 여기 남은 건 모델이 그 칸을 빠뜨렸을 때의 대비책 하나뿐이다.
+//
+// 예전에는 경험의 category 를 키워드로 훑어 그 세션 스킬 **전부에 같은 값**을
+// 찍었다. 두 가지가 동시에 틀렸다. (1) 스킬을 아예 안 봐서 dev 세션의 Figma 가
+// programming 이 됐고, (2) 키워드 목록에 실제로 걸리는 category 는 'dev' 와
+// 'music' 뿐이라 나머지 열하나는 전부 'life' 로 떨어졌다.
+//
+// 대신 도구 이름 사전을 코드에 박는 방법도 있었지만 그건 사람이 새 도구가
+// 나올 때마다 목록을 채워야 한다 — 이름을 뱉은 주체가 갈래도 안다.
+//
+// 열셋 enum 을 남김없이 적는다. Record<ExperienceCategory, …> 라 category 가
+// 하나 늘면 타입이 빠진 칸을 짚어준다.
+// docs 를 programming 으로 두는 건 판단이다(이 제품에서 문서는 대체로 기술
+// 문서다). study 는 어학·자격증도 섞여서 life 로 둔다.
+const CATEGORY_DOMAIN: Record<ExperienceCategory, SkillDomain> = {
+  dev: 'programming',
+  ai: 'programming',
+  docs: 'programming',
+  study: 'life',
+  music: 'art',
+  entertainment: 'life',
+  community: 'life',
+  news: 'life',
+  finance: 'life',
+  shopping: 'life',
+  productivity: 'life',
+  search: 'life',
+  etc: 'life',
+};
 
-const ART_KEYWORDS = [
-  '디자인',
-  '그림',
-  '음악',
-  '작곡',
-  '사진',
-  '영상',
-  '편집',
-  '창작',
-  '드로잉',
-  'design',
-  'art',
-  'music',
-  'drawing',
-  'paint',
-  'photo',
-  'illustration',
-];
-
-function mapCategoryToDomain(category: string): 'programming' | 'art' | 'life' {
-  const c = category.toLowerCase();
-  if (PROGRAMMING_KEYWORDS.some((k) => c.includes(k))) return 'programming';
-  if (ART_KEYWORDS.some((k) => c.includes(k))) return 'art';
-  return 'life';
+/** 모델이 domain 을 안 준 스킬의 대비책. */
+function fallbackDomain(category: string): SkillDomain {
+  return CATEGORY_DOMAIN[category as ExperienceCategory] ?? 'life';
 }
 
 // LLM 이 같은 스킬을 중복으로 낼 수 있으니 이름으로 합치고 weight 는 1~10 으로 clamp 한다.
-function dedupeSkills(skills: ExperienceOutput['skills']): { name: string; weight: number }[] {
-  const merged = new Map<string, number>();
+function dedupeSkills(
+  skills: ExperienceOutput['skills'],
+  category: string,
+): { name: string; weight: number; domain: SkillDomain }[] {
+  const merged = new Map<string, { weight: number; domain: SkillDomain | undefined }>();
   for (const s of skills) {
     const clamped = Math.min(10, Math.max(1, Math.round(s.weight)));
-    merged.set(s.name, Math.min(10, (merged.get(s.name) ?? 0) + clamped));
+    const prev = merged.get(s.name);
+    merged.set(s.name, {
+      weight: Math.min(10, (prev?.weight ?? 0) + clamped),
+      // 같은 스킬이 두 번 나오면서 갈래가 엇갈리면 먼저 나온 판단을 지킨다.
+      // 둘 다 없으면 아래에서 category 로 물러난다.
+      domain: prev?.domain ?? s.domain,
+    });
   }
-  return Array.from(merged.entries()).map(([name, weight]) => ({ name, weight }));
+  return Array.from(merged.entries()).map(([name, v]) => ({
+    name,
+    weight: v.weight,
+    domain: v.domain ?? fallbackDomain(category),
+  }));
 }
 
 // ------------------------------------------------------------
@@ -698,7 +711,7 @@ export async function processSession(sessionId: string, userId: string): Promise
       // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
       // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
       temperature: 0,
-      system: SYSTEM_PROMPT_V4,
+      system: SYSTEM_PROMPT_V5,
       tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [
@@ -769,7 +782,7 @@ export async function processSession(sessionId: string, userId: string): Promise
     const output = parsed.data;
     // 스키마 상한을 넉넉히 푼 만큼 여기서 자른다. 개수가 많다고 경험 전체를
     // 버리는 것보다, 합치고 상위만 남기는 편이 손실이 적다.
-    const dedupedSkills = dedupeSkills(output.skills)
+    const dedupedSkills = dedupeSkills(output.skills, output.category)
       .sort((a, b) => b.weight - a.weight)
       .slice(0, MAX_SKILLS_PER_EXPERIENCE);
     // 어느 스킬이 새것인지까지 남긴다. some() 으로 불리언만 뽑으면 규칙은
@@ -868,7 +881,6 @@ export async function processSession(sessionId: string, userId: string): Promise
 
     // 5. 저장 (트랜잭션)
     const now = new Date();
-    const domain = mapCategoryToDomain(output.category);
 
     await db.transaction(async (tx) => {
       // action='new' 인 thread 는 experiences.thread_id FK 때문에 experience insert 보다
@@ -922,7 +934,14 @@ export async function processSession(sessionId: string, userId: string): Promise
       if (dedupedSkills.length > 0) {
         await tx
           .insert(experienceSkills)
-          .values(dedupedSkills.map((s) => ({ experienceId: insertedExperience.id, skillName: s.name, weight: s.weight })))
+          .values(
+            dedupedSkills.map((s) => ({
+              experienceId: insertedExperience.id,
+              skillName: s.name,
+              weight: s.weight,
+              domain: s.domain,
+            })),
+          )
           .onConflictDoNothing({ target: [experienceSkills.experienceId, experienceSkills.skillName] });
 
         for (const skill of dedupedSkills) {
@@ -931,7 +950,7 @@ export async function processSession(sessionId: string, userId: string): Promise
             .values({
               userId,
               skillName: skill.name,
-              domain,
+              domain: skill.domain,
               points: skill.weight,
               useCount: 1,
               // "사용자가 실제로 쓴 시각" 기준 — experiences.occurred_at 과 마찬가지로
@@ -942,6 +961,23 @@ export async function processSession(sessionId: string, userId: string): Promise
             .onConflictDoUpdate({
               target: [userSkills.userId, userSkills.skillName],
               set: {
+                // domain 은 그 스킬이 쓰인 **모든 경험의 최빈값**으로 다시 계산한다.
+                // 예전에는 set 절에 아예 없어서 처음 만들어질 때의 값이 영구히
+                // 고정됐다 — 그 스킬을 나중에 백 번 다르게 써도 안 바뀌었다.
+                // 그렇다고 마지막 세션 값으로 덮어쓰면 세션마다 판단이 흔들릴 때
+                // 값이 왔다갔다 한다. 최빈값은 **순서와 무관**해서 재구축해도
+                // 같은 값이 나오고, 경험이 쌓일수록 흔들림이 줄어든다.
+                // 방금 넣은 행까지 포함되도록 experience_skills insert 뒤에 돈다.
+                domain: sql`coalesce((
+                  select es.domain from ${experienceSkills} es
+                  join ${experiences} e on e.id = es.experience_id
+                  where es.skill_name = ${skill.name}
+                    and e.user_id = ${userId}
+                    and es.domain is not null
+                  group by es.domain
+                  order by count(*) desc, es.domain asc
+                  limit 1
+                ), ${userSkills.domain})`,
                 points: sql`${userSkills.points} + ${skill.weight}`,
                 useCount: sql`${userSkills.useCount} + 1`,
                 // GREATEST 로 역행을 막는다 — 세션은 며칠 늦게 도착할 수 있어서

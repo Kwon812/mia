@@ -13,7 +13,7 @@ import {
   MODEL,
   TOOL_NAME,
   RECORD_EXPERIENCE_TOOL,
-  SYSTEM_PROMPT_V4,
+  SYSTEM_PROMPT_V5,
   buildUserMessage,
 } from '../src/lib/experience-engine';
 
@@ -55,7 +55,7 @@ for (const [i, r] of rows.entries()) {
     // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
     // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
     temperature: 0,
-    system: SYSTEM_PROMPT_V4,
+    system: SYSTEM_PROMPT_V5,
     tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{
@@ -79,7 +79,11 @@ for (const [i, r] of rows.entries()) {
     'outcome': `${r.old_outcome} → ${n.outcome} ${flag(r.old_outcome, n.outcome)}`,
     'first': `${r.old_first} → ${n.is_first_time} ${flag(r.old_first, n.is_first_time)}`,
     'category': `${r.old_category} → ${n.category} ${flag(r.old_category, n.category)}`,
-    '스킬': (n.skills ?? []).map((s: any) => s.name).join(','),
+    // domain 까지 찍는다 — v5 에서 모델이 스킬마다 직접 고르게 한 값이라,
+    // 세션 category 를 그대로 따라가고 있지 않은지 여기서 눈으로 확인한다.
+    '스킬': (n.skills ?? [])
+      .map((s: any) => `${s.name}:${(s.domain ?? '?').slice(0, 4)}`)
+      .join(','),
   });
   console.log(`[${i + 1}] ${r.old_summary}`);
   console.log(`    이전 컨텍스트: 스킬 ${skills.length} · 최근경험 ${recent.length} · 작업 ${threads.length}`);
