@@ -615,12 +615,15 @@ async function findDormantCandidates(
   userId: string,
   session: SessionRow,
 ): Promise<DormantThreadRow[]> {
+  // queries 는 지금 {q, n, first, last} 객체 목록이다(builder.ts 의 CompressedQuery).
+  // 옛 세션에는 문자열 배열로 들어 있어 둘 다 받는다 — 객체를 그대로 join 하면
+  // 검색어가 통째로 "[object Object]" 가 되어 이 후보 검색에서 사라진다.
   const log = session.compressedLog as
-    | { segments?: { title?: string }[]; queries?: string[] }
+    | { segments?: { title?: string }[]; queries?: (string | { q?: string })[] }
     | null;
   const text = [
     ...(log?.segments ?? []).map((g) => g.title ?? ''),
-    ...(log?.queries ?? []),
+    ...(log?.queries ?? []).map((q) => (typeof q === 'string' ? q : (q?.q ?? ''))),
   ].join(' ');
 
   const tokens = [
