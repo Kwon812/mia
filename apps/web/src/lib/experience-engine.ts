@@ -68,6 +68,33 @@ function kstYmd(date: Date): string {
   return new Date(date.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+/**
+ * 마지막 글자에 받침이 있는가 — 조사(을/를) 선택에 쓴다.
+ *
+ * 스킬 이름은 사용자·모델이 자유롭게 쓰는 값이라 한글·영문·숫자가 다 온다.
+ *   한글  유니코드 음절에서 종성을 직접 계산한다(정확).
+ *   영문  한국어로 읽었을 때 받침으로 끝나는 글자만 추린다 — Python(파이썬),
+ *         Vercel(베르셀), npm(엔피엠). 나머지는 대개 모음으로 끝난다
+ *         (Docker→도커, React→리액트, Supabase→수파베이스). **추정이라 완벽하지
+ *         않다**(ZEP→젭 은 받침인데 p 라 놓친다). 조사 하나가 어색해질 뿐이라
+ *         감수한다 — 이걸 정확히 하려면 발음 사전이 필요하다.
+ *   숫자  읽는 소리 기준(1 일, 3 삼, 6 육, 7 칠, 8 팔, 0 영 → 받침).
+ */
+function hasFinalConsonant(word: string): boolean {
+  const c = word.trim().slice(-1);
+  if (!c) return false;
+  const code = c.charCodeAt(0);
+  if (code >= 0xac00 && code <= 0xd7a3) return (code - 0xac00) % 28 !== 0;
+  if (/[0-9]/.test(c)) return '136780'.includes(c);
+  if (/[a-zA-Z]/.test(c)) return 'nmlNML'.includes(c);
+  return false;
+}
+
+/** "Supabase를", "Python을" — 목적격 조사를 붙인다. */
+function withObjectParticle(word: string): string {
+  return `${word}${hasFinalConsonant(word) ? '을' : '를'}`;
+}
+
 // v3 — 두 가지를 고쳤다. 둘 다 "기준을 안 주면 모델은 가장 안전한 값으로 도망간다"는
 //      같은 실패였다.
 //      (1) is_first_time 판정 완화. v2 까지는 이 값이 거의 true 로 나오지 않아
@@ -977,9 +1004,35 @@ export async function processSession(sessionId: string, userId: string): Promise
           .where(eq(threads.id, threadId));
       }
 
-      // thread 완결 → status 전이 + 기억 생성. thread 완결과 별개로 memory_score
-      // 임계값을 넘으면 'new_skill'/'comeback' 기억을 하나 더 남긴다(둘 다 발생 가능).
+      // thread 완결 → status 전이 + 기억 생성. 점수 임계를 넘으면 그것도 기억이
+      // 되는데, **둘이 동시에 터지면 기억을 둘 만들지 않고 하나에 합친다** —
+      // 아래 두 블록의 insert 는 title 을 빼면 전부 같은 값이었다(같은 경험·갈래·
+      // body·중요도). 지도에서 크기·반경·위성이 전부 같은 쌍둥이 둘이 된다.
       let newMemoriesCount = 0;
+
+      // 이 기억이 **왜 남았는지**를 한 문장으로. 두 블록이 함께 쓴다.
+      //
+      // 예전에는 title 이 output.summary 복사본이라, trigger 가 new_skill 인데
+      // 정작 무슨 스킬이 처음이었는지가 제목에 한 글자도 없었다(실측:
+      // trigger=new_skill · 신규=ZEP 메타버스 인데 제목은 "Army Sim 프로젝트를
+      // 확인한 후 …"). /memories 에서 태그와 요약문이 나란히 뜨는데 "무슨
+      // 스킬?"에 답하는 게 화면 어디에도 없었다.
+      //
+      // 규칙이 이미 아는 값을 쓸 뿐이라 LLM 호출이 늘지 않는다.
+      const bd = memoryScoreResult.breakdown;
+      const firstSkill = newSkillNames[0] ?? primarySkillName;
+      const reason =
+        bd.hasNewSkill || bd.isFirstTime
+          ? firstSkill
+            ? `${withObjectParticle(firstSkill)} 처음 써봤다`
+            : '처음 해보는 것을 다뤘다'
+          : bd.brokeThrough
+            ? primarySkillName
+              ? `${primarySkillName}에서 막혔던 것을 뚫었다`
+              : '막혔던 것을 뚫었다'
+            : bd.dormantSkillReturned && dormantSkillNames[0]
+              ? `오랜만에 ${withObjectParticle(dormantSkillNames[0])} 다시 꺼냈다`
+              : null; // comeback 은 스킬이 아니라 공백 후 복귀라 붙일 이름이 없다
 
       // 강등된 attach 의 completed 는 무시한다. LLM 은 "그 기존 작업이 끝났다"고
       // 말한 것인데 그 작업은 존재하지 않았다 — 방금 만든 새 thread 를 즉시
@@ -992,17 +1045,18 @@ export async function processSession(sessionId: string, userId: string): Promise
           threadId,
           experienceId: insertedExperience.id,
           occurredAt: session.startedAt,
-          title: threadTitle,
+          // 완결 사실 + 그 과정에서 무엇이 처음이었나. 둘 다 한 줄에 담아
+          // 기억을 하나로 유지한다. trigger 는 thread_complete 로 둔다 —
+          // 완결이 더 큰 사건이라 궤도 방향은 그쪽이 맞다.
+          title: (reason ? `${threadTitle} · ${reason}` : threadTitle).slice(0, MAX_SUMMARY_LEN),
           body: output.detail ?? output.summary,
           importance: clampImportance(memoryScoreResult.score),
           trigger: 'thread_complete',
         });
         newMemoriesCount += 1;
-      }
-
-      if (memoryScoreResult.score >= MEMORY_SCORE_THRESHOLD) {
+      } else if (memoryScoreResult.score >= MEMORY_SCORE_THRESHOLD) {
+        // else if 다 — 완결 기억이 이미 근거를 담았으므로 또 만들지 않는다.
         // 어느 규칙이 이 기억을 만들었는지가 곧 trigger 다. 위에서부터 먼저 맞는 것.
-        const bd = memoryScoreResult.breakdown;
         const trigger = bd.hasNewSkill || bd.isFirstTime
           ? 'new_skill'
           : bd.brokeThrough
@@ -1011,31 +1065,7 @@ export async function processSession(sessionId: string, userId: string): Promise
               ? 'revival'
               : 'comeback';
 
-        // 제목이 **왜 남았는지**를 말하게 한다.
-        //
-        // 예전에는 title 이 output.summary 복사본이라, trigger 가 new_skill 인데
-        // 정작 무슨 스킬이 처음이었는지가 제목에 한 글자도 없었다(실측:
-        // trigger=new_skill · 신규=ZEP 메타버스 인데 제목은 "Army Sim 프로젝트를
-        // 확인한 후 …"). /memories 에서 태그와 요약문이 나란히 뜨는데 "무슨
-        // 스킬?"에 답하는 게 화면 어디에도 없었다.
-        //
-        // 규칙이 이미 아는 값을 쓸 뿐이라 LLM 호출이 늘지 않는다. 근거를 앞에
-        // 두고 요약을 뒤에 붙여, 목록에서 훑을 때의 맥락도 잃지 않는다.
-        const reason =
-          trigger === 'new_skill'
-            ? (newSkillNames[0] ?? primarySkillName)
-              ? `${newSkillNames[0] ?? primarySkillName} — 처음`
-              : null
-            : trigger === 'revival'
-              ? dormantSkillNames[0]
-                ? `${dormantSkillNames[0]} — 오랜만에`
-                : null
-              : trigger === 'breakthrough'
-                ? primarySkillName
-                  ? `${primarySkillName} — 막힘을 뚫었다`
-                  : '막힘을 뚫었다'
-                : null; // comeback 은 스킬이 아니라 공백 후 복귀라 붙일 이름이 없다
-
+        // 근거를 앞에 두고 요약을 뒤에 붙여, 목록에서 훑을 때의 맥락도 잃지 않는다.
         const memoryTitle = (
           reason ? `${reason} · ${output.summary}` : output.summary
         ).slice(0, MAX_SUMMARY_LEN);
