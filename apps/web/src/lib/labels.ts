@@ -1,36 +1,14 @@
-import { EXPERIENCE_CATEGORIES, EXPERIENCE_OUTCOMES } from "@na/shared";
+import {
+  CATEGORY_LABEL,
+  EXPERIENCE_CATEGORIES,
+  EXPERIENCE_OUTCOMES,
+  FIRST_TIME_LABEL,
+  OUTCOME_LABEL,
+} from "@na/shared";
 
-// 화면에 쓰는 한국어 표기. DB 에는 영문 열거값이 그대로 들어가고
-// (experiences.category / outcome), 여기는 표기 전용이다 — 라벨을 저장하면
-// 표기를 바꿀 때마다 과거 데이터가 어긋난다.
-
-export const OUTCOME_LABEL: Record<(typeof EXPERIENCE_OUTCOMES)[number], string> = {
-  success: "해냄",
-  partial: "일부",
-  stuck: "막힘",
-  explore: "둘러봄",
-};
-
-export const CATEGORY_LABEL: Record<(typeof EXPERIENCE_CATEGORIES)[number], string> = {
-  dev: "개발",
-  study: "공부",
-  docs: "문서",
-  ai: "AI",
-  search: "검색",
-  community: "커뮤니티",
-  entertainment: "오락",
-  music: "음악",
-  shopping: "쇼핑",
-  productivity: "정리",
-  news: "뉴스",
-  finance: "금융",
-  etc: "기타",
-};
-
-export const FIRST_TIME_LABEL: Record<"true" | "false", string> = {
-  true: "처음",
-  false: "해본 것",
-};
+// 라벨 표는 @na/shared 가 정본이다 — 배치(캐릭터 질문 문장)도 같은 표를 쓴다.
+// 여기는 화면용 선택지 조립만 담당한다.
+export { CATEGORY_LABEL, OUTCOME_LABEL, FIRST_TIME_LABEL };
 
 /** 교정 가능한 필드별 선택지와 표기 — /diary 칩과 캐릭터 질문이 같은 표를 쓴다. */
 export const FIELD_OPTIONS = {

@@ -19,10 +19,13 @@ export type AskQuestion = {
   id: string;
   field: CorrectionField;
   text: string;
+  /** 모델이 낸 값. "맞아?" 라고 물었으면 긍정 버튼이 하나 있어야 한다. */
+  modelValue: string;
 };
 
 export function AskCard({ question }: { question: AskQuestion }) {
   const [gone, setGone] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -51,18 +54,47 @@ export function AskCard({ question }: { question: AskQuestion }) {
       <div className="tick mb-3 text-[9.5px] text-lum-4">묻고 싶은 게 하나 있어</div>
       <p className="utterance text-[14.5px]">{question.text}</p>
 
+      {/* 질문이 "맞아?" 라서 긍정 버튼이 먼저 와야 한다. 선택지 13개를 그대로
+          깔면 묻는 말과 선택지가 어긋나고, 무엇보다 **의도적인 확인**이라는
+          신호가 흐려진다 — 확인 라벨은 층 2 에서만 나오는 값이라 흐려지면 안 된다.
+          아니라고 답할 때만 대안을 펼친다. */}
       <div className="mt-5 flex flex-wrap items-center gap-1.5">
-        {options.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            disabled={pending}
-            onClick={() => answer(o.value)}
-            className="readout rounded-sm border border-[rgba(160,185,220,0.16)] px-2 py-1 text-[10.5px] text-lum-2 transition-colors hover:border-[rgba(160,185,220,0.38)] hover:text-lum-0 disabled:opacity-40"
-          >
-            {o.label}
-          </button>
-        ))}
+        {!showOptions && (
+          <>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => answer(question.modelValue)}
+              className="readout rounded-sm border border-[rgba(160,185,220,0.34)] px-2.5 py-1 text-[10.5px] text-lum-0 transition-colors hover:border-[rgba(160,185,220,0.6)] disabled:opacity-40"
+            >
+              맞아
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => setShowOptions(true)}
+              className="readout rounded-sm border border-[rgba(160,185,220,0.16)] px-2.5 py-1 text-[10.5px] text-lum-2 transition-colors hover:border-[rgba(160,185,220,0.38)] hover:text-lum-0 disabled:opacity-40"
+            >
+              아니야
+            </button>
+          </>
+        )}
+        {showOptions &&
+          options
+            // 모델 값은 위 "맞아" 가 이미 담당한다. 여기 또 있으면 같은 뜻의
+            // 버튼이 둘이 되어 어느 쪽을 눌러야 할지 헷갈린다.
+            .filter((o) => o.value !== question.modelValue)
+            .map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                disabled={pending}
+                onClick={() => answer(o.value)}
+                className="readout rounded-sm border border-[rgba(160,185,220,0.16)] px-2 py-1 text-[10.5px] text-lum-2 transition-colors hover:border-[rgba(160,185,220,0.38)] hover:text-lum-0 disabled:opacity-40"
+              >
+                {o.label}
+              </button>
+            ))}
         <button
           type="button"
           disabled={pending}

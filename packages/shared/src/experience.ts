@@ -41,7 +41,18 @@ const experienceSkillSchema = z.object({
 
 const experienceDialogueSchema = z.object({
   slot: z.enum(DIALOGUE_SLOTS),
-  text: z.string().max(80), // dialogues.text 의 CHECK char_length <= 80 과 동일
+  // **자르면 될 것을 폐기 사유로 삼지 않는다.** 예전에는 .max(80) 이라
+  // 대사 한 줄이 81자면 zod 가 출력 전체를 반려했고, 멀쩡한 summary·category·
+  // outcome·skills·thread 까지 통째로 버려져 그 세션은 경험이 되지 못했다
+  // (실측: 2026-08-05 14:07 세션, ingest_failures 의 too_big/maximum:80).
+  //
+  // 진짜 제약은 dialogues.text 의 DB CHECK(char_length <= 80) 이고, 엔진이
+  // INSERT 직전에 slice(0, 80) 로 이미 만족시킨다 — 검증이 그보다 앞서 도는
+  // 바람에 자를 기회조차 없이 폐기됐던 것이다. 여기서 잘라 넘긴다.
+  //
+  // 대사는 파이프라인에서 가장 안 중요한 값이다(LLM 창작물이고 슬롯당 1행씩
+  // 덮어써진다). 그게 가장 중요한 값을 죽이면 안 된다.
+  text: z.string().transform((s) => s.slice(0, 80)),
 });
 
 // thread 부착 판정 — 세션 종료 시 Experience Engine 안에서 함께 결정한다
@@ -71,10 +82,12 @@ export const experienceOutputSchema = z.object({
   // 툴 스키마에 maxItems 가 없어 strict:true 도 개수를 못 막는다. 넘치면
   // 엔진의 dedupeSkills 가 합치고 앞에서부터 자른다.
   skills: z.array(experienceSkillSchema).max(40),
-  // 프롬프트는 4개(슬롯당 1개)를 요구하지만 검증은 1개부터 받는다 — 대사는
-  // 캐시일 뿐이라, 개수 미달로 경험 전체를 버리는 것(llm_output_invalid)이
+  // 프롬프트는 4개(슬롯당 1개)를 요구하지만 검증은 **개수를 강제하지 않는다** —
+  // 대사는 캐시일 뿐이라, 개수 미달로 경험 전체를 버리는 것(llm_output_invalid)이
   // 더 큰 손실이다. 부족한 슬롯은 이전 대사가 남아있으면 그걸로 버틴다.
-  dialogues: z.array(experienceDialogueSchema).min(1).max(16),
+  // 예전에 min(3) 이었다가 min(1) 로 완화한 이력이 있는데(2026-08-04 실패),
+  // 0개일 때도 같은 논리가 그대로 성립하므로 하한을 아예 없앤다.
+  dialogues: z.array(experienceDialogueSchema).max(16),
   thread: experienceThreadSchema,
 });
 

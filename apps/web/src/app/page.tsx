@@ -208,7 +208,12 @@ export default async function Home() {
   // 여기서 만들면 서버 컴포넌트가 렌더마다 쓰기를 하게 되고, "하루 1건"이라는
   // 예산을 사용자의 새로고침 횟수가 좌우하게 된다.
   const [openQuestion] = await db
-    .select({ id: questions.id, field: questions.field, text: questions.text })
+    .select({
+      id: questions.id,
+      field: questions.field,
+      text: questions.text,
+      modelValue: questions.modelValue,
+    })
     .from(questions)
     .where(
       and(
@@ -221,7 +226,12 @@ export default async function Home() {
     .limit(1);
 
   const question: AskQuestion | null = openQuestion
-    ? { id: openQuestion.id, field: openQuestion.field, text: openQuestion.text }
+    ? {
+        id: openQuestion.id,
+        field: openQuestion.field,
+        text: openQuestion.text,
+        modelValue: openQuestion.modelValue,
+      }
     : null;
 
   return (
