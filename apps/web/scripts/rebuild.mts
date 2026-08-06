@@ -42,6 +42,9 @@ if (!APPLY) {
   console.log('\n— 미리보기. 실행하려면 --apply —');
   console.log('지울 것: memories · experience_skills · experiences · threads · user_skills');
   console.log('남길 것: sessions · dialogues · daily_logs · llm_outputs · ingest_failures');
+  console.log('보관 후 복원: corrections · questions (세션 id 로 다시 잇는다)');
+  console.log('⚠️ daily_logs.experience_ids 는 옛 id 를 가리키게 된다 —');
+  console.log('   재구축 뒤 apps/batch/scripts/rebuild-diary.mts 로 그 날짜들을 다시 만들 것');
   await sql.end();
   process.exit(0);
 }
@@ -56,6 +59,26 @@ if (!APPLY) {
   console.log('앱 db 연결 확인 ✓');
 }
 
+// 사람 판단(declared)은 **experiences 를 cascade 로 물고 있다.**
+// delete from experiences 가 corrections·questions 를 조용히 데려간다 —
+// 실제로 이 스크립트를 처음 돌렸을 때 교정 2건이 그렇게 사라졌다.
+// 다른 파생 데이터와 성격이 다르다: 이건 다시 만들 수 없다. 모델이 낸 값이
+// 아니라 사람이 준 값이고, 재구축은 그걸 복원할 방법이 없다.
+//
+// experiences.session_id 가 UNIQUE 라 세션 id 를 열쇠로 다시 이을 수 있다.
+// experience_id 자체는 재구축 때마다 새로 발급되므로 쓸모가 없다.
+const declared = {
+  corrections: await sql`
+    select c.user_id, e.session_id, c.field, c.model_value, c.human_value,
+           c.source, c.created_at
+    from corrections c join experiences e on e.id = c.experience_id`,
+  questions: await sql`
+    select q.user_id, e.session_id, q.field, q.model_value, q.text,
+           q.asked_at, q.answered_at, q.dismissed_at
+    from questions q join experiences e on e.id = q.experience_id`,
+};
+console.log(`사람 판단 보관: 교정 ${declared.corrections.length}건 · 질문 ${declared.questions.length}건`);
+
 // 백업
 const backup = {
   experiences: await sql`select * from experiences`,
@@ -63,6 +86,7 @@ const backup = {
   memories: await sql`select * from memories`,
   userSkills: await sql`select * from user_skills`,
   experienceSkills: await sql`select * from experience_skills`,
+  declared,
 };
 const path = `/tmp/na-rebuild-backup-${Date.now()}.json`;
 fs.writeFileSync(path, JSON.stringify(backup, null, 1));
@@ -88,6 +112,30 @@ for (const [i, s] of sessions.entries()) {
   console.log(`  ${i + 1}/${sessions.length} ${done ? '✓' : '✗'} ${s.started_at.toISOString().slice(0, 16)}`);
 }
 console.log(`\n${ok}/${sessions.length} 처리 성공`);
+
+// 사람 판단 복원 — 세션 id 로 새 experience 를 찾아 다시 잇는다.
+// model_value 는 백업한 값 그대로 넣는다. 그건 "그때 모델이 뭐라고 했나"의
+// 박제본이고, 재구축으로 모델 판정이 바뀌었더라도 그 쌍은 역사적 사실이다.
+{
+  let restored = 0;
+  let orphaned = 0;
+  for (const q of declared.questions) {
+    const [e] = await sql`select id from experiences where session_id = ${q.session_id}`;
+    if (!e) { orphaned += 1; continue; }
+    await sql`insert into questions (user_id, experience_id, field, model_value, text, asked_at, answered_at, dismissed_at)
+      values (${q.user_id}, ${e.id}, ${q.field}, ${q.model_value}, ${q.text}, ${q.asked_at}, ${q.answered_at}, ${q.dismissed_at})
+      on conflict do nothing`;
+    restored += 1;
+  }
+  for (const c of declared.corrections) {
+    const [e] = await sql`select id from experiences where session_id = ${c.session_id}`;
+    if (!e) { orphaned += 1; continue; }
+    await sql`insert into corrections (user_id, experience_id, field, model_value, human_value, source, created_at)
+      values (${c.user_id}, ${e.id}, ${c.field}, ${c.model_value}, ${c.human_value}, ${c.source}, ${c.created_at})`;
+    restored += 1;
+  }
+  console.log(`사람 판단 복원: ${restored}건${orphaned ? ` · 세션 매칭 실패 ${orphaned}건 (백업 파일에 남아있다)` : ''}`);
+}
 
 // 캐릭터 캐시 재계산 (배치의 character-cache 와 같은 정의)
 await sql`update characters c set
