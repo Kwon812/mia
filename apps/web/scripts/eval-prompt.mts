@@ -6,7 +6,7 @@
 // temperature 0 이어도 실행마다 답이 갈리므로 여러 번 돌려 안정성도 함께 본다.
 import fs from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
-import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V5, buildUserMessage } from '../src/lib/experience-engine';
+import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V6, buildUserMessage } from '../src/lib/experience-engine';
 
 const RUNS = Number(process.argv[2] ?? 3);
 const env = fs.readFileSync('.env.local', 'utf8');
@@ -20,6 +20,12 @@ const seg = (domain: string, category: string, title: string, h: number, m: numb
   ({ domain, category, title, start: T(h, m), end: T(h, m + dur), ...extra });
 
 const THREAD_A = { id: '11111111-1111-4111-8111-111111111111', title: '프로젝트 A 배포 파이프라인', category: 'dev', experienceCount: 4, lastSummary: 'GitHub Actions 워크플로에 빌드 캐시를 붙였다' };
+/** 잠긴 갈래 픽스처. 제목이 비슷한 이웃을 하나 더 둔다 — 실제로 후보에 오르는
+ *  것들은 어휘가 겹쳐서 뽑힌 것이라 서로 닮아 있다. 안 닮은 것만 놓고 재면
+ *  어떤 방식이든 맞히므로 시험이 안 된다. */
+const DORMANT_R = { id: '22222222-2222-4222-8222-222222222222', title: 'Redis 캐싱 도입', category: 'dev', experienceCount: 6, idleDays: 412, lastSummary: '캐시 무효화를 TTL 로 갈지 명시적 삭제로 갈지 정하다 말았다' };
+const DORMANT_P = { id: '33333333-3333-4333-8333-333333333333', title: 'Redis Pub/Sub 실험', category: 'dev', experienceCount: 3, idleDays: 380, lastSummary: 'PSUBSCRIBE 패턴 구독 예제를 돌려보고 끝냈다' };
+
 const SKILLS = [
   { name: 'TypeScript', lastUsedAt: new Date(Date.UTC(2026, 7, 4)) },
   { name: 'GitHub Actions', lastUsedAt: new Date(Date.UTC(2026, 7, 4)) },
@@ -32,8 +38,18 @@ type Case = {
   skills?: typeof SKILLS;
   recent?: { summary: string; category: string; outcome: string | null; corrected?: boolean }[];
   threads?: (typeof THREAD_A)[];
+  dormant?: (typeof DORMANT_R)[];
   expect: Record<string, unknown>;
 };
+
+/** 프롬프트에 절을 하나 덧붙여 같은 골든셋을 돌린다 — 그 문장이 기존 판정
+ *  분포를 미는지 재는 용도다. 환경변수로 켠다:
+ *    EXTRA_RULE_FILE=/tmp/rule.txt npx tsx ... scripts/eval-prompt.mts 2
+ *  기존 문장을 고칠 때도 이 방식으로 먼저 재고 나서 반영한다. */
+const EXTRA_RULE = process.env.EXTRA_RULE_FILE
+  ? fs.readFileSync(process.env.EXTRA_RULE_FILE, 'utf8')
+  : '';
+if (EXTRA_RULE) console.log(`덧붙인 규칙 ${EXTRA_RULE.trim().length}자\n`);
 
 const CASES: Case[] = [
   {
@@ -151,23 +167,29 @@ const CASES: Case[] = [
     expect: { 'thread.action': 'attach', 'thread.existing_thread_id': THREAD_A.id },
   },
   {
-    name: 'completed false — 작업이 계속 진행 중',
-    검증: 'thread.completed',
+    // 1년 넘게 잠긴 갈래라도 그 일을 다시 집으면 이어져야 한다. 이걸 못 하면
+    // 3년 뒤 재개가 매번 새 갈래가 되어 같은 일이 조각난다.
+    name: '부활 — 잠긴 갈래를 다시 집었다',
+    검증: 'thread.action',
     threads: [THREAD_A],
-    session: { primaryCategory: 'dev', durationMin: 42, domains: { 'github.com': 2520 },
-      compressedLog: { tags: [], queries: [{ q: 'actions matrix build', n: 2, first: '2026-08-06T02:00:00+09:00', last: '2026-08-06T02:20:00+09:00' }],
-        segments: [ seg('github.com','dev','프로젝트 A — 워크플로에 matrix 추가 중',17,0,21),
-          seg('github.com','dev','프로젝트 A — 빌드 실패 로그 확인',17,21,21) ] } },
-    expect: { 'thread.completed': false },
+    dormant: [DORMANT_R, DORMANT_P],
+    session: { primaryCategory: 'dev', durationMin: 47, domains: { 'redis.io': 1100, localhost: 1720 },
+      compressedLog: { tags: [], queries: [{ q: 'redis 캐시 무효화 ttl', n: 3, first: '2026-08-06T02:00:00+09:00', last: '2026-08-06T02:30:00+09:00' }],
+        segments: [ seg('redis.io','docs','Redis — Key eviction / TTL',13,0,18),
+          seg('localhost','dev','Project NA — invalidateCache 붙이기',13,18,29) ] } },
+    expect: { 'thread.action': 'attach', 'thread.existing_thread_id': DORMANT_R.id },
   },
   {
-    name: 'completed — 단일 세션 문서 정독 (작업 완결로 볼 것인가)',
-    검증: 'thread.completed',
-    session: { primaryCategory: 'docs', durationMin: 31, domains: { 'redis.io': 1860 },
+    // 잠긴 갈래가 눈앞에 있어도 무관하면 안 붙어야 한다. 후보를 보여주는 것이
+    // 곧 붙일 구실이 되면 이 장치가 오히려 갈래를 오염시킨다.
+    name: '부활 안 함 — 잠긴 갈래가 있어도 무관한 일',
+    검증: 'thread.action',
+    dormant: [DORMANT_R, DORMANT_P],
+    session: { primaryCategory: 'docs', durationMin: 31, domains: { 'nextjs.org': 1860 },
       compressedLog: { tags: [], queries: [],
-        segments: [ seg('redis.io','docs','Redis Persistence',13,0,15),
-          seg('redis.io','docs','Redis Replication',13,15,16) ] } },
-    expect: { 'thread.completed': false },
+        segments: [ seg('nextjs.org','docs','Next.js — after() API',13,0,15),
+          seg('nextjs.org','docs','Next.js — Partial Prerendering',13,15,16) ] } },
+    expect: { 'thread.action': 'new' },
   },
   // ── 여기부터는 정답이 하나가 아닌 세션들. 실사용의 대부분이 이 모양이다.
   //    검증 기준은 "정확히 맞혔나"가 아니라 "말이 되는 범위 안인가" 이다.
@@ -271,10 +293,11 @@ async function run(c: Case) {
     (c.skills ?? SKILLS) as any,
     (c.recent ?? []) as any,
     (c.threads ?? []) as any,
+    (c.dormant ?? []) as any,
   );
   const res = await client.messages.create({
     model: MODEL, max_tokens: 1024, temperature: 0,
-    system: SYSTEM_PROMPT_V5, tools: [RECORD_EXPERIENCE_TOOL],
+    system: SYSTEM_PROMPT_V6 + EXTRA_RULE, tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content }],
   });
@@ -311,6 +334,9 @@ async function run(c: Case) {
     { primaryCategory: 'dev', durationMin: 30, closeReason: 'idle', activityScore: 360,
       domains: { 'github.com': 1800 }, compressedLog: { tags: [], queries: [], segments: [] } } as any,
     SKILLS as any, [] as any, [] as any,
+    // 5번째가 잠긴 갈래, 6번째가 교정 패턴이다. v6 에서 인자가 하나 늘 때
+    // 이 호출을 안 고쳐 검증이 걸렸다 — 이 검사가 있으라고 만든 자리다.
+    [] as any,
     [{ field: 'outcome', from: 'explore', to: 'stuck', count: 3 }] as any,
   );
   if (!withPatterns.includes('### 네가 바로잡힌 판정')) {
@@ -350,7 +376,6 @@ for (const c of CASES) {
   row['category'] = outs[0].category;
   row['outcome'] = outs[0].outcome;
   row['first'] = outs[0].is_first_time;
-  row['완결'] = outs[0].thread?.completed;
   row['스킬'] = (outs[0].skills ?? []).length;
   row['대사'] = (outs[0].dialogues ?? []).length;
   summary.push(row);

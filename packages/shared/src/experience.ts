@@ -32,6 +32,16 @@ export type ExperienceCategory = (typeof EXPERIENCE_CATEGORIES)[number];
 
 
 export const EXPERIENCE_OUTCOMES = ['success', 'partial', 'stuck', 'explore'] as const;
+
+/**
+ * 며칠 안 건드리면 "잠긴 것"으로 보는가.
+ *
+ * 스킬의 휴면(revival 트리거)과 갈래의 abandoned 가 같은 생각을 쓴다. 예전에는
+ * 두 파일이 30 을 각자 적어놨는데(engine 의 DORMANT_SKILL_DAYS, batch 의
+ * ABANDON_AFTER_MS), 서로 참조가 없어 한쪽만 바꾸면 조용히 어긋난다 —
+ * 스킬은 휴면인데 갈래는 살아 있는 상태가 생긴다.
+ */
+export const DORMANT_DAYS = 30;
 export const DIALOGUE_SLOTS = ['morning', 'afternoon', 'evening', 'night'] as const;
 
 /** 스킬이 어느 갈래의 능력인가. user_skills 를 화면에서 묶는 축이다. */
@@ -111,7 +121,15 @@ export const experienceThreadSchema = z.object({
   // 경로에 도달조차 못 한다. 실제 존재 여부는 엔진이 목록과 대조한다.
   existing_thread_id: z.string().max(64).nullable(),
   title: z.string().min(1).nullable(),
-  completed: z.boolean(),
+  // completed 는 없다. 모델이 못 내는 값이라 사람이 /threads 에서 직접 누른다.
+  //
+  // 실운영 75회(v3·v4·v5) 중 true 가 한 번도 안 나왔고, 프롬프트가 완결 예시로
+  // 못 박은 세션("배포가 끝나 동작을 확인했다")을 그대로 재현해도 false 였다.
+  // 반대로 골든셋에서는 "활동은 많은데 주제가 없다" 같은 잡음 세션에 true 가
+  // 켜졌다 — 안 나와야 할 때 나오고 나와야 할 때 안 나온다.
+  //
+  // 브라우징 기록은 "무엇을 했나"를 말하는데 완결은 "더 할 게 없다"는 판단이라,
+  // 안 한 일에 대한 진술이어서 기록에 흔적이 없다. assertion 위계로 declared 다.
 });
 
 export const experienceOutputSchema = z.object({

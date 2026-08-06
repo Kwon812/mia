@@ -5,8 +5,11 @@
 
 import { and, eq, lt } from 'drizzle-orm';
 import { threads, type Db } from '@na/db';
+import { DORMANT_DAYS } from '@na/shared';
 
-const ABANDON_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+// 스킬의 휴면 판정과 같은 값을 쓴다 — 예전에는 여기 30 을 따로 적어놔서
+// 한쪽만 바꾸면 조용히 어긋났다.
+const ABANDON_AFTER_MS = DORMANT_DAYS * 24 * 60 * 60 * 1000;
 
 export async function markAbandonedThreads(db: Db): Promise<void> {
   console.log('[threads] start');

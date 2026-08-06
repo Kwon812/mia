@@ -31,6 +31,7 @@ import {
   users,
 } from '@na/db';
 import {
+  DORMANT_DAYS,
   EXPERIENCE_CATEGORIES,
   MAX_DIALOGUE_LEN,
   calculateLevel,
@@ -59,10 +60,11 @@ export const MODEL = 'claude-haiku-4-5';
 
 export const TOOL_NAME = 'record_experience';
 
-/** SYSTEM_PROMPT_V5 의 버전 번호. llm_outputs 에 남겨 프롬프트 간 비교의
+/** SYSTEM_PROMPT_V6 의 버전 번호. llm_outputs 에 남겨 프롬프트 간 비교의
  *  기준으로 쓴다 — 프롬프트를 고치면 여기도 올린다.
- *  v5: 스킬마다 domain 을 모델이 직접 고른다(예전에는 코드가 세션 category 를 복사). */
-export const PROMPT_VERSION = 5;
+ *  v5: 스킬마다 domain 을 모델이 직접 고른다(예전에는 코드가 세션 category 를 복사).
+ *  v6: thread.completed 를 아예 안 묻는다(사람이 표시) + 잠긴 작업 후보를 준다. */
+export const PROMPT_VERSION = 6;
 
 /** 프롬프트에 넣는 보유 스킬 목록의 최대 개수. 판정용 집합과는 다르다. */
 const PROMPT_SKILL_LIMIT = 50;
@@ -91,7 +93,7 @@ function kstYmd(date: Date): string {
 // 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
 // (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
 // 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
-export const SYSTEM_PROMPT_V5 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
+export const SYSTEM_PROMPT_V6 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
@@ -187,6 +189,9 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
               partial 이다.** 하나라도 끝냈으면 세션 전체가 막힌 것은 아니다.
     explore : 정해진 목표 없이 둘러봤다. 검색어가 넓고 얕으며 한 주제에 오래 머물지
               않는다. 특정 주제를 파고든 흔적이 있으면 explore 가 아니다.
+  **마무리를 판단하는 기준**은 둘이다. 무엇이 끝났는지 한 문장으로 말할 수 없으면
+  (여러 주제를 오갔다면) 마무리된 것이 아니고, 읽거나 알아보기만 하고 적용하지
+  않은 것도 마무리가 아니다.
 - is_first_time: 기존 스킬 목록에 없던 것을 이번에 처음 시도했으면 true.
 - skills: 이번에 사용하거나 습득한 스킬과 비중(weight, 1~10). 기존 스킬 목록과 이름이
   겹치면 반드시 동일한 표기를 재사용한다 — "TS"·"타입스크립트"처럼 같은 스킬을 다른
@@ -218,15 +223,13 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
   서로 다른 작업이다 — 이때는 new 다. 목록 항목의 "최근:" 줄에 그 작업에서
   마지막으로 한 일이 적혀 있으니, 이번 세션이 그 일의 다음 단계인지로 판단하라.
   애매하면 new 로 간다. 잘못 붙이면 서로 다른 두 작업이 한 덩어리로 뭉쳐
-  영원히 분리되지 않지만, 잘못 나누면 나중에 사람이 합칠 수 있다. completed 는 그 작업에 **더 할 일이 남지 않았을 때만** true 다.
-  배포가 끝나 동작을 확인했다, 기능을 붙이고 테스트가 통과했다처럼 마무리가
-  분명해야 한다. **완결은 드문 일이다 — 대부분의 세션은 진행 중이다.**
-  다음은 완결이 아니다:
-    · 무엇이 끝났는지 한 문장으로 말할 수 없는 세션(여러 주제를 오간 경우)
-    · 읽거나 알아보기만 하고 적용하지 않은 것
-    · 이번에 처음 시작한 일 — 시작과 완결이 같은 세션인 경우는 드물다
-  특히 action="new" 이면서 completed=true 는 다시 생각하라. 방금 만든 작업을
-  그 자리에서 끝내는 셈이다. 정말 한 세션에 시작하고 끝냈는지 확인하라.`;
+  영원히 분리되지 않지만, 잘못 나누면 나중에 사람이 합칠 수 있다.
+
+  "잠긴 작업" 목록이 함께 오면 거기에도 attach 할 수 있다. 그 일을 **다시
+  시작한 게 분명할 때만** 붙인다 — 도구나 사이트가 같다는 것만으로는 부족하고,
+  그때 하다 만 것("마지막:" 줄)의 다음 단계여야 한다.
+
+  작업이 끝났는지는 판단하지 않는다. 그건 사람이 직접 표시한다.`;
 
 // strict: true 로 스키마 위반 자체를 막는다. 그래도 최종 검증은 항상
 // experienceOutputSchema.safeParse 로 한다 (weight 범위 등 strict 가 못 잡는 제약도 있다).
@@ -318,12 +321,8 @@ export const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
             description:
               'action이 new일 때 이 작업을 부르는 짧은 명사구 제목("Redis 캐싱 도입" 같은). attach일 때는 null.',
           },
-          completed: {
-            type: 'boolean',
-            description: '이 경험으로 그 작업이 완결됐다고 볼 수 있는가.',
-          },
         },
-        required: ['action', 'existing_thread_id', 'title', 'completed'],
+        required: ['action', 'existing_thread_id', 'title'],
         additionalProperties: false,
       },
     },
@@ -354,7 +353,7 @@ const MAX_THREAD_TITLE_LEN = 100;
 // 이 기간 이상 안 쓴 스킬이 다시 나오면 "휴면 스킬 재등장"으로 본다.
 // lib/emotion.ts 의 '그리움' 판정과 같은 값을 쓴다 — 같은 현상을 감정과 기억이
 // 각각 다르게 부르면 사용자가 둘을 연결하지 못한다.
-const DORMANT_SKILL_DAYS = 30;
+const DORMANT_SKILL_DAYS = DORMANT_DAYS;
 
 /** 모든 가산항이 참일 때의 점수. 중요도 스케일의 위쪽 끝이다.
  *  50(새 스킬) + 40(처음) + 35(돌파) + 30(복귀) + 25(묵힌 스킬) + 20(긴 세션) */
@@ -480,6 +479,91 @@ interface ActiveThreadRow {
   lastSummary?: string;
 }
 
+/** tsquery 에 넣지 않는 말. 흔해서 어느 갈래에나 걸린다. */
+const CANDIDATE_STOPWORDS = new Set([
+  'the', 'and', 'com', 'www', 'https', 'http', 'notion', 'figma', 'github', 'google',
+  '확인', '상태', '프로젝트', '작업', '페이지',
+]);
+
+/** 후보로 뽑힌 잠긴 작업. ActiveThreadRow 에 방치 기간만 더한 모양이다. */
+export interface DormantThreadRow extends ActiveThreadRow {
+  idleDays: number;
+}
+
+/**
+ * 이번 세션과 어휘가 겹치는 잠긴 작업 셋.
+ *
+ * 신호는 **페이지 제목과 검색어**다. 도메인은 못 쓴다 — github.com 은 모든 dev
+ * 갈래에 겹쳐서 변별력이 없다. 반대로 제목에는 프로젝트·도구 이름이 그대로
+ * 뜨고("kt cloud TECH UP 2기", "Project NA") 그 표기는 잘 안 바뀐다.
+ *
+ * 매칭은 Postgres 가 한다. 갈래 쪽에 토큰을 저장해두지 않는 대신, 이미 있는 글
+ * (threads.title 과 그 갈래에 붙은 experiences.summary)을 GIN 인덱스가 색인하고
+ * 있어서 토큰 목록만 던지면 어느 갈래가 걸리는지 안다. 앱은 이긴 세 행만 받는다
+ * — 950개 시점에도 요약 텍스트를 통째로 끌어오는 일이 없다.
+ *
+ * 뜻이 비슷해도 단어가 다르면 못 찾는다("Redis 캐싱" ↔ "메모리 히트율"). 그건
+ * 임베딩의 영역인데, pgvector 와 세션당 임베딩 호출이 새로 붙는다. 이 데이터는
+ * 고유명사가 제목에 그대로 뜨므로 단어 일치로 대부분 잡힌다 — 안 잡히는 게 눈에
+ * 띄면 이 함수만 갈아끼우면 된다.
+ */
+async function findDormantCandidates(
+  userId: string,
+  session: SessionRow,
+): Promise<DormantThreadRow[]> {
+  const log = session.compressedLog as
+    | { segments?: { title?: string }[]; queries?: string[] }
+    | null;
+  const text = [
+    ...(log?.segments ?? []).map((g) => g.title ?? ''),
+    ...(log?.queries ?? []),
+  ].join(' ');
+
+  const tokens = [
+    ...new Set(
+      text
+        .toLowerCase()
+        .split(/[^a-z0-9가-힣]+/)
+        .filter((w) => w.length >= 2 && !CANDIDATE_STOPWORDS.has(w)),
+    ),
+  ].slice(0, 40);
+  if (tokens.length === 0) return [];
+
+  // OR 로 잇는다. tsquery 문법에 쓰이는 글자는 위 split 이 이미 걸러냈다.
+  const query = tokens.join(' | ');
+
+  const rows = await db.execute<{
+    id: string;
+    title: string;
+    category: string;
+    experience_count: number;
+    idle_days: number;
+    last_summary: string | null;
+  }>(sql`
+    select t.id, t.title, t.category, t.experience_count,
+           extract(day from now() - t.last_activity_at)::int as idle_days,
+           (select e2.summary from ${experiences} e2
+             where e2.thread_id = t.id order by e2.occurred_at desc limit 1) as last_summary
+      from ${threads} t
+      join ${experiences} e on e.thread_id = t.id
+     where t.user_id = ${userId}
+       and t.status = 'abandoned'
+       and (to_tsvector('simple', e.summary) @@ to_tsquery('simple', ${query})
+         or to_tsvector('simple', t.title)  @@ to_tsquery('simple', ${query}))
+     group by t.id, t.title, t.category, t.experience_count, t.last_activity_at
+     order by sum(ts_rank(to_tsvector('simple', e.summary), to_tsquery('simple', ${query}))) desc
+     limit 3`);
+
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    category: r.category,
+    experienceCount: r.experience_count,
+    idleDays: r.idle_days,
+    lastSummary: r.last_summary ?? undefined,
+  }));
+}
+
 /** close_reason 을 LLM 이 쓸 수 있는 말로 옮긴다. 'maxlen' 은 특히 중요하다 —
  *  4시간에 잘렸다는 것은 하던 일이 끝나지 않았다는 뜻이라 success 의 반증이다. */
 const CLOSE_REASON_HINT: Record<string, string> = {
@@ -489,6 +573,17 @@ const CLOSE_REASON_HINT: Record<string, string> = {
   day: '새벽 4시 경계를 넘겼다 — 잘린 것이지 끝난 게 아니다',
   shutdown: '브라우저를 껐다',
 };
+
+/** 잠긴 작업 한 줄. 진행 중 목록과 같은 모양에 **방치 기간**만 더한다.
+ *  그게 없으면 모델이 "1년 넘게 안 만진 일"인 줄 모르고 가볍게 붙인다. */
+function buildDormantThreadsList(rows: DormantThreadRow[]): string {
+  return rows
+    .map((t, i) => {
+      const head = `${i + 1}. id=${t.id} · "${t.title}" (카테고리: ${t.category}, 경험 ${t.experienceCount}건, 마지막 활동 ${t.idleDays}일 전)`;
+      return t.lastSummary ? `${head}\n   마지막: ${t.lastSummary}` : head;
+    })
+    .join('\n');
+}
 
 function buildActiveThreadsList(activeThreads: ActiveThreadRow[]): string {
   if (activeThreads.length === 0) return '(진행 중인 작업 없음)';
@@ -507,6 +602,8 @@ export function buildUserMessage(
   existingSkills: ExistingSkillRow[],
   recentExperiences: RecentExperienceRow[],
   activeThreads: ActiveThreadRow[],
+  /** 어휘가 겹쳐 후보로 뽑힌 잠긴 작업. 없으면 프롬프트에 절이 안 들어간다. */
+  dormantThreads: DormantThreadRow[] = [],
   /** 사람이 바로잡은 판정의 집계. 기본값이 빈 배열인 것은 재처리·평가
    *  스크립트가 이 인자를 넘기지 않아도 돌게 하기 위함이다. */
   correctionPatterns: CorrectionPattern[] = [],
@@ -555,6 +652,12 @@ export function buildUserMessage(
     '### 진행 중인 작업(thread) 목록 (최근 활동순, 최대 5개)',
     buildActiveThreadsList(activeThreads),
     '',
+    // 잠긴 작업은 후보가 있을 때만 넣는다. 없으면 절 자체가 사라져 지금까지와
+    // 똑같은 프롬프트가 된다 — 있지도 않은 선택지를 보여주면 억지로 붙일
+    // 구실만 준다.
+    ...(dormantThreads.length > 0
+      ? ['### 잠긴 작업(thread) — 30일 넘게 손 안 댔다', buildDormantThreadsList(dormantThreads), '']
+      : []),
     '## 이번 세션',
     `- 카테고리: ${session.primaryCategory}`,
     `- 길이: ${session.durationMin}분`,
@@ -692,6 +795,18 @@ export async function processSession(sessionId: string, userId: string): Promise
       .orderBy(desc(threads.lastActivityAt))
       .limit(5);
 
+    // 잠긴 작업 후보. 3년 전 갈래도 다시 이어질 수 있어야 한다 —
+    // 사람 기억에 "끝"은 드물고, 대개는 한동안 안 건드릴 뿐이다.
+    //
+    // 전부 보내지는 않는다. 갈래는 하루 8세션이면 1년에 950개쯤 쌓이는데(새 갈래
+    // 생성률 33%), 그 목록을 통째로 주면 판정이 나빠진다 — 프롬프트가 "애매하면
+    // new" 라고 못 박아뒀으니 목록이 길수록 오히려 새 갈래가 늘어난다.
+    //
+    // 그래서 코드가 셋으로 줄이고 판정만 모델이 한다. 겹침은 유사도지 정체성이
+    // 아니라서(같은 도구를 쓰는 다른 일이 흔하다) 코드가 결정하면 안 된다.
+    // 스킬이 문자열 일치로 신규/휴면을 코드가 확정하는 것과 반대 방향이다.
+    const dormantThreadRows = await findDormantCandidates(userId, session);
+
     // 3. LLM 1회 호출 — structured output 은 tool use(단일 툴 강제) 방식.
     const client = new Anthropic();
 
@@ -711,7 +826,7 @@ export async function processSession(sessionId: string, userId: string): Promise
       // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
       // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
       temperature: 0,
-      system: SYSTEM_PROMPT_V5,
+      system: SYSTEM_PROMPT_V6,
       tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [
@@ -722,6 +837,7 @@ export async function processSession(sessionId: string, userId: string): Promise
             skillRowsForPrompt,
             recentForPrompt,
             activeThreadRows,
+            dormantThreadRows,
             correctionPatterns,
           ),
         },
@@ -796,12 +912,18 @@ export async function processSession(sessionId: string, userId: string): Promise
     const primarySkillName = dedupedSkills.length > 0 ? [...dedupedSkills].sort((a, b) => b.weight - a.weight)[0].name : null;
 
     // thread 부착 판정 — LLM 환각 방어: 목록에 없는 existing_thread_id 면 new 로 강등.
-    const activeThreadsById = new Map(activeThreadRows.map((t) => [t.id, t]));
+    // 이번에 **실제로 보낸** 목록이 곧 붙일 수 있는 대상이다. 살아있는 것과
+    // 후보로 준 잠긴 것 둘 다 허용하고, 목록에 없는 id 를 지어내면 여전히
+    // 강등한다(그 방어는 그대로 둔다).
+    const offeredThreadsById = new Map<string, { id: string; title: string }>([
+      ...activeThreadRows.map((t) => [t.id, t] as const),
+      ...dormantThreadRows.map((t) => [t.id, t] as const),
+    ]);
     let threadAction: 'attach' | 'new' = output.thread.action;
     let attachTargetId = output.thread.existing_thread_id;
     // 강등 여부를 기억해둔다. completed 플래그를 그대로 살리면 안 되기 때문이다.
     let threadDemoted = false;
-    if (threadAction === 'attach' && (!attachTargetId || !activeThreadsById.has(attachTargetId))) {
+    if (threadAction === 'attach' && (!attachTargetId || !offeredThreadsById.has(attachTargetId))) {
       threadAction = 'new';
       attachTargetId = null;
       threadDemoted = true;
@@ -811,7 +933,7 @@ export async function processSession(sessionId: string, userId: string): Promise
     const threadTitle =
       threadAction === 'new'
         ? output.thread.title?.trim() || clampSentence(output.summary, MAX_THREAD_TITLE_LEN)
-        : (activeThreadsById.get(threadId)?.title ?? clampSentence(output.summary, MAX_THREAD_TITLE_LEN));
+        : (offeredThreadsById.get(threadId)?.title ?? clampSentence(output.summary, MAX_THREAD_TITLE_LEN));
 
     // 6. Memory Engine 점수 (순수 함수, LLM 재호출 없음)
     const daysSinceLastExperience =
@@ -1022,6 +1144,11 @@ export async function processSession(sessionId: string, userId: string): Promise
             // 오염된다.
             lastActivityAt: sql`GREATEST(${threads.lastActivityAt}, ${session.startedAt.toISOString()}::timestamptz)`,
             experienceCount: sql`${threads.experienceCount} + 1`,
+            // 잠긴 갈래에 붙었으면 되살아난다. abandoned 는 무덤이 아니라
+            // 잠금이다 — 30일 안 건드렸다는 뜻일 뿐이고, 사람 기억에서 3년 뒤에
+            // 이어지는 일은 흔하다. completed 는 안 건드린다: 그건 사람이
+            // 선언한 값이라 모델이 뒤집으면 declared 위계가 거꾸로 선다.
+            status: sql`case when ${threads.status} = 'abandoned' then 'active' else ${threads.status} end`,
             // 분야를 다시 센다 — 갈래의 category 는 "연 첫 경험의 판정"이 아니라
             // "지금까지 무엇을 한 작업인가"여야 한다.
             //
@@ -1057,28 +1184,10 @@ export async function processSession(sessionId: string, userId: string): Promise
       // 시각과 같으면 그때 처음 쓴 스킬이라, 화면이 읽을 때 정확히 가려낸다.
       const bd = memoryScoreResult.breakdown;
 
-      // 강등된 attach 의 completed 는 무시한다. LLM 은 "그 기존 작업이 끝났다"고
-      // 말한 것인데 그 작업은 존재하지 않았다 — 방금 만든 새 thread 를 즉시
-      // 완결시키면 존재한 적 없는 작업의 완결 기억이 생기고 완결형 축이 부푼다.
-      if (output.thread.completed && !threadDemoted) {
-        await tx.update(threads).set({ status: 'completed', completedAt: now }).where(eq(threads.id, threadId));
-
-        await tx.insert(memories).values({
-          userId,
-          threadId,
-          experienceId: insertedExperience.id,
-          occurredAt: session.startedAt,
-          // 제목은 갈래 이름만. 무엇이 처음이었나는 화면이 스킬 칩으로 따로
-          // 보여준다(/memories) — 제목에 욱여넣으면 두 정보가 한 줄에 뭉쳐
-          // 어느 쪽도 안 읽힌다.
-          title: threadTitle,
-          body: output.detail ?? output.summary,
-          importance: clampImportance(memoryScoreResult.score),
-          trigger: 'thread_complete',
-        });
-        newMemoriesCount += 1;
-      } else if (memoryScoreResult.score >= MEMORY_SCORE_THRESHOLD) {
-        // else if 다 — 완결 기억이 이미 근거를 담았으므로 또 만들지 않는다.
+      // 완결 분기는 여기 없다. thread_complete 기억은 사람이 /threads 에서
+      // 직접 표시할 때만 생긴다(app/actions.ts 의 completeThread) —
+      // 모델이 못 내는 값이라 물어보지도 않는다(shared/experience.ts 참고).
+      if (memoryScoreResult.score >= MEMORY_SCORE_THRESHOLD) {
         // 어느 규칙이 이 기억을 만들었는지가 곧 trigger 다. 위에서부터 먼저 맞는 것.
         const trigger = bd.hasNewSkill || bd.isFirstTime
           ? 'new_skill'
