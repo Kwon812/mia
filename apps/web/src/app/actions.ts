@@ -73,6 +73,10 @@ export async function correctExperience(
   if (!result.ok) return { error: result.error };
 
   revalidatePath("/diary");
+  // 홈도 함께 무효화한다. 감정(emotion.ts 의 stuck 3연속 규칙)과 궤도 지도가
+  // 교정된 판정을 읽으므로, 여기서 안 비우면 클라이언트 라우터 캐시가 잠시
+  // 옛 값을 보여준다 — "고쳤는데 캐릭터가 그대로네"로 보이는 자리다.
+  revalidatePath("/");
   return {};
 }
 

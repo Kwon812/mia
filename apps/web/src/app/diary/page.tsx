@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { Head, Shell, Empty } from "@/components/shell";
 import { effective, isCorrected, loadCorrections } from "@/lib/corrections";
-import { CorrectionChip } from "./correction-chips";
+import { CorrectionRow } from "./correction-chips";
 
 // log_date 는 문자열 모드 DATE("YYYY-MM-DD") — 접두 10자만 잘라 쓰면
 // TZ 변환 없이 서버·클라이언트가 항상 같은 문자열을 그린다.
@@ -108,34 +108,18 @@ export default async function DiaryPage() {
                         );
 
                         return (
-                          <div key={e.id} className="flex flex-wrap items-start gap-x-2 gap-y-1">
-                            <span className="readout w-11 shrink-0 pt-0.5 text-[10px] text-lum-4">
-                              {formatKstTime(e.occurredAt)}
-                            </span>
-                            <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-lum-2">
-                              {e.summary}
-                            </span>
-                            <span className="flex shrink-0 gap-1">
-                              <CorrectionChip
-                                experienceId={e.id}
-                                field="category"
-                                value={category}
-                                corrected={isCorrected(corrections, e.id, "category")}
-                              />
-                              <CorrectionChip
-                                experienceId={e.id}
-                                field="outcome"
-                                value={outcome}
-                                corrected={isCorrected(corrections, e.id, "outcome")}
-                              />
-                              <CorrectionChip
-                                experienceId={e.id}
-                                field="is_first_time"
-                                value={first}
-                                corrected={isCorrected(corrections, e.id, "is_first_time")}
-                              />
-                            </span>
-                          </div>
+                          <CorrectionRow
+                            key={e.id}
+                            experienceId={e.id}
+                            time={formatKstTime(e.occurredAt)}
+                            summary={e.summary}
+                            values={{ category, outcome, is_first_time: first }}
+                            corrected={{
+                              category: isCorrected(corrections, e.id, "category"),
+                              outcome: isCorrected(corrections, e.id, "outcome"),
+                              is_first_time: isCorrected(corrections, e.id, "is_first_time"),
+                            }}
+                          />
                         );
                       })}
                     </div>
