@@ -33,6 +33,7 @@ import {
 import {
   EXPERIENCE_CATEGORIES,
   calculateLevel,
+  clampDialogue,
   experienceOutputSchema,
   type ExperienceOutput,
 } from '@na/shared';
@@ -954,7 +955,8 @@ export async function processSession(sessionId: string, userId: string): Promise
 
       for (const d of output.dialogues) {
         // DB CHECK(char_length <= 80) 이 막기 전에 서버에서 먼저 절단한다.
-        const text = d.text.slice(0, 80);
+        // 문장 경계에서 자른다 — 한복판에서 끊으면 화면에 그대로 드러난다.
+        const text = clampDialogue(d.text);
         await tx
           .insert(dialogues)
           .values({ userId, slot: d.slot, text, sourceSessionId: sessionId })

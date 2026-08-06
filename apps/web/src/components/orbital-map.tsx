@@ -1220,11 +1220,16 @@ export function OrbitalMap({
               trigger 가 왜 그 값인지를 제목보다 먼저 읽어야 한다. */}
           {probe.skills && probe.skills.length > 0 && (
             <>
-              <div className="mb-2 flex flex-wrap gap-x-2 gap-y-1">
+              <div className="mb-2 flex flex-wrap gap-1">
                 {probe.skills.map((sk) => (
                   <span
                     key={sk.name}
-                    className={`readout text-[11.5px] ${sk.firstTime ? "text-lum-0" : "text-lum-3"}`}
+                    className={[
+                      "readout rounded-sm border px-1.5 py-0.5 text-[11.5px]",
+                      sk.firstTime
+                        ? "border-[rgba(160,185,220,0.34)] text-lum-0"
+                        : "border-[rgba(160,185,220,0.12)] text-lum-3",
+                    ].join(" ")}
                   >
                     {sk.name}
                     {sk.firstTime && <span className="ml-1 text-lum-2">처음</span>}
@@ -1270,15 +1275,7 @@ export function OrbitalMap({
               </div>
             )}
 
-            {focus.kind === "memory" && focus.body && (
-              <>
-                <div
-                  className="mx-auto mt-5 h-px w-24"
-                  style={{ background: "rgba(160,185,220,0.16)" }}
-                />
-                <p className="utterance mt-4 text-[15px] text-lum-1">{focus.body}</p>
-              </>
-            )}
+
 
             {/* 색 범례 — 색만 칠하고 무슨 뜻인지 안 적으면 그냥 알록달록한 점이 된다.
                 무엇의 범례인지도 적어야 한다. 색점만 늘어놓으면 태그로 읽힌다. */}

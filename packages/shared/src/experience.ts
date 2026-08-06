@@ -39,6 +39,36 @@ const experienceSkillSchema = z.object({
   weight: z.int().min(1).max(10),
 });
 
+/** 대사 길이 상한. dialogues.text 의 DB CHECK(char_length <= 80)와 같은 값이고,
+ *  화면(하단 2줄)이 그 상한의 이유다. */
+export const MAX_DIALOGUE_LEN = 80;
+
+/**
+ * 문장 경계에서 자른다.
+ *
+ * 그냥 slice 하면 한복판에서 끊겨 화면에 그대로 드러난다 — 실측:
+ *   "…threads 테이블들을 살펴봤어. 아"
+ *   "…Figma, ZEP, Notion, ChatGPT 등을 오가면서 전체 "
+ * 모델은 "80자 이내"라고 지시해도 105자를 낸다(실측 4개 중 3개 초과). 길이를
+ * 지키게 하는 것보다 자르는 쪽을 고치는 게 확실하다.
+ *
+ * 상한 안쪽 마지막 문장부호까지만 남기고, 그게 너무 앞이면(문장이 하나도
+ * 안 끝났으면) 마지막 어절에서 끊고 말줄임표를 붙인다.
+ */
+export function clampDialogue(text: string, max = MAX_DIALOGUE_LEN): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+
+  const head = t.slice(0, max);
+  const lastSentence = Math.max(head.lastIndexOf('.'), head.lastIndexOf('!'), head.lastIndexOf('?'));
+  // 절반은 넘겨야 문장으로 읽힌다. 너무 앞에서 끝나면 내용이 통째로 사라진다.
+  if (lastSentence >= max * 0.5) return head.slice(0, lastSentence + 1).trim();
+
+  const lastSpace = head.lastIndexOf(' ');
+  const cut = lastSpace >= max * 0.5 ? head.slice(0, lastSpace) : head.slice(0, max - 1);
+  return `${cut.trim()}…`;
+}
+
 const experienceDialogueSchema = z.object({
   slot: z.enum(DIALOGUE_SLOTS),
   // **자르면 될 것을 폐기 사유로 삼지 않는다.** 예전에는 .max(80) 이라
@@ -47,12 +77,12 @@ const experienceDialogueSchema = z.object({
   // (실측: 2026-08-05 14:07 세션, ingest_failures 의 too_big/maximum:80).
   //
   // 진짜 제약은 dialogues.text 의 DB CHECK(char_length <= 80) 이고, 엔진이
-  // INSERT 직전에 slice(0, 80) 로 이미 만족시킨다 — 검증이 그보다 앞서 도는
+  // INSERT 직전에 clampDialogue 로 이미 만족시킨다 — 검증이 그보다 앞서 도는
   // 바람에 자를 기회조차 없이 폐기됐던 것이다. 여기서 잘라 넘긴다.
   //
   // 대사는 파이프라인에서 가장 안 중요한 값이다(LLM 창작물이고 슬롯당 1행씩
   // 덮어써진다). 그게 가장 중요한 값을 죽이면 안 된다.
-  text: z.string().transform((s) => s.slice(0, 80)),
+  text: z.string().transform((s) => clampDialogue(s)),
 });
 
 // thread 부착 판정 — 세션 종료 시 Experience Engine 안에서 함께 결정한다
