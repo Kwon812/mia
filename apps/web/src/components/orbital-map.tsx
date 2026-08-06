@@ -878,7 +878,10 @@ export function OrbitalMap({
         // 라벨 폭까지 감안해 화면 안에 가둔다. min(w,h)*1.02 로 잡으면 세로가
         // 긴 뷰포트(태블릿 세로)에서 가로축 라벨이 캔버스 밖으로 나가고,
         // 그러면 hit 좌표도 화면 밖이라 그 축은 아예 겨눌 수 없다.
-        const AX = Math.min(Math.min(w / 2, h / 2) * 1.02, w / 2 - 96);
+        // 라벨 반경. 계에서 좀 떨어뜨려야 궤도와 안 겹쳐 읽힌다.
+        // 세로는 FLATTEN(0.46)이 곱해져 실제로는 절반 아래로 내려오므로,
+        // 화면 밖으로 나갈 걱정은 가로 쪽뿐이다 — 그래서 가로만 따로 가둔다.
+        const AX = Math.min(Math.min(w / 2, h / 2) * 1.2, w / 2 - 110);
         // 축은 **뷰포트 기준**이다. 확대해도 안 밀리고 안 커진다.
         //
         // 축은 계의 일부가 아니라 계기다 — "이 방향이 무슨 분야냐"만 말한다.
@@ -902,15 +905,59 @@ export function OrbitalMap({
             : `rgba(${NEUTRAL.join(",")},${0.22 * sysAlpha})`;
           ctx!.lineWidth = on ? 1.2 : 0.8;
           ctx!.setLineDash(on ? [] : [3, 7]);
-          ctx!.beginPath();
-          ctx!.moveTo(ax0 - dx * AX, ay0 - dy * AX);
-          ctx!.lineTo(ax0 + dx * AX, ay0 + dy * AX);
-          ctx!.stroke();
-          ctx!.setLineDash([]);
+          // 선은 **화면 가장자리까지** 긋는다. 예전에는 라벨을 화면 안에 가두는
+          // 길이(AX)를 선에도 그대로 썼는데, AX 는 짧은 변 기준이라 가로로 긴
+          // 화면에서는 좌우 가장자리에 한참 못 미친다(1518×784 에서 800px).
+          // 확대해서 궤도가 화면을 꽉 채우면 그 선만 짧아 보인다 — 방향은 화면
+          // 전체를 가르는 기준선이지 계의 크기를 재는 눈금이 아니다.
+          //
+          // 방향 벡터가 단위길이가 아니라(dy 에 FLATTEN 이 곱해져 있다) 같은
+          // 매개변수 t 로 재야 라벨 위치와 계산이 맞는다.
+          const tEdge = Math.min(
+            Math.abs(dx) > 1e-6 ? w / 2 / Math.abs(dx) : Infinity,
+            Math.abs(dy) > 1e-6 ? h / 2 / Math.abs(dy) : Infinity,
+          );
 
           const label = tag(tr);
           const lx = ax0 + dx * (AX + 16);
           const ly = ay0 + dy * (AX + 16);
+          // 라벨 자리는 그대로 화면 안이다. 선이 글자 위를 지나가면 안 읽히므로
+          // 그 사각형만 비우고 두 토막으로 긋는다. 라벨은 정렬이 좌/우로 갈려
+          // (dx 부호에 따라) 기준점 한쪽으로만 뻗으므로, 폭의 절반을 빼는 식으로
+          // 어림하면 한쪽이 어긋난다. 사각형과 직선의 교차를 그대로 푼다.
+          const tw = ctx!.measureText(label).width;
+          const bx0 = (dx >= 0 ? lx : lx - tw) - 6;
+          const bx1 = (dx >= 0 ? lx + tw : lx) + 6;
+          // 축마다 t 구간 [tIn, tOut] — 슬랩 방식. 축이 수평/수직에 가까우면
+          // 그 성분이 0 이라 나눗셈이 무한이 되는데, 그때는 그 축으로는 잘리지
+          // 않는다는 뜻이라 그대로 두면 맞다.
+          const slab = (p: number, d: number, lo: number, hi: number): [number, number] =>
+            Math.abs(d) < 1e-6
+              ? p >= lo && p <= hi
+                ? [-Infinity, Infinity]
+                : [Infinity, -Infinity]
+              : d > 0
+                ? [(lo - p) / d, (hi - p) / d]
+                : [(hi - p) / d, (lo - p) / d];
+          const [txa, txb] = slab(ax0, dx, bx0, bx1);
+          const [tya, tyb] = slab(ay0, dy, ly - 9, ly + 9);
+          const tIn = Math.max(txa, tya);
+          const tOut = Math.min(txb, tyb);
+
+          ctx!.beginPath();
+          if (tIn < tOut) {
+            // 글자를 지나간다 — 앞뒤로 나눠 긋는다.
+            ctx!.moveTo(ax0 - dx * tEdge, ay0 - dy * tEdge);
+            ctx!.lineTo(ax0 + dx * Math.max(-tEdge, tIn), ay0 + dy * Math.max(-tEdge, tIn));
+            ctx!.moveTo(ax0 + dx * Math.min(tEdge, tOut), ay0 + dy * Math.min(tEdge, tOut));
+            ctx!.lineTo(ax0 + dx * tEdge, ay0 + dy * tEdge);
+          } else {
+            ctx!.moveTo(ax0 - dx * tEdge, ay0 - dy * tEdge);
+            ctx!.lineTo(ax0 + dx * tEdge, ay0 + dy * tEdge);
+          }
+          ctx!.stroke();
+          ctx!.setLineDash([]);
+
           ctx!.textAlign = dx >= 0 ? "left" : "right";
           ctx!.fillStyle = on
             ? `rgba(143,244,228,${sysAlpha})`
