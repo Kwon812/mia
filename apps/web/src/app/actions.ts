@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { recordCorrection, type CorrectionField } from "@/lib/corrections";
 import { clampImportance } from "@/lib/experience-engine";
+import { recheckMemoryAfterCorrection } from "@/lib/memory-recheck";
 import { FIELD_OPTIONS } from "@/lib/labels";
 
 const MIN_NAME_LENGTH = 1;
@@ -73,6 +74,16 @@ export async function correctExperience(
   });
   if (!result.ok) return { error: result.error };
 
+  // 고친 값으로 기억 조건을 다시 본다. memory_score 는 엔진이 그때 계산해
+  // 저장한 값이라, 교정만으로는 안 움직였다 — is_first_time 을 true 로 바꾸면
+  // +40 이라 20점짜리가 60을 넘는데 아무 일도 안 일어났다.
+  // 실패해도 교정 자체는 남아야 하므로 삼킨다.
+  try {
+    await recheckMemoryAfterCorrection(user.userId, experienceId);
+  } catch (err) {
+    console.error("[correctExperience] 기억 재판정 실패", experienceId, err);
+  }
+
   revalidatePath("/diary");
   // 홈도 함께 무효화한다. 감정(emotion.ts 의 stuck 3연속 규칙)과 궤도 지도가
   // 교정된 판정을 읽으므로, 여기서 안 비우면 클라이언트 라우터 캐시가 잠시
@@ -116,7 +127,17 @@ export async function answerQuestion(
   });
   if (!result.ok) return { error: result.error };
 
+  // /diary 교정과 같은 값이 들어온다. 캐릭터가 물어서 답한 것도 declared 이므로
+  // 기억 조건을 똑같이 다시 본다 — 여기만 빠뜨리면 "물어봐서 답했는데 아무
+  // 일도 안 일어난다"가 된다.
+  try {
+    await recheckMemoryAfterCorrection(user.userId, q.experienceId);
+  } catch (err) {
+    console.error("[answerQuestion] 기억 재판정 실패", q.experienceId, err);
+  }
+
   revalidatePath("/");
+  revalidatePath("/memories");
   return {};
 }
 
