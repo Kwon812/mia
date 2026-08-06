@@ -328,9 +328,11 @@ const MEMORY_SCORE_THRESHOLD = 60;
 
 /** 경험 하나에 붙일 수 있는 스킬 수. 넘치면 비중 높은 것부터 남긴다. */
 const MAX_SKILLS_PER_EXPERIENCE = 10;
-/** 요약 표시 상한. 넘치면 **문장 경계에서** 자른다(clampSentence) —
- *  길다고 경험을 버리지 않되, 한복판에서 끊어 화면에 드러나게 하지도 않는다. */
-const MAX_SUMMARY_LEN = 100;
+/** 갈래 제목 상한. 제목은 짧은 명사구라 이 이상 길면 목록이 무너진다.
+ *  **요약과 기억 제목은 자르지 않는다** — 저장 시점에 자르면 상세 화면에서
+ *  복구할 방법이 없다(원문은 llm_outputs 에만 남는다). 좁은 자리(지도 판독값)
+ *  에서 표시할 때만 줄인다. 저장 상한은 zod 의 summary max(600) 이 맡는다. */
+const MAX_THREAD_TITLE_LEN = 100;
 
 // 이 기간 이상 안 쓴 스킬이 다시 나오면 "휴면 스킬 재등장"으로 본다.
 // lib/emotion.ts 의 '그리움' 판정과 같은 값을 쓴다 — 같은 현상을 감정과 기억이
@@ -795,8 +797,8 @@ export async function processSession(sessionId: string, userId: string): Promise
     const threadId = threadAction === 'new' ? randomUUID() : attachTargetId!;
     const threadTitle =
       threadAction === 'new'
-        ? output.thread.title?.trim() || clampSentence(output.summary, MAX_SUMMARY_LEN)
-        : (activeThreadsById.get(threadId)?.title ?? clampSentence(output.summary, MAX_SUMMARY_LEN));
+        ? output.thread.title?.trim() || clampSentence(output.summary, MAX_THREAD_TITLE_LEN)
+        : (activeThreadsById.get(threadId)?.title ?? clampSentence(output.summary, MAX_THREAD_TITLE_LEN));
 
     // 6. Memory Engine 점수 (순수 함수, LLM 재호출 없음)
     const daysSinceLastExperience =
@@ -893,7 +895,8 @@ export async function processSession(sessionId: string, userId: string): Promise
           sessionId,
           threadId, // insert 시점에 부착 — 이렇게 하면 "유일한 UPDATE 대상"이던 thread_id 에 대한 UPDATE 자체가 없어진다.
           occurredAt: session.startedAt,
-          summary: clampSentence(output.summary, MAX_SUMMARY_LEN),
+          // 자르지 않는다 — 잘라 저장하면 상세에서 되살릴 수 없다.
+          summary: output.summary,
           detail: output.detail ?? null,
           category: output.category,
           outcome: output.outcome,
@@ -1032,7 +1035,7 @@ export async function processSession(sessionId: string, userId: string): Promise
           // 제목은 갈래 이름만. 무엇이 처음이었나는 화면이 스킬 칩으로 따로
           // 보여준다(/memories) — 제목에 욱여넣으면 두 정보가 한 줄에 뭉쳐
           // 어느 쪽도 안 읽힌다.
-          title: clampSentence(threadTitle, MAX_SUMMARY_LEN),
+          title: threadTitle,
           body: output.detail ?? output.summary,
           importance: clampImportance(memoryScoreResult.score),
           trigger: 'thread_complete',
@@ -1049,10 +1052,10 @@ export async function processSession(sessionId: string, userId: string): Promise
               ? 'revival'
               : 'comeback';
 
-        // 제목은 요약만. 근거(무슨 스킬이 처음이었나)는 화면이 칩으로 따로
-        // 보여준다 — user_skills.first_used_at 이 그 경험 시각과 같으면
-        // 그때 처음 쓴 스킬이라, 화면에서 추가 저장 없이 정확히 가려낼 수 있다.
-        const memoryTitle = clampSentence(output.summary, MAX_SUMMARY_LEN);
+        // 제목은 요약만(자르지 않는다). 근거(무슨 스킬이 처음이었나)는 화면이
+        // 칩으로 따로 보여준다 — user_skills.first_used_at 이 그 경험 시각과
+        // 같으면 그때 처음 쓴 스킬이라, 추가 저장 없이 정확히 가려낼 수 있다.
+        const memoryTitle = output.summary;
 
         await tx.insert(memories).values({
           userId,

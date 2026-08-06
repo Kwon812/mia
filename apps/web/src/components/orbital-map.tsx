@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { clampSentence } from "@na/shared";
 
 import { formatKstYmd } from "@/lib/date";
 
@@ -213,6 +214,10 @@ export function dominantCategory(m: MemoryBody, byId: Map<string, Body>): string
  * 자리가 없으면 반대쪽으로 뒤집고, 그래도 안 되면 가장자리에 붙인다.
  * 크기를 매번 읽는 이유는 내용에 따라 높이가 달라지기 때문이다(스킬 칩 줄 수).
  */
+/** 판독값에 넣는 문장 상한. 저장은 온전히 하고 여기서만 줄인다 —
+ *  판독값은 좁은 상자라 긴 요약이 그대로 들어가면 지도를 덮는다.
+ *  전문은 눌러 들어간 상세(포커스 패널)와 /memories 에서 읽는다. */
+const PROBE_TEXT_LEN = 100;
 const PROBE_GAP = 18;
 const PROBE_EDGE = 8;
 function placeProbe(el: HTMLElement, x: number, y: number): void {
@@ -1076,7 +1081,7 @@ export function OrbitalMap({
           else setProbe({
             x: p.x,
             y: p.y,
-            text: m.title,
+            text: clampSentence(m.title, PROBE_TEXT_LEN),
             sub:
               m.kind === "thread"
                 ? `갈래 · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건`
@@ -1090,7 +1095,7 @@ export function OrbitalMap({
           setProbe({
             x: p.x,
             y: p.y,
-            text: b.summary,
+            text: clampSentence(b.summary, PROBE_TEXT_LEN),
             sub: `${tag(b.category)} · ${formatKstYmd(new Date(b.occurredAt), ".")} · ${tag(b.outcome)} · M${b.memoryScore}`,
           });
         }
