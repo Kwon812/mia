@@ -15,4 +15,5 @@ export {
   yesterdayKstRange,
   yesterdayKstLogDate,
   diaryTargetKst,
+  diaryRangeForLogDate,
 } from '@na/shared';

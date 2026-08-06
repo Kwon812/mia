@@ -109,3 +109,26 @@ export function diaryTargetKst(now: Date = new Date()): { start: Date; end: Date
   const end = new Date(targetStart.getTime() + DAY_MS);
   return { start: targetStart, end, logDate: kstDayKey(targetStart) };
 }
+
+/**
+ * 특정 log_date("YYYY-MM-DD")의 하루 구간을 만든다 — 과거 일기 재생성용.
+ *
+ * daily-logs 잡은 diaryTargetKst() 로 "방금 끝난 하루"만 겨냥한다. 그런데
+ * 경험이 뒤늦게 생기는 경우가 있다(엔진이 실패했다가 재처리로 복구되는 등).
+ * 그러면 그 경험은 이미 쓰인 일기의 근거에서 빠진 채로 남고, /diary 화면에도
+ * 안 떠서 판정을 고칠 수조차 없다 — 실제로 2026-08-05 에 그런 일이 있었다.
+ *
+ * daily_logs 는 PK 가 (user_id, log_date) 라 같은 날짜를 다시 돌리면 덮어쓴다.
+ * experiences 가 불변이라 언제든 다시 만들 수 있다는 설계(계획서 05장)를
+ * 실제로 부를 수 있게 하는 함수다.
+ */
+export function diaryRangeForLogDate(logDate: string): { start: Date; end: Date; logDate: string } {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(logDate)) {
+    throw new Error(`log_date 형식이 아니다: ${logDate}`);
+  }
+  const [y, m, d] = logDate.split('-').map(Number);
+  // 라벨은 그 하루가 **시작하는** KST 달력 날짜다(kstDayKey 참고).
+  // 즉 시작은 그 날짜의 KST 04:00.
+  const start = new Date(Date.UTC(y, m - 1, d, DAY_BOUNDARY_HOUR) - KST_OFFSET_MS);
+  return { start, end: new Date(start.getTime() + DAY_MS), logDate };
+}

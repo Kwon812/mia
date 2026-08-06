@@ -11,7 +11,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { and, gte, lt } from 'drizzle-orm';
 import { dailyLogs, experiences, llmOutputs, type Db } from '@na/db';
-import { diaryTargetKst } from '../kst';
+import { diaryRangeForLogDate, diaryTargetKst } from '../kst';
 
 // 저비용 모델. 유저당 1회만 호출되므로 Haiku 로 충분하다 (claude-api 스킬 캐시 기준 모델 ID).
 const MODEL = 'claude-haiku-4-5';
@@ -95,12 +95,23 @@ function buildUserMessage(rows: DayExperienceRow[]): string {
   return ['## 오늘의 경험 목록', list].join('\n');
 }
 
-export async function generateDailyLogs(db: Db): Promise<void> {
+/**
+ * @param targetLogDate 특정 날짜("YYYY-MM-DD")의 일기를 다시 만든다. 생략하면
+ *   정규 실행 — "방금 끝난 하루"를 겨냥한다.
+ *
+ *   과거 날짜가 필요한 이유: 경험이 뒤늦게 생기는 경우가 있다(엔진이 실패했다가
+ *   재처리로 복구되는 등). 그러면 그 경험은 이미 쓰인 일기의 근거에서 빠진 채
+ *   남고, /diary 화면에도 안 떠서 판정을 고칠 수조차 없다. daily_logs 는
+ *   PK 가 (user_id, log_date) 라 같은 날짜를 다시 돌리면 덮어쓴다.
+ */
+export async function generateDailyLogs(db: Db, targetLogDate?: string): Promise<void> {
   console.log('[daily-logs] start');
 
   // "어제"가 아니라 "지금 끝나가는/방금 끝난 하루" — 새벽 3시 정규 실행이
   // 경계(4시) 이전이라 yesterdayKstRange 를 쓰면 하루가 밀린다 (kst.ts 참고).
-  const { start, end, logDate } = diaryTargetKst();
+  const { start, end, logDate } = targetLogDate
+    ? diaryRangeForLogDate(targetLogDate)
+    : diaryTargetKst();
 
   const expRows: DayExperienceRow[] = await db
     .select({
