@@ -733,13 +733,15 @@ export function OrbitalMap({
       latest = false,
       t = 0,
     ) {
-      const breath = reduced || !latest ? 0 : 0.5 + Math.sin(t * 0.9) * 0.5;
-      const rad = size * (lit ? 1.6 : 1) * (1 + breath * 0.22) * 4.1;
+      // 계 화면과 같은 규칙 — 모양을 안 더하고 크기·밝기만 숨쉰다.
+      const breath = reduced || !latest ? 0.5 : 0.5 + Math.sin(t * 0.75) * 0.5;
+      const rad = size * (lit ? 1.6 : 1) * (latest ? 1 + (breath - 0.5) * 0.48 : 1) * 4.1;
       const c = lit ? [143, 244, 228] : color;
       const gc = c.join(",");
       // 하한을 두는 이유: 점수가 0인 경험도 "있다"는 건 보여야 한다.
       // 완전히 사그라들면 근거 6건 중 몇 개가 화면에서 사라진다.
-      const peak = (lit ? 1 : 0.62 + lum * 0.38) * alpha;
+      const peak =
+        (lit ? 1 : 0.62 + lum * 0.38) * alpha * (latest ? 0.72 + breath * 0.38 : 1);
 
       // 안쪽을 넓게 밝혀 심이 있는 것처럼 보이게 하되, 바깥은 여전히
       // 경계 없이 사그라든다. 가장자리를 그리지 않으면서 뚜렷해지는 방법이다.
@@ -767,19 +769,30 @@ export function OrbitalMap({
       lit: boolean,
       alpha: number,
       t: number,
-      /** 가장 최근 경험이 여기서 왔는가. 정적인 축은 전부 뜻이 있어서
-       *  (반경=나이 · 방향=trigger · 크기=중요도 · 색=분야 · 이심률=상태)
-       *  남은 채널이 시간축뿐이다. 숨쉬듯 크게 뛰는 것은 이것 하나다. */
+      /** 가장 최근 경험이 여기서 왔는가.
+       *
+       *  정적인 축은 전부 뜻이 있다 — 반경=나이 · 방향=trigger·분야 ·
+       *  크기=중요도·경험수 · 색=분야 · 이심률=상태. 청록은 상호작용,
+       *  흰빛은 중심으로 예약돼 있다. 남은 건 시간축뿐이다.
+       *
+       *  **모양은 하나도 안 더한다.** 테두리는 이미 "이 기억을 만든 근거"와
+       *  "갈래를 시작한 경험"이 쓰고 있어서, 같은 모양을 다른 뜻으로 또 쓰면
+       *  그 말이 흐려진다. 크기와 밝기가 같이 숨쉬는 것으로만 표시한다. */
       latest = false,
     ) {
       const [r, g, b] = lit ? [143, 244, 228] : color;
       // 아주 느린 맥동. 살아 있다는 표시 정도로만.
+      // 최근 것은 훨씬 크게 뛴다 — 5% 와 24% 는 눈이 확실히 가른다.
+      const breath = reduced || !latest ? 0 : 0.5 + Math.sin(t * 0.75) * 0.5;
       const pulse = reduced
         ? 1
         : latest
-          ? 1 + Math.sin(t * 0.9) * 0.17
+          ? 1 + (breath - 0.5) * 0.48
           : 1 + Math.sin(t * 0.5 + x * 0.01) * 0.05;
       const rad = radius * pulse * (lit ? 1.45 : 1) * 3.2;
+      // 밝기도 같이 숨쉰다. 크기만 뛰면 다른 천체와 겹쳤을 때 어느 쪽이
+      // 뛰는지 분간이 안 되는데, 빛의 세기가 같이 오르내리면 갈린다.
+      alpha = latest ? alpha * (0.72 + breath * 0.38) : alpha;
 
       // 안쪽 10%만 흰빛으로 타들어가고, 거기서부터 색을 거쳐 사그라든다.
       // 정지점을 촘촘히 둬야 경계 없이도 "심이 있다"가 읽힌다.
@@ -794,17 +807,6 @@ export function OrbitalMap({
       ctx!.beginPath();
       ctx!.arc(x, y, rad, 0, Math.PI * 2);
       ctx!.fill();
-
-      // 숨결에 맞춰 얇은 테두리가 같이 뛴다. 후광만으로는 다른 천체와
-      // 겹쳐 있을 때 어느 쪽이 뛰는지 분간이 안 된다.
-      if (latest && !reduced) {
-        const breath = 0.5 + Math.sin(t * 0.9) * 0.5;
-        ctx!.strokeStyle = `rgba(${r},${g},${b},${(0.16 + breath * 0.3) * alpha})`;
-        ctx!.lineWidth = 0.9;
-        ctx!.beginPath();
-        ctx!.arc(x, y, radius * (1.9 + breath * 0.5), 0, Math.PI * 2);
-        ctx!.stroke();
-      }
     }
 
     // 프레임 하나가 던지면 rAF 사슬이 끊기고 루프가 영원히 멈춘다. 그러면
