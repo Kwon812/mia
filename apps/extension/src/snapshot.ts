@@ -48,6 +48,9 @@ export interface SnapshotQueue {
   archived: number;
   /** 그중 전송 필터에 걸린 것 */
   skipped: number;
+  /** 탈락 사유별 개수. 개수만 보면 "왜 버려졌나"를 알 수 없다 —
+   *  10분 미만이 대부분이면 세션이 잘게 끊기고 있다는 뜻이라 규칙을 봐야 한다. */
+  skipReasons: Record<string, number>;
 }
 
 export interface SessionSnapshot {

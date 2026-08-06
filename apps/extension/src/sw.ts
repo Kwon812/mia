@@ -521,6 +521,10 @@ async function buildSessionSnapshot(now: number): Promise<SessionSnapshot> {
       failed: pendings.filter((p) => p.status === 'failed').length,
       archived: archived.length,
       skipped: archived.filter((a) => a.skipReason !== null).length,
+      skipReasons: archived.reduce<Record<string, number>>((acc, a) => {
+        if (a.skipReason) acc[a.skipReason] = (acc[a.skipReason] ?? 0) + 1;
+        return acc;
+      }, {}),
     },
     rawEvents: rawEventCount,
     connected: Boolean(extensionKey),

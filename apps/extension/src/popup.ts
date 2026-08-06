@@ -202,6 +202,19 @@ function renderFooter(root: HTMLElement, snap: SessionSnapshot): void {
       `최근 3일 ${snap.queue.archived}건 마감 · ${snap.queue.skipped}건 필터 탈락`,
     ),
   );
+  // 왜 버려졌는지까지 보여준다. 개수만으로는 손쓸 데를 못 찾는다 —
+  // '10분 미만'이 쌓이면 세션이 잘게 끊기고 있다는 신호다(맥락 이탈 판정이
+  // 예민하면 앞 조각이 10분을 못 채우고 통째로 사라진다).
+  const reasons = Object.entries(snap.queue.skipReasons ?? {}).sort((a, b) => b[1] - a[1]);
+  if (reasons.length > 0) {
+    foot.append(
+      el(
+        'div',
+        'foot-row foot-warn',
+        reasons.map(([r, n]) => `${SKIP_REASON_LABEL[r] ?? r} ${n}건`).join(' · '),
+      ),
+    );
+  }
   if (!snap.connected) {
     foot.append(el('div', 'foot-row foot-warn', '아직 키가 발급되지 않았어요'));
   }
