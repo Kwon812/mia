@@ -154,3 +154,10 @@ console.table(await sql`select
   (select count(*)::int from user_skills) as 스킬`);
 console.table(await sql`select left(title,30) as 쓰레드, category, status, experience_count as 경험수 from threads order by started_at`);
 await sql.end();
+
+// postgres.js 는 커넥션을 유지하므로 이벤트 루프가 안 비고 프로세스가 끝나지
+// 않는다. 이 스크립트는 커넥션 풀을 **둘** 쓴다 — 자기 sql 과 위에서 import 한
+// 앱/배치 쪽 db 다. 자기 것만 닫으면 나머지 하나가 프로세스를 붙잡는다.
+// 실제로 이 스크립트들이 최대 75분간 좀비로 남아 있었다(할 일은 진작 끝냈다).
+// 배치의 index.ts 도 같은 이유로 명시적 종료를 쓴다.
+process.exit(0);
