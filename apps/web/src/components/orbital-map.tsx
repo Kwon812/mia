@@ -341,8 +341,16 @@ const CAPTURE = 2.4;
  *
  *  들어갈 때 in-out 을 쓰면 안 된다 — 초반 값이 거의 0 이라(ft 0.15 에서
  *  0.014) 알파는 이미 페이드인 중인데 이동은 시작도 안 해 두 층이 따로 논다. */
+// ft(진행도)를 실제로 쓰는 값 ez 로 바꾼다.
+//
+// 나올 때 세제곱이었다. ft 는 프레임마다 정해진 비율로 줄어드는데 세제곱을
+// 씌우면 **그 비율이 세 배가 된다** — 0.04 로 낮춰도 ez 는 12%씩 빠졌고,
+// 앞쪽이 특히 가팔라서 5프레임(83ms)만에 절반이 지나갔다. 속도를 아무리
+// 낮춰도 "뻑" 하고 꺼지던 이유가 숫자가 아니라 이 모양에 있었다.
+//
+// 제곱으로 낮춘다. 들어갈 때는 그대로 — 고른 곳으로 빨려드는 건 가팔라야 한다.
 const easeMorph = (x: number, entering: boolean) =>
-  entering ? 1 - Math.pow(1 - x, 3) : x * x * x;
+  entering ? 1 - Math.pow(1 - x, 3) : x * x;
 
 const pullAt = (t: number) => Math.pow(1 - Math.min(1, Math.max(0, t)), 0.45);
 
@@ -943,7 +951,7 @@ export function OrbitalMap({
       // 들어갈 때와 나올 때의 속도를 나눈다. 들어가는 건 내가 고른 곳으로
       // 가는 거라 빠른 게 시원한데, 나오는 건 "어디서 나왔는지"를 눈으로
       // 따라가야 해서 같은 속도면 뚝 끊긴다.
-      ft += (target - ft) * (focusRef.current ? 0.075 : 0.04);
+      ft += (target - ft) * (focusRef.current ? 0.075 : 0.032);
       if (Math.abs(target - ft) < 0.002) ft = target;
 
       // 관성. 손을 뗀 속도로 계속 미끄러지다 잦아든다. 감쇠도 프레임 수가
