@@ -448,6 +448,13 @@ export function OrbitalMap({
   const pickedRef = useRef<Body | null>(null);
   pickedRef.current = picked;
 
+  // 최근 표식도 ref 로 읽는다. 그리기 이펙트의 의존성이 [bodies, memories,
+  // threads] 뿐이라, 값으로 쓰면 클로저가 첫 렌더의 latestId 를 잡은 채로
+  // 남는다 — 포커스에 들어가 위성 층으로 넘어가도 표식이 안 켜졌다.
+  // picked·focus 가 이미 같은 이유로 ref 를 쓴다.
+  const latestIdRef = useRef<string | null>(null);
+  latestIdRef.current = latestId ?? null;
+
   // 렌더 루프가 읽는 최신 포커스. 상태를 클로저에 가두지 않기 위해 ref 로 둔다.
   const focusRef = useRef<OrbitBody | null>(null);
   focusRef.current = focus;
@@ -1142,7 +1149,7 @@ export function OrbitalMap({
         for (const { el, p } of placed) {
           if (p.y > cy) continue; // 앞쪽은 나중에
           if (foc && el.id === foc.id) continue; // 모핑 중인 대상은 따로 그린다
-          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t, el.id === latestId);
+          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t, el.id === latestIdRef.current);
         }
 
         // 질량 중심
@@ -1163,7 +1170,7 @@ export function OrbitalMap({
         for (const { el, p } of placed) {
           if (p.y <= cy) continue; // 뒤쪽은 이미 그렸다
           if (foc && el.id === foc.id) continue;
-          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t, el.id === latestId);
+          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t, el.id === latestIdRef.current);
         }
         ctx!.restore();
 
@@ -1300,7 +1307,7 @@ export function OrbitalMap({
             hovered === st.b.id ||
             pickedRef.current?.id === st.b.id ||
             litOutcome === (st.b.outcome ?? "explore");
-          drawPoint(st.x, st.y, st.size, st.lum, on, ez, st.color, st.b.id === latestId, ts);
+          drawPoint(st.x, st.y, st.size, st.lum, on, ez, st.color, st.b.id === latestIdRef.current, ts);
           if (!st.isSource) return;
           ctx!.strokeStyle = `rgba(${st.color.join(",")},${0.5 * ez})`;
           ctx!.lineWidth = 0.9;
