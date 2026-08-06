@@ -509,6 +509,18 @@ export function OrbitalMap({
       };
     });
 
+    // 기억 크기의 기준. 화면에 올라온 것들 중 가장 중요한 것을 최대로 잡는다.
+    //
+    // 예전에는 importance(1~10)를 그대로 픽셀에 곱했다. 그런데 importance 는
+    // memory_score 를 **이론상 최대 200** 으로 나눠 만든 값인데 실제 점수는
+    // 110 이 최대라(0·20·90·110 뿐이다) 열 칸이 3~4 두 칸으로 뭉갰다 —
+    // 화면에서는 6.4px 과 7.2px, 사실상 같은 크기다.
+    //
+    // 위성 층은 이미 이 문제를 화면 기준 정규화로 풀어놨다(topScore). 같은
+    // 규칙을 여기에도 쓴다. importance 자체는 절대값이라 /memories 목록에서
+    // 그대로 쓰이므로 건드리지 않는다 — 고치는 건 화면의 표현뿐이다.
+    const topImportance = Math.max(1, ...memories.map((m) => m.importance));
+
     const els: Elem[] = memories.map((m) => {
       const a = radiusOf(m.ageDays);
       const p = phaseOf(m.id);
@@ -527,8 +539,9 @@ export function OrbitalMap({
         n: speedOf(a),
         lum: 1,
         color: colorOf(m),
-        // 중요도가 곧 크기다. 1~10 → 4.8~12px (코로나는 이 6배까지 퍼진다)
-        size: 4 + m.importance * 0.8,
+        // 중요도가 곧 크기다 — 다만 절대값이 아니라 화면 안에서의 몫이다.
+        // 4.8~12px 폭을 실제로 다 쓴다 (코로나는 이 6배까지 퍼진다).
+        size: 4 + (m.importance / topImportance) * 8,
         mem: m,
       };
     });
