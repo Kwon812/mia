@@ -10,6 +10,9 @@
 // 확장 코드가 진실이고, 여기 결과는 "이건 이상하니 코드를 다시 보라"는 신호다.
 import fs from 'node:fs';
 import postgres from 'postgres';
+// 확장의 현재 규칙으로 다시 매긴다. 저장된 로그의 category 는 그때의 표로 매긴
+// 값이라, 표를 고치고 나면 이 감사가 옛 판정을 되짚게 된다.
+import { categorize } from '../../extension/src/session/categories';
 
 const env = fs.readFileSync('.env.local', 'utf8');
 const sql = postgres(env.match(/DATABASE_URL="?([^"\n]+)"?/)?.[1] ?? '', { prepare: false });
@@ -52,6 +55,7 @@ let companionHeavy = 0;
 for (const s of rows) {
   const segs = (s.log?.segments ?? []).map((g) => ({
     ...g,
+    category: categorize(g.domain),
     s: new Date(g.start).getTime(),
     e: new Date(g.end).getTime(),
   }));
