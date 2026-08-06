@@ -655,6 +655,13 @@ export function OrbitalMap({
     let tScale = 1;
     let satScale = 1;
     let crashed = false;
+    // 착지 섬광. 느린 숨결만으로는 "지금 막 봤을 때" 눈에 안 들어온다 —
+    // 주기가 몇 초라 첫 순간에는 아무 일도 안 일어나는 것처럼 보인다.
+    // 화면에 들어온 순간과 펼친 순간에 크게 터뜨렸다가 잦아들게 한다.
+    // 상시 표식이 아니라 도착 연출이라, 다른 채널과 안 겹친다.
+    let flareAt = 0;
+    let flare = 0;
+    let lastFocused = false;
     const hit = new Map<string, { x: number; y: number; r: number; kind: string }>();
 
     function resize() {
@@ -741,14 +748,17 @@ export function OrbitalMap({
       t = 0,
     ) {
       // 계 화면과 같은 규칙 — 모양을 안 더하고 크기·밝기만 숨쉰다.
-      const breath = reduced || !latest ? 0.5 : 0.5 + Math.sin(t * 0.75) * 0.5;
-      const rad = size * (lit ? 1.6 : 1) * (latest ? 1 + (breath - 0.5) * 0.48 : 1) * 4.1;
+      const breath = reduced || !latest ? 0.5 : 0.5 + Math.sin(t * 1.6) * 0.5;
+      const rad =
+        size * (lit ? 1.6 : 1) * (latest ? 1 + (breath - 0.5) * 0.44 + flare * 1.1 : 1) * 4.1;
       const c = lit ? [143, 244, 228] : color;
       const gc = c.join(",");
       // 하한을 두는 이유: 점수가 0인 경험도 "있다"는 건 보여야 한다.
       // 완전히 사그라들면 근거 6건 중 몇 개가 화면에서 사라진다.
-      const peak =
-        (lit ? 1 : 0.62 + lum * 0.38) * alpha * (latest ? 0.72 + breath * 0.38 : 1);
+      const peak = Math.min(
+        1,
+        (lit ? 1 : 0.62 + lum * 0.38) * alpha * (latest ? 0.72 + breath * 0.38 + flare * 0.9 : 1),
+      );
 
       // 안쪽을 넓게 밝혀 심이 있는 것처럼 보이게 하되, 바깥은 여전히
       // 경계 없이 사그라든다. 가장자리를 그리지 않으면서 뚜렷해지는 방법이다.
@@ -790,16 +800,16 @@ export function OrbitalMap({
       const [r, g, b] = lit ? [143, 244, 228] : color;
       // 아주 느린 맥동. 살아 있다는 표시 정도로만.
       // 최근 것은 훨씬 크게 뛴다 — 5% 와 24% 는 눈이 확실히 가른다.
-      const breath = reduced || !latest ? 0 : 0.5 + Math.sin(t * 0.75) * 0.5;
+      const breath = reduced || !latest ? 0 : 0.5 + Math.sin(t * 1.6) * 0.5;
       const pulse = reduced
         ? 1
         : latest
-          ? 1 + (breath - 0.5) * 0.48
+          ? 1 + (breath - 0.5) * 0.44 + flare * 1.1
           : 1 + Math.sin(t * 0.5 + x * 0.01) * 0.05;
       const rad = radius * pulse * (lit ? 1.45 : 1) * 3.2;
       // 밝기도 같이 숨쉰다. 크기만 뛰면 다른 천체와 겹쳤을 때 어느 쪽이
       // 뛰는지 분간이 안 되는데, 빛의 세기가 같이 오르내리면 갈린다.
-      alpha = latest ? alpha * (0.72 + breath * 0.38) : alpha;
+      alpha = latest ? Math.min(1, alpha * (0.72 + breath * 0.38 + flare * 0.9)) : alpha;
 
       // 안쪽 10%만 흰빛으로 타들어가고, 거기서부터 색을 거쳐 사그라든다.
       // 정지점을 촘촘히 둬야 경계 없이도 "심이 있다"가 읽힌다.
@@ -1004,6 +1014,11 @@ export function OrbitalMap({
     function step(now: number) {
       const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
       lastNow = now;
+
+      // 실제 시각으로 잰다. simT 는 겨누고 있으면 멈추는데, 섬광은 그 사이에도
+      // 잦아들어야 한다 — 안 그러면 마우스를 올려둔 채로 영원히 터져 있다.
+      if (flareAt === 0) flareAt = now;
+      flare = reduced ? 0 : Math.exp(-(now - flareAt) / 1400);
       // 시간축이 둘이다.
       //   simT — 계 전체(기억). 겨누고 있거나 기억 하나에 붙어 있으면 멈춘다.
       //          포커스 중에 뒤에서 계속 돌면 빠져나왔을 때 자리가 달라져 있어
@@ -1023,6 +1038,12 @@ export function OrbitalMap({
       satT += dt * satScale;
       const t = reduced ? 0 : simT;
       const ts = reduced ? 0 : satT;
+
+      // 층을 넘나들 때마다 다시 터진다. 펼친 순간이 곧 그 층의 도착이다.
+      if ((focusRef.current != null) !== lastFocused) {
+        lastFocused = focusRef.current != null;
+        flareAt = now;
+      }
 
       const target = focusRef.current ? 1 : 0;
       // 들어갈 때와 나올 때의 속도를 나눈다. 들어가는 건 내가 고른 곳으로
@@ -1818,7 +1839,7 @@ export function OrbitalMap({
                 }}
                 className="readout pointer-events-auto mt-4 rounded-sm border border-[rgba(99,230,210,0.3)] px-3 py-1.5 text-[12.5px] text-lum-1 transition-colors hover:border-[rgba(99,230,210,0.6)] hover:text-lum-0 disabled:opacity-40"
               >
-                {completing ? "기록하는 중…" : "이 일 끝났어"}
+                {completing ? "…" : "끝"}
               </button>
             )}
 
