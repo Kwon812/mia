@@ -935,6 +935,27 @@ export function OrbitalMap({
       ft += (target - ft) * 0.075;
       if (Math.abs(target - ft) < 0.002) ft = target;
 
+      // 관성. 손을 뗀 속도로 계속 미끄러지다 잦아든다. 감쇠도 프레임 수가
+      // 아니라 시간 기준이라 주사율이 달라도 같은 거리를 간다.
+      if (!dragging && (flingX !== 0 || flingY !== 0)) {
+        const lim = offLimit(zoom);
+        const nx = offX + flingX * dt;
+        const ny = offY + flingY * dt;
+        offX = Math.max(-lim.x, Math.min(lim.x, nx));
+        offY = Math.max(-lim.y, Math.min(lim.y, ny));
+        // 벽에 닿으면 그 방향 속도를 버린다. 안 그러면 한계에 붙어 계속
+        // 밀고 있는 상태가 되어 놓아준 느낌이 안 난다.
+        if (offX !== nx) flingX = 0;
+        if (offY !== ny) flingY = 0;
+        const decay = Math.pow(0.05, dt); // 1초에 5% 남는다
+        flingX *= decay;
+        flingY *= decay;
+        if (Math.hypot(flingX, flingY) < 8) flingX = flingY = 0;
+        // 목표를 따라 옮긴다 — 안 그러면 아래 이징이 곧바로 되돌린다.
+        offXTarget = offX;
+        offYTarget = offY;
+      }
+
       // 확대는 프레임 수가 아니라 시간으로 수렴시킨다. 계수 곱셈(z += (t-z)*k)은
       // 화면 주사율에 따라 속도가 달라져서, 120Hz 에서는 60Hz 의 두 배로 빨라진다.
       // 배율과 이동은 **같은 계수**를 쓴다 — 따로 놀면 확대하는 동안 겨눈 지점이
@@ -1318,14 +1339,22 @@ export function OrbitalMap({
     const DRAG_SLOP = 5;
     let dragging = false;
     let dragPrev = { x: 0, y: 0 };
+    let dragLastT = 0;
     let dragDist = 0;
     let swallowClick = false;
+    // 손을 뗀 뒤 미끄러지는 속도(px/초). 계에 질량이 있는 것처럼 굴게 한다 —
+    // 뚝 서면 화면이 끌려온 게 아니라 잘려 보인다.
+    let flingX = 0;
+    let flingY = 0;
 
     function onDown(e: MouseEvent) {
       if (e.button !== 0) return;
       dragging = true;
       dragDist = 0;
       dragPrev = { x: e.clientX, y: e.clientY };
+      dragLastT = performance.now();
+      // 미끄러지는 중에 다시 잡으면 그 자리에서 선다.
+      flingX = flingY = 0;
     }
 
     function onUp() {
@@ -1333,6 +1362,8 @@ export function OrbitalMap({
       dragging = false;
       // mouseup 뒤에 click 이 온다. 끌었으면 그걸 삼킨다.
       swallowClick = dragDist > DRAG_SLOP;
+      // 문턱 아래로만 움직였으면 클릭이지 던진 게 아니다.
+      if (!swallowClick) flingX = flingY = 0;
     }
 
     function onMove(e: MouseEvent) {
@@ -1345,6 +1376,15 @@ export function OrbitalMap({
       dragPrev = { x: e.clientX, y: e.clientY };
       dragDist += Math.hypot(dx, dy);
       if (dragDist <= DRAG_SLOP) return; // 아직 클릭일 수도 있다
+
+      // 던진 속도. mousemove 는 프레임에 안 맞춰 오므로 시간으로 나눠 px/초로
+      // 재고, 순간값은 튀니까 지수평활한다. 마지막 한 번만 보면 손을 뗄 때
+      // 우연히 멈칫한 프레임이 잡혀 안 미끄러진다.
+      const nowT = performance.now();
+      const dtms = Math.max(1, nowT - dragLastT);
+      dragLastT = nowT;
+      flingX = flingX * 0.7 + ((dx / dtms) * 1000) * 0.3;
+      flingY = flingY * 0.7 + ((dy / dtms) * 1000) * 0.3;
 
       // 목표까지 같이 옮긴다. 목표를 안 옮기면 손을 떼는 순간 이징이 원래
       // 자리로 되돌려서, 끌고 있는 내내 화면이 손가락을 밀어낸다.
@@ -1420,14 +1460,19 @@ export function OrbitalMap({
         zoomTarget = 1;
         offXTarget = 0;
         offYTarget = 0;
+        flingX = flingY = 0;
       }
     }
 
     /** 확대 범위. 아래로는 딱 맞춤(1)까지만 — 그보다 줄이면 화면 가장자리에
-     *  빈 검은 띠만 늘어난다. 위로 8배면 갈래 스물여섯이 몰린 0.3도 구간이
-     *  2.4도로 벌어져 하나씩 겨눌 수 있다. */
+     *  빈 검은 띠만 늘어난다.
+     *
+     *  위로는 32배. 8배로는 부족했다 — 화면 배율이 **가장 바깥 궤도 하나**에
+     *  맞춰지는 구조라(unit = 짧은 변 절반의 88% / maxA), 4년 된 갈래가 하나만
+     *  있어도 최근 것들이 반경의 2% 안으로 눌린다. 그걸 읽을 만큼 벌리려면
+     *  스무 배 넘게 필요하다. */
     const ZOOM_MIN = 1;
-    const ZOOM_MAX = 8;
+    const ZOOM_MAX = 32;
 
     function onWheel(e: WheelEvent) {
       // 페이지가 같이 스크롤되면 지도 위에서 휠을 굴릴 수가 없다.

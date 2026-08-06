@@ -21,6 +21,9 @@ import postgres from 'postgres';
 
 const APPLY = process.argv.includes('--apply');
 const CLEAR = process.argv.includes('--clear');
+// 연 단위 확인용. 1~4년 전에 갈래를 세 개씩만 놓는다 — 반경 곡선이 해를
+// 갈라 보여주는지는 6개월치로는 알 수 없다(그 안에선 전부 같은 해다).
+const YEARS = process.argv.includes('--years');
 
 const env = fs.readFileSync('.env.local', 'utf8');
 const sql = postgres(env.match(/DATABASE_URL="?([^"\n]+)"?/)?.[1] ?? '', { prepare: false });
@@ -109,7 +112,43 @@ const exps: Ex[] = [];
 let ti = 0;
 let ei = 0;
 
-for (let d = DAYS; d >= 0; d--) {
+// 연 단위 모드: 1~4년 전에 세 개씩. 각 갈래에 경험 둘.
+if (YEARS) {
+  for (let y = 1; y <= 4; y++) {
+    for (let k = 0; k < 3; k++) {
+      const kind = KINDS[(y * 3 + k) % KINDS.length];
+      // 같은 해 안에서도 조금 벌린다 — 반경이 겹치는지 보려면 붙어 있어야 한다.
+      const start = now - (y * 365 + k * 25) * DAY;
+      const th: Th = {
+        id: sid(3, 5000 + ti++),
+        cat: kind.cat,
+        title: `${y}년 전 · ${kind.titles[k % kind.titles.length]}`,
+        started: start,
+        last: start + 20 * DAY,
+        n: 2,
+        status: y >= 3 ? 'abandoned' : 'completed',
+      };
+      threads.push(th);
+      for (let e = 0; e < 2; e++) {
+        const at = start + e * 18 * DAY;
+        exps.push({
+          id: sid(2, 5000 + ei),
+          sess: sid(1, 5000 + ei),
+          at,
+          cat: kind.cat,
+          outcome: e === 1 ? 'success' : 'partial',
+          score: e === 1 ? 72 : 40,
+          first: e === 0,
+          th,
+          summary: `${th.title} — ${pick(VERBS)}`,
+        });
+        ei++;
+      }
+    }
+  }
+}
+
+for (let d = YEARS ? -1 : DAYS; d >= 0; d--) {
   const dayStart = now - d * DAY;
   const dow = new Date(dayStart).getDay();
   // 주말엔 덜 한다. 하루 0~5세션.
@@ -151,7 +190,8 @@ for (let d = DAYS; d >= 0; d--) {
 }
 
 // 갈래 마감. 오래 손 안 댄 것은 놓았거나(abandoned) 끝냈다(completed).
-for (const t of threads) {
+// 연 단위 모드는 위에서 이미 정해뒀다.
+for (const t of YEARS ? [] : threads) {
   const idle = (now - t.last) / DAY;
   if (idle > 30) t.status = rnd() < 0.55 ? 'abandoned' : 'completed';
   else if (idle > 10 && rnd() < 0.4) t.status = 'completed';
@@ -167,7 +207,7 @@ const mems = exps
     importance: Math.max(1, Math.min(10, Math.round(e.score / 11))),
   }));
 
-console.log(`유저 ${user.id.slice(0, 8)} · ${DAYS}일치`);
+console.log(`유저 ${user.id.slice(0, 8)} · ${YEARS ? '1~4년 전 (연 단위)' : `${DAYS}일치`}`);
 console.log(`  세션·경험 ${exps.length} · 갈래 ${threads.length} · 기억 ${mems.length}`);
 const byStatus = threads.reduce<Record<string, number>>((a, t) => ((a[t.status] = (a[t.status] ?? 0) + 1), a), {});
 console.log(`  갈래 상태 ${JSON.stringify(byStatus)}`);
