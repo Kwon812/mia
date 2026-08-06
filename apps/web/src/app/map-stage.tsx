@@ -189,22 +189,30 @@ export function MapStage({
           바로 열면 그 위계가 무너진다. */}
       {recent.length > 0 && (
         <div
-          className="pointer-events-none absolute bottom-24 left-5 max-w-[34ch]"
+          className="pointer-events-none absolute bottom-28 left-5 max-w-[38ch]"
           style={{
             opacity: reading ? 0 : 1,
             transition: "opacity 420ms ease",
           }}
         >
           <div className="tick mb-2">최근 경험</div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2.5">
             {recent.map((b, i) => (
               <div
                 key={b.id}
-                className="settle readout flex gap-2 text-[12.5px] leading-relaxed"
+                className="settle readout grid grid-cols-[auto_1fr] gap-x-2 text-[12.5px] leading-relaxed"
                 style={{ "--d": `${340 + i * 60}ms` } as React.CSSProperties}
               >
                 <span className="shrink-0 text-lum-4">{kstHm(b.occurredAt)}</span>
                 <span className="truncate text-lum-2">{b.summary}</span>
+                <span />
+                {/* 판정과 점수, 그리고 기억에 닿았는지. 점수는 60 이 문턱이라
+                    그 앞뒤가 곧 "이게 남았나"의 근거가 된다 — 숫자만 보고도
+                    왜 기억이 안 됐는지 읽힌다. */}
+                <span className="truncate text-[11.5px] text-lum-4">
+                  {b.category.toUpperCase()} · {(b.outcome ?? "—").toUpperCase()} · M{b.memoryScore}
+                  {b.remembered && <span className="ml-1.5 text-lum-2">기억에 붙음</span>}
+                </span>
               </div>
             ))}
           </div>
