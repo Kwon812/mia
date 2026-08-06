@@ -392,6 +392,9 @@ export function OrbitalMap({
 
   // 판독값 DOM. 렌더 루프와 아래 레이아웃 이펙트가 함께 잡는다.
   const probeRef = useRef<HTMLDivElement>(null);
+  /** 중심 이름표. 질량중심을 따라다녀야 하므로 매 프레임 자리를 직접 옮긴다.
+   *  state 로 두면 프레임마다 리렌더가 돌아 계 전체가 느려진다. */
+  const centerLabelRef = useRef<HTMLDivElement>(null);
 
   // 판독값은 내용에 따라 크기가 달라져(스킬 칩 줄 수·제목 길이) 그려본 뒤에야
   // 잘리는지 알 수 있다. 그린 직후 같은 프레임에 다시 놓아 깜빡임이 없다.
@@ -602,6 +605,16 @@ export function OrbitalMap({
       // 가운데로 되돌린다 — 확대 배율은 지킨다.
       offX = offY = offXTarget = offYTarget = 0;
       applyCamera();
+    }
+
+    /** 이동량 한계. 바깥 궤도가 화면에서 통째로 사라지지 않는 선까지만 —
+     *  그 너머는 아무것도 없는 검은 화면이라 갈 이유가 없다. */
+    function offLimit(z: number) {
+      const radX = maxA * baseUnit * z;
+      return {
+        x: Math.max(0, radX + w / 2 - 100),
+        y: Math.max(0, radX * FLATTEN + h / 2 - 100),
+      };
     }
 
     /** zoom·off 로부터 cx·cy·unit 을 푼다. 매 프레임 그리기 전에 부른다. */
@@ -826,6 +839,12 @@ export function OrbitalMap({
       }
       applyCamera();
 
+      // 이름표를 질량중심에 붙인다. 캔버스가 아니라 DOM 이라 여기서 옮긴다.
+      if (centerLabelRef.current) {
+        centerLabelRef.current.style.left = `${cx}px`;
+        centerLabelRef.current.style.top = `${cy}px`;
+      }
+
       ctx!.clearRect(0, 0, w, h);
       hit.clear();
 
@@ -1032,7 +1051,10 @@ export function OrbitalMap({
         const refs = foc.referencedIds.map((id) => byId.get(id)).filter(Boolean) as Body[];
         // 궤도가 안에서 바깥으로 펴지며 나타난다. 다 자란 채로 페이드인하면
         // 대상이 커지는 움직임과 어긋나 두 층이 따로 논다.
-        const R = Math.min(w, h) * 0.3 * (0.78 + 0.22 * ez);
+        // zoom 을 곱한다. 위성은 unit 이 아니라 제 반경 R 로 놓이는 층이라,
+        // 이걸 빼먹으면 계는 확대되는데 경험 궤도만 그대로였다.
+        // 원점이 (cx, cy) 라 이동(offX·offY)은 이미 따라온다.
+        const R = Math.min(w, h) * 0.3 * (0.78 + 0.22 * ez) * zoom;
 
         // 점수를 고정값(140)으로 나누면 실제 데이터가 0~70 일 때 표현 범위의
         // 절반만 쓰게 되어 차이가 뭉갠다. 지금 화면에 올라온 것들 중 최댓값을
@@ -1303,9 +1325,50 @@ export function OrbitalMap({
       drawAim();
     }
 
+    // ── 끌어서 옮기기 ──
+    // 확대해 들어가면 보고 싶은 데가 화면 밖에 있을 수 있다. 휠은 커서 쪽으로
+    // 파고드는 것뿐이라, 옆으로 훑으려면 끄는 수밖에 없다.
+    //
+    // 누른 것인지 끈 것인지가 애매하면 안 된다 — 궤도를 훑다가 손을 뗐는데
+    // 엉뚱한 천체가 펼쳐지면 지도를 못 믿게 된다. 문턱을 넘는 순간 드래그로
+    // 확정하고, 그 뒤에 따라오는 click 은 통째로 죽인다. 문턱 아래로만 움직이면
+    // (손떨림) 지금까지처럼 클릭이다.
+    const DRAG_SLOP = 5;
+    let dragging = false;
+    let dragPrev = { x: 0, y: 0 };
+    let dragDist = 0;
+    let swallowClick = false;
+
+    function onDown(e: MouseEvent) {
+      if (e.button !== 0) return;
+      dragging = true;
+      dragDist = 0;
+      dragPrev = { x: e.clientX, y: e.clientY };
+    }
+
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      // mouseup 뒤에 click 이 온다. 끌었으면 그걸 삼킨다.
+      swallowClick = dragDist > DRAG_SLOP;
+    }
+
     function onMove(e: MouseEvent) {
       const rect = canvas!.getBoundingClientRect();
       mouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+
+      if (!dragging) return;
+      const dx = e.clientX - dragPrev.x;
+      const dy = e.clientY - dragPrev.y;
+      dragPrev = { x: e.clientX, y: e.clientY };
+      dragDist += Math.hypot(dx, dy);
+      if (dragDist <= DRAG_SLOP) return; // 아직 클릭일 수도 있다
+
+      // 목표까지 같이 옮긴다. 목표를 안 옮기면 손을 떼는 순간 이징이 원래
+      // 자리로 되돌려서, 끌고 있는 내내 화면이 손가락을 밀어낸다.
+      const lim = offLimit(zoom);
+      offX = offXTarget = Math.max(-lim.x, Math.min(lim.x, offX + dx));
+      offY = offYTarget = Math.max(-lim.y, Math.min(lim.y, offY + dy));
     }
     function onLeave() {
       mouse = null;
@@ -1338,6 +1401,10 @@ export function OrbitalMap({
     // 마우스를 움직이지 않고 누른 경우(또는 mousemove 가 한 번 빠진 경우)
     // 옛 위치가 그대로 남아, 빈 곳을 눌러도 직전 대상이 잡혀 포커스가 안 풀린다.
     function onClick(e: MouseEvent) {
+      if (swallowClick) {
+        swallowClick = false;
+        return;
+      }
       const rect = canvas!.getBoundingClientRect();
       const at = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       mouse = at;
@@ -1417,14 +1484,10 @@ export function OrbitalMap({
         // 끌려 들어갔다. 중심은 계의 기준점이긴 해도, 확대해 들어간다는 건
         // 원래 중심을 벗어난다는 뜻이다(이름표는 DOM 이라 제자리에 남는다).
         //
-        // 대신 바깥 궤도가 화면에서 완전히 사라지지는 않게 한다. 그 너머는
-        // 아무것도 없는 검은 화면이라 거기로 갈 이유가 없다.
-        const radX = maxA * u;
-        const radY = radX * FLATTEN;
-        const limX = Math.max(0, radX + w / 2 - 100);
-        const limY = Math.max(0, radY + h / 2 - 100);
-        offXTarget = Math.max(-limX, Math.min(limX, sx - wx * u - w / 2));
-        offYTarget = Math.max(-limY, Math.min(limY, sy - wy * u - h / 2));
+        // 대신 바깥 궤도가 화면에서 완전히 사라지지는 않게 한다(offLimit).
+        const lim = offLimit(next);
+        offXTarget = Math.max(-lim.x, Math.min(lim.x, sx - wx * u - w / 2));
+        offYTarget = Math.max(-lim.y, Math.min(lim.y, sy - wy * u - h / 2));
       }
       zoomTarget = next;
     }
@@ -1441,6 +1504,10 @@ export function OrbitalMap({
     document.addEventListener("mouseleave", onLeave);
     canvas.addEventListener("click", onClick);
     canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("mousedown", onDown);
+    // 창 전체에서 뗀다 — 캔버스 밖에서 손을 떼면 mouseup 을 못 받아 계가
+    // 커서에 붙어 따라다닌다.
+    window.addEventListener("mouseup", onUp);
     window.addEventListener("keydown", onKey);
 
     return () => {
@@ -1450,6 +1517,8 @@ export function OrbitalMap({
       document.removeEventListener("mouseleave", onLeave);
       canvas.removeEventListener("click", onClick);
       canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mouseup", onUp);
       window.removeEventListener("keydown", onKey);
     };
   }, [bodies, memories, threads]);
@@ -1498,7 +1567,12 @@ export function OrbitalMap({
 
       {/* 중심 라벨 */}
       <div
-        className={`pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 text-center ${
+        ref={centerLabelRef}
+        // left/top 을 px 로 직접 준다. left-1/2 top-1/2 로 두면 뷰포트 한가운데에
+        // 못 박혀서, 확대해 들어갔을 때 이름표만 남고 정작 그 별은 딴 데 가 있다.
+        // -translate-x-1/2 은 그대로 — 가로 가운데 정렬은 여전히 필요하다.
+        style={{ left: 0, top: 0 }}
+        className={`pointer-events-none absolute -translate-x-1/2 text-center ${
           focus ? "mt-9" : "mt-6"
         }`}
       >

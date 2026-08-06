@@ -184,7 +184,7 @@ export function MapStage({
       {/* 사라지는 연출은 바깥 껍데기가 맡는다. .settle 은 animation-fill-mode:both
           라서 끝 키프레임(opacity 1)이 인라인 스타일을 이긴다 — 같은 요소에서
           다투면 페이드가 통째로 무시된다. 층을 나누면 두 값이 곱해진다. */}
-      <div className="pointer-events-none absolute bottom-24 left-1/2 w-full max-w-xl -translate-x-1/2 px-6 text-center">
+      <div className="pointer-events-none absolute bottom-12 left-1/2 w-full max-w-xl -translate-x-1/2 px-6 text-center">
         {/* 연출을 층으로 나눈다.
             바깥 — 자리잡기(-translate-x-1/2). Tailwind v4 는 이걸 transform 이
                    아니라 translate 속성으로 낸다. 여기에 인라인 translate 를
