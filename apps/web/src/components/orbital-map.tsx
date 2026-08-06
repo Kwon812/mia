@@ -1408,12 +1408,23 @@ export function OrbitalMap({
         const wx = (sx - cx) / unit;
         const wy = (sy - cy) / unit;
         const u = baseUnit * next;
-        // 질량중심이 화면 밖으로 나가지 않게 가둔다. 중심은 이름표가 붙어 있는
-        // 계의 기준점이라, 사라지면 지금 어디를 보고 있는지 알 수가 없다.
-        const mx = w / 2 - 40;
-        const my = h / 2 - 40;
-        offXTarget = Math.max(-mx, Math.min(mx, sx - wx * u - w / 2));
-        offYTarget = Math.max(-my, Math.min(my, sy - wy * u - h / 2));
+
+        // 가두는 기준은 **계가 화면에 남는가**지 중심이 보이는가가 아니다.
+        //
+        // 처음에는 질량중심을 화면 안에 붙잡아 뒀는데(가장자리 40px), 세로로는
+        // 352px 밖에 안 돼서 배율 4배에 화면 아래를 겨누면 필요한 이동량
+        // 1050px 이 거기서 잘렸다 — 어느 순간부터 커서를 안 따라가고 안쪽으로
+        // 끌려 들어갔다. 중심은 계의 기준점이긴 해도, 확대해 들어간다는 건
+        // 원래 중심을 벗어난다는 뜻이다(이름표는 DOM 이라 제자리에 남는다).
+        //
+        // 대신 바깥 궤도가 화면에서 완전히 사라지지는 않게 한다. 그 너머는
+        // 아무것도 없는 검은 화면이라 거기로 갈 이유가 없다.
+        const radX = maxA * u;
+        const radY = radX * FLATTEN;
+        const limX = Math.max(0, radX + w / 2 - 100);
+        const limY = Math.max(0, radY + h / 2 - 100);
+        offXTarget = Math.max(-limX, Math.min(limX, sx - wx * u - w / 2));
+        offYTarget = Math.max(-limY, Math.min(limY, sy - wy * u - h / 2));
       }
       zoomTarget = next;
     }
