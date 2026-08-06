@@ -129,7 +129,7 @@ export default async function ThreadsPage() {
     //
     // threads.started_at 과 같은 시각이지만 저장하지는 않는다 — 재구축 때마다
     // 어긋날 값이 하나 늘 뿐이고, 이미 있는 목록으로 정확히 계산된다.
-    sourceId: (expIdsByThread.get(t.id) ?? []).at(-1) ?? null,
+    sourceIds: [(expIdsByThread.get(t.id) ?? []).at(-1)].filter((id): id is string => id != null),
   }));
 
   return (

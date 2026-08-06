@@ -50,7 +50,12 @@ export type MemoryBody = {
   /** 이 기억의 근거가 된 경험들 */
   referencedIds: string[];
   /** 그중 이 기억을 실제로 만든 경험 (memories.experience_id). 나머지는 같은 작업에서 딸려온 것들 */
-  sourceId: string | null;
+  /** 테두리를 두를 경험들.
+   *  기억이면 그 기억을 만든 근거(experience_ids), 갈래면 그 갈래를 시작한 경험.
+   *  위성은 갈래 경험 **전부**를 보여주고, 이 목록만 테두리로 구분한다 —
+   *  "이 일에 뭐가 있었나"와 "그중 뭐가 남았나"는 다른 질문이라 한 화면에 둘 다
+   *  있어야 한다. */
+  sourceIds: string[];
   /** 그 경험에서 쓴 스킬(비중 내림차순). firstTime 이 이 기억을 남긴 근거다 —
    *  trigger=new_skill 만으로는 "무슨 스킬?"에 답할 수 없다. */
   skills: { name: string; firstTime: boolean }[];
@@ -84,9 +89,8 @@ export type ThreadBody = {
   ageDays: number;
   /** 이 갈래에 속한 경험들 — 누르면 위성으로 펼쳐진다 */
   referencedIds: string[];
-  /** 이 갈래를 시작한 경험. 기억의 sourceId 와 같은 자리를 쓴다 —
-   *  펼쳤을 때 그 하나에 테두리가 그려진다. */
-  sourceId: string | null;
+  /** 이 갈래를 시작한 경험. 기억의 sourceIds 와 같은 자리를 쓴다. */
+  sourceIds: string[];
 };
 
 /** 주 궤도에 오르는 것들. 누르면 referencedIds 가 위성으로 펼쳐진다는 점이 같다. */
@@ -1199,9 +1203,9 @@ export function OrbitalMap({
             plane,
             ecc,
             color: colorOfCategory(b.category),
-            // 기억은 그 기억을 만든 경험, 갈래는 그 갈래를 시작한 경험.
-            // 둘 다 sourceId 한 자리를 쓴다.
-            isSource: b.id === foc.sourceId,
+            // 기억은 그 기억을 만든 근거들, 갈래는 그 갈래를 시작한 경험.
+            // 기억은 여럿일 수 있다 — 근거가 쌓이면 테두리도 늘어난다.
+            isSource: foc.sourceIds.includes(b.id),
             x: cx + lx * pc - ly * ps,
             y: cy + lx * ps + ly * pc,
           };

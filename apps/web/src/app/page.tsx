@@ -201,10 +201,15 @@ export default async function Home() {
   const skillsByMemory = await loadSkillsByMemory(user.userId, liveMemories);
 
   const moons: MemoryBody[] = liveMemories.map((m) => {
-      // 근거는 **이 기억을 만든 경험들**이다. 예전에는 "같은 갈래 경험 전부"라
-      // 새벽 2시 기억이 4시간 뒤 경험까지 근거로 보여줬고, 같은 갈래의 기억
-      // 셋이 전부 같은 위성을 띄웠다. 갈래 전체는 /threads 에서 본다.
-      const referenced = expRows.filter((e) => m.experienceIds.includes(e.id));
+      // 위성은 그 갈래의 경험 **전부**다. 그중 무엇이 이 기억을 만들었는지는
+      // sourceIds 로 테두리를 둘러 구분한다 — "이 일에 뭐가 있었나"와
+      // "그중 뭐가 남았나"는 다른 질문이라 한 화면에 둘 다 있어야 한다.
+      //
+      // 기억이 갈래당 하나로 모이기 전에는 같은 갈래의 기억 셋이 전부 같은
+      // 위성을 띄워서 이 표현이 무의미했다. 이제는 기억이 하나뿐이라 성립한다.
+      const referenced = expRows.filter(
+        (e) => m.experienceIds.includes(e.id) || (m.threadId != null && e.threadId === m.threadId),
+      );
       return {
         kind: "memory" as const,
         id: m.id,
@@ -218,8 +223,7 @@ export default async function Home() {
         occurredAt: m.occurredAt.getTime(),
         ageDays: Math.max(0, (now - m.occurredAt.getTime()) / DAY_MS),
         referencedIds: referenced.map((e) => e.id),
-        // 테두리를 두르는 것 = 그 기억을 처음 만든 경험. 배열의 첫 항목이다.
-        sourceId: m.experienceIds[0] ?? null,
+        sourceIds: m.experienceIds,
         skills: (skillsByMemory.get(m.id) ?? []).map((sk) => ({
           name: sk.name,
           firstTime: sk.firstTime,
