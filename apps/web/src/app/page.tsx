@@ -7,7 +7,6 @@ import {
   memories,
   questions,
   sessions,
-  threads,
 } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
@@ -17,7 +16,7 @@ import { effective, loadCorrections } from "@/lib/corrections";
 import { NameForm } from "@/components/name-form";
 import { MapStage } from "./map-stage";
 import type { AskQuestion } from "@/components/ask-card";
-import type { Body, MemoryBody, ThreadBody } from "@/components/orbital-map";
+import type { Body, MemoryBody } from "@/components/orbital-map";
 
 // 감정 파생에 넣는 최근 경험 표본 크기 (계획서 06장)
 const EMOTION_SAMPLE_SIZE = 5;
@@ -47,7 +46,7 @@ export default async function Home() {
   const daysTogether = kstDaysTogether(user.createdAt);
   const slot = getCurrentDialogueSlot();
 
-  const [dialogueRows, expRows, memoryRows, threadRows, todaySessionRows, recentExperienceRows] =
+  const [dialogueRows, expRows, memoryRows, todaySessionRows, recentExperienceRows] =
     await Promise.all([
       db
         .select({ text: dialogues.text })
@@ -83,17 +82,6 @@ export default async function Home() {
         })
         .from(memories)
         .where(eq(memories.userId, user.userId)),
-      db
-        .select({
-          id: threads.id,
-          title: threads.title,
-          category: threads.category,
-          status: threads.status,
-          experienceCount: threads.experienceCount,
-          startedAt: threads.startedAt,
-        })
-        .from(threads)
-        .where(eq(threads.userId, user.userId)),
       db
         .select({ durationMin: sessions.durationMin })
         .from(sessions)
@@ -195,46 +183,6 @@ export default async function Home() {
     forgotten: memoryByExp.get(e.id) != null,
   }));
 
-  // ── 갈래 ──
-  // 기억과 달리 조건 없이 모든 작업이 뜬다. 기억은 규칙이 까다로워
-  // (new_skill·breakthrough 등) 갈래마다 생기지 않는다 — 실측으로 갈래 5개 중
-  // 3개가 기억이 없어 지도에 아예 존재하지 않았다. 진행 중인 일이 화면에
-  // 없으면 "지금 무엇을 하고 있나"를 지도가 답하지 못한다.
-  //
-  // 반경은 시작 시각, 크기는 붙은 경험 수, 색은 자기 category, 방향은 status.
-  // 경험은 MAX_BODIES(220) 상한 안에서만 찾으므로 그 바깥의 오래된 경험은
-  // 위성으로 안 나타난다 — 기억과 같은 한계다.
-  const expIdsByThread = new Map<string, string[]>();
-  for (const e of expRows) {
-    if (!e.threadId) continue;
-    const list = expIdsByThread.get(e.threadId) ?? [];
-    list.push(e.id);
-    expIdsByThread.set(e.threadId, list);
-  }
-
-  // **기억이 대표하고 있는 갈래는 뺀다.** thread_id 가 있는 기억은 누르면 그
-  // 갈래의 경험 전부로 펼쳐지므로(위 moons 의 e.threadId === m.threadId),
-  // 갈래를 따로 띄우면 완전히 같은 위성을 보여주는 천체가 둘이 된다.
-  // 잊힌 기억(forgotten_at)은 지도에서 사라지니 대표 자격도 없다 — 그때는
-  // 갈래가 다시 나타나 그 작업이 화면에서 통째로 증발하지 않는다.
-  const representedByMemory = new Set(
-    memoryRows.filter((m) => m.forgottenAt == null && m.threadId).map((m) => m.threadId!),
-  );
-
-  const threadBodies: ThreadBody[] = threadRows
-    .filter((t) => !representedByMemory.has(t.id))
-    .map((t) => ({
-      kind: "thread" as const,
-      id: t.id,
-      title: t.title,
-      category: t.category,
-      status: t.status,
-      experienceCount: t.experienceCount,
-      occurredAt: t.startedAt.getTime(),
-      ageDays: Math.max(0, (now - t.startedAt.getTime()) / DAY_MS),
-      referencedIds: expIdsByThread.get(t.id) ?? [],
-    }));
-
   // 기억이 참조하는 경험들. memories 는 experience_id 하나만 직접 가리키지만,
   // thread_id 가 있으면 그 작업에 속한 경험 전부가 이 기억의 근거다 —
   // 'thread_complete' 기억은 특히 한 경험이 아니라 그 작업 전체를 가리킨다.
@@ -298,7 +246,6 @@ export default async function Home() {
     <MapStage
       bodies={bodies}
       memories={moons}
-      threads={threadBodies}
       name={user.character.name}
       level={user.character.level}
       daysTogether={daysTogether}

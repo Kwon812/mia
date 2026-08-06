@@ -15,6 +15,7 @@ const SCALES = [
   { href: "/", label: "지금", tick: 10 },
   { href: "/memories", label: "기억", tick: 18 },
   { href: "/diary", label: "일기", tick: 24 },
+  { href: "/threads", label: "갈래", tick: 26 },
   { href: "/skills", label: "스킬", tick: 28 },
   { href: "/personality", label: "성격", tick: 34 },
 ] as const;

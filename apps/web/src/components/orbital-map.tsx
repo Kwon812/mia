@@ -1192,7 +1192,9 @@ export function OrbitalMap({
         }`}
       >
         <span className="tick">{focus ? (focus.kind === "thread" ? "갈래" : "기억") : centerLabel}</span>
-        {!focus && memories.length === 0 && (
+        {/* 궤도가 통째로 비었을 때만. memories 만 보면 갈래 화면(memories=[])
+            에서 갈래가 다섯 개 떠 있는데도 "남은 것이 없다"가 뜬다. */}
+        {!focus && memories.length === 0 && threads.length === 0 && (
           <div className="tick mt-3 opacity-60">아직 궤도에 남은 것이 없다</div>
         )}
       </div>
