@@ -767,7 +767,14 @@ export async function processSession(sessionId: string, userId: string): Promise
     const dedupedSkills = dedupeSkills(output.skills)
       .sort((a, b) => b.weight - a.weight)
       .slice(0, MAX_SKILLS_PER_EXPERIENCE);
-    const hasNewSkill = dedupedSkills.some((s) => !existingSkillNames.has(s.name));
+    // 어느 스킬이 새것인지까지 남긴다. some() 으로 불리언만 뽑으면 규칙은
+    // "처음이다"를 아는데 화면은 "무엇이 처음인지"를 모르는 상태가 된다 —
+    // /memories 에 new_skill 태그와 요약문만 뜨고 정작 무슨 스킬인지가 없었다.
+    // 비중 순이라 [0] 이 그 세션의 주된 신규 스킬이다.
+    const newSkillNames = dedupedSkills
+      .filter((s) => !existingSkillNames.has(s.name))
+      .map((s) => s.name);
+    const hasNewSkill = newSkillNames.length > 0;
     const primarySkillName = dedupedSkills.length > 0 ? [...dedupedSkills].sort((a, b) => b.weight - a.weight)[0].name : null;
 
     // thread 부착 판정 — LLM 환각 방어: 목록에 없는 existing_thread_id 면 new 로 강등.
@@ -806,11 +813,14 @@ export async function processSession(sessionId: string, userId: string): Promise
     // 오래 묵혀둔 스킬이 돌아왔는가. existingSkillRows 에 이미 lastUsedAt 이
     // 실려 있어 추가 쿼리가 필요 없다.
     const lastUsedByName = new Map(existingSkillRows.map((r) => [r.name, r.lastUsedAt]));
-    const dormantSkillReturned = dedupedSkills.some((sk) => {
-      const last = lastUsedByName.get(sk.name);
-      if (!last) return false; // 신규 스킬은 여기 해당 없음(그건 hasNewSkill 이 잡는다)
-      return session.startedAt.getTime() - last.getTime() >= DORMANT_SKILL_DAYS * DAY_MS;
-    });
+    const dormantSkillNames = dedupedSkills
+      .filter((sk) => {
+        const last = lastUsedByName.get(sk.name);
+        if (!last) return false; // 신규 스킬은 여기 해당 없음(그건 hasNewSkill 이 잡는다)
+        return session.startedAt.getTime() - last.getTime() >= DORMANT_SKILL_DAYS * DAY_MS;
+      })
+      .map((sk) => sk.name);
+    const dormantSkillReturned = dormantSkillNames.length > 0;
 
     const memoryScoreResult = calculateMemoryScore({
       hasNewSkill,
@@ -1001,6 +1011,35 @@ export async function processSession(sessionId: string, userId: string): Promise
               ? 'revival'
               : 'comeback';
 
+        // 제목이 **왜 남았는지**를 말하게 한다.
+        //
+        // 예전에는 title 이 output.summary 복사본이라, trigger 가 new_skill 인데
+        // 정작 무슨 스킬이 처음이었는지가 제목에 한 글자도 없었다(실측:
+        // trigger=new_skill · 신규=ZEP 메타버스 인데 제목은 "Army Sim 프로젝트를
+        // 확인한 후 …"). /memories 에서 태그와 요약문이 나란히 뜨는데 "무슨
+        // 스킬?"에 답하는 게 화면 어디에도 없었다.
+        //
+        // 규칙이 이미 아는 값을 쓸 뿐이라 LLM 호출이 늘지 않는다. 근거를 앞에
+        // 두고 요약을 뒤에 붙여, 목록에서 훑을 때의 맥락도 잃지 않는다.
+        const reason =
+          trigger === 'new_skill'
+            ? (newSkillNames[0] ?? primarySkillName)
+              ? `${newSkillNames[0] ?? primarySkillName} — 처음`
+              : null
+            : trigger === 'revival'
+              ? dormantSkillNames[0]
+                ? `${dormantSkillNames[0]} — 오랜만에`
+                : null
+              : trigger === 'breakthrough'
+                ? primarySkillName
+                  ? `${primarySkillName} — 막힘을 뚫었다`
+                  : '막힘을 뚫었다'
+                : null; // comeback 은 스킬이 아니라 공백 후 복귀라 붙일 이름이 없다
+
+        const memoryTitle = (
+          reason ? `${reason} · ${output.summary}` : output.summary
+        ).slice(0, MAX_SUMMARY_LEN);
+
         await tx.insert(memories).values({
           userId,
           threadId,
@@ -1008,7 +1047,7 @@ export async function processSession(sessionId: string, userId: string): Promise
           occurredAt: session.startedAt,
           // experiences.summary 와 같은 상한으로 자른다. 안 그러면 같은 문장이
           // 경험에는 100자, 기억에는 600자로 저장돼 두 화면이 다른 길이를 보여준다.
-          title: output.summary.slice(0, MAX_SUMMARY_LEN),
+          title: memoryTitle,
           body: output.detail ?? output.summary,
           importance: clampImportance(memoryScoreResult.score),
           trigger,
