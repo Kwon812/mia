@@ -1,6 +1,6 @@
 "use server";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { characters, experiences, memories, questions, threads } from "@na/db";
 import { db } from "@/lib/db";
@@ -183,17 +183,45 @@ export async function completeThread(threadId: string): Promise<CorrectResult> {
       .set({ status: "completed", completedAt: now })
       .where(eq(threads.id, threadId));
 
-    await tx.insert(memories).values({
-      userId: user.userId,
-      threadId,
-      experienceId: last.id,
-      occurredAt: last.occurredAt,
-      // 제목은 갈래 이름만. 엔진의 완결 기억과 같은 규칙이다.
-      title: thread.title,
-      body: last.detail ?? last.summary,
-      importance: clampImportance(last.memoryScore),
-      trigger: "thread_complete",
-    });
+    // 그 갈래에 기억이 이미 있으면 새로 만들지 않고 근거를 더한다 —
+    // 갈래당 기억은 하나다(uq_memories_thread). 엔진과 같은 규칙이라야
+    // 사람이 누른 것과 모델이 만든 것이 같은 모양으로 쌓인다.
+    const [existing] = await tx
+      .select({ id: memories.id, experienceIds: memories.experienceIds, triggers: memories.triggers, importance: memories.importance })
+      .from(memories)
+      .where(and(eq(memories.userId, user.userId), eq(memories.threadId, threadId), isNull(memories.forgottenAt)))
+      .limit(1);
+
+    if (existing) {
+      await tx
+        .update(memories)
+        .set({
+          experienceIds: existing.experienceIds.includes(last.id)
+            ? existing.experienceIds
+            : [...existing.experienceIds, last.id],
+          triggers: existing.triggers.includes("thread_complete")
+            ? existing.triggers
+            : [...existing.triggers, "thread_complete"],
+          // 끝냈다는 건 가장 센 이유다. 중요도를 두 칸 올린다.
+          importance: Math.min(10, existing.importance + 2),
+          needsResummary: true,
+        })
+        .where(eq(memories.id, existing.id));
+    } else {
+      await tx.insert(memories).values({
+        userId: user.userId,
+        threadId,
+        experienceId: last.id,
+        experienceIds: [last.id],
+        occurredAt: last.occurredAt,
+        // 제목은 갈래 이름만. 엔진의 완결 기억과 같은 규칙이다.
+        title: thread.title,
+        body: last.detail ?? last.summary,
+        importance: clampImportance(last.memoryScore),
+        trigger: "thread_complete",
+        triggers: ["thread_complete"],
+      });
+    }
   });
 
   revalidatePath("/threads");

@@ -249,16 +249,30 @@ export const memories = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
 
     threadId: uuid('thread_id').references(() => threads.id),
+    /** @deprecated experienceIds 로 옮겼다. 옛 행 조회용으로만 남는다. */
     experienceId: uuid('experience_id').references(() => experiences.id),
+    /** 이 기억을 만든 경험들. 조건을 넘길 때마다 더해진다.
+     *  갈래당 기억은 하나이고(uq_memories_thread), 여기에 쌓인다.
+     *  배열이라 FK 를 못 건다 — 경험을 지우는 건 재구축뿐이고 그때 기억도
+     *  함께 지워지므로 실무상 문제가 없다. */
+    experienceIds: uuid('experience_ids').array().notNull().default([]),
 
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
     title: text('title').notNull(), // "첫 게임 출시"
     body: text('body').notNull(),
     importance: smallint('importance').notNull(),
-    // 'new_skill' | 'thread_complete' | 'comeback' | 'breakthrough' | 'revival'
+    // 'new_skill' | 'thread_complete' | 'breakthrough' | 'deepened' | 'revival' | 'comeback'
     // DB 에 CHECK 는 없다(자유 텍스트). 값을 늘려도 마이그레이션이 필요 없지만
     // 목록은 여기서 관리한다 — experience-engine 의 trigger 선택과 짝이다.
+    /** @deprecated triggers 로 옮겼다. */
     trigger: text('trigger').notNull(),
+    /** 왜 남았는지 **전부**. 1월에 처음 써본 게 있었고(new_skill) 3월에 6건째가
+     *  됐다면(deepened) 둘 다 사실이다. 화면은 방향·이심률에 값 하나가 필요하니
+     *  읽을 때 가장 센 것을 고른다 — 저장은 전부, 선택은 읽을 때. */
+    triggers: text('triggers').array().notNull().default([]),
+    /** 배열이 늘어난 기억만 밤에 다시 요약한다. 세션 처리 중에 LLM 을 부르면
+     *  "세션당 1회"가 깨지고 after() 안의 작업이 길어진다. */
+    needsResummary: boolean('needs_resummary').notNull().default(false),
 
     refCount: integer('ref_count').notNull().default(0), // searchMemory 로 불려간 횟수
     lastReferencedAt: timestamp('last_referenced_at', { withTimezone: true }),
@@ -392,7 +406,7 @@ export const ingestFailures = pgTable('ingest_failures', {
 // 함께 남겨 "v3 → v4 에서 stuck 이 나오기 시작했다" 같은 비교를 가능하게 한다.
 // ------------------------------------------------------------
 
-export const LLM_OUTPUT_KINDS = ['experience', 'daily_log'] as const;
+export const LLM_OUTPUT_KINDS = ['experience', 'daily_log', 'memory_resummary'] as const;
 export type LlmOutputKind = (typeof LLM_OUTPUT_KINDS)[number];
 
 export const llmOutputs = pgTable(

@@ -8,6 +8,7 @@ import {
   questions,
   sessions,
 } from "@na/db";
+import { strongestTrigger } from "@na/shared";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { getCurrentDialogueSlot, getKstDayBoundary, kstDaysTogether, DAY_MS } from "@/lib/date";
@@ -76,9 +77,10 @@ export default async function Home() {
           body: memories.body,
           importance: memories.importance,
           trigger: memories.trigger,
+          triggers: memories.triggers,
           occurredAt: memories.occurredAt,
           threadId: memories.threadId,
-          experienceId: memories.experienceId,
+          experienceIds: memories.experienceIds,
           forgottenAt: memories.forgottenAt,
         })
         .from(memories)
@@ -167,7 +169,11 @@ export default async function Home() {
   const emotion = deriveEmotion(emotionExperiences, skillsBeforeLatest);
 
   // ── 궤도 요소로 넘길 형태 ──
-  const memoryByExp = new Map(memoryRows.map((m) => [m.experienceId, m.forgottenAt]));
+  // 경험 → 그 경험이 기억이 됐나(그리고 잊혔나). 기억 하나가 경험 여럿을
+  // 품으므로 펼쳐서 넣는다.
+  const memoryByExp = new Map(
+    memoryRows.flatMap((m) => m.experienceIds.map((id) => [id, m.forgottenAt] as const)),
+  );
   const now = Date.now();
   const bodies: Body[] = expRows.map((e) => ({
     id: e.id,
@@ -195,9 +201,10 @@ export default async function Home() {
   const skillsByMemory = await loadSkillsByMemory(user.userId, liveMemories);
 
   const moons: MemoryBody[] = liveMemories.map((m) => {
-      const referenced = expRows.filter(
-        (e) => e.id === m.experienceId || (m.threadId != null && e.threadId === m.threadId),
-      );
+      // 근거는 **이 기억을 만든 경험들**이다. 예전에는 "같은 갈래 경험 전부"라
+      // 새벽 2시 기억이 4시간 뒤 경험까지 근거로 보여줬고, 같은 갈래의 기억
+      // 셋이 전부 같은 위성을 띄웠다. 갈래 전체는 /threads 에서 본다.
+      const referenced = expRows.filter((e) => m.experienceIds.includes(e.id));
       return {
         kind: "memory" as const,
         id: m.id,
@@ -205,11 +212,14 @@ export default async function Home() {
         title: m.title,
         body: m.body,
         importance: m.importance,
-        trigger: m.trigger,
+        // 화면은 방향·이심률에 값 하나가 필요하다. 저장은 전부, 선택은 읽을 때.
+        trigger: strongestTrigger(m.triggers, m.trigger),
+        triggers: m.triggers.length > 0 ? m.triggers : [m.trigger],
         occurredAt: m.occurredAt.getTime(),
         ageDays: Math.max(0, (now - m.occurredAt.getTime()) / DAY_MS),
         referencedIds: referenced.map((e) => e.id),
-        sourceId: m.experienceId,
+        // 테두리를 두르는 것 = 그 기억을 처음 만든 경험. 배열의 첫 항목이다.
+        sourceId: m.experienceIds[0] ?? null,
         skills: (skillsByMemory.get(m.id) ?? []).map((sk) => ({
           name: sk.name,
           firstTime: sk.firstTime,

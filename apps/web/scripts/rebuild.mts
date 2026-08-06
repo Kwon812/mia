@@ -173,9 +173,24 @@ console.log(`\n${ok}/${sessions.length} 처리 성공`);
       // 놓고 1~10 으로 옮긴다. 스크립트에서 엔진을 import 하면 앱 쪽 db 연결이
       // 하나 더 열려 좀비가 되므로 식만 옮겨 적는다.
       const imp = Math.min(10, Math.max(1, 1 + Math.round(((e.memory_score - 60) / 140) * 9)));
-      await tx`insert into memories (user_id, thread_id, experience_id, occurred_at, title, body, importance, trigger)
-               values (${c.user_id}, ${e.thread_id}, ${e.id}, ${e.occurred_at},
-                       ${t.title}, ${e.detail ?? e.summary}, ${imp}, 'thread_complete')`;
+      // 갈래당 기억은 하나다. 재구축이 이미 점수 규칙으로 기억을 만들어놨을 수
+      // 있으니 있으면 근거를 더하고, 없으면 만든다 — 엔진·액션과 같은 규칙이다.
+      const [mem] = await tx`select id, experience_ids, triggers, importance
+                               from memories
+                              where user_id = ${c.user_id} and thread_id = ${e.thread_id}
+                                and forgotten_at is null`;
+      if (mem) {
+        await tx`update memories
+                    set experience_ids = (select array(select distinct unnest(${mem.experience_ids}::uuid[] || ${[e.id]}::uuid[]))),
+                        triggers       = (select array(select distinct unnest(${mem.triggers}::text[] || array['thread_complete']))),
+                        importance     = least(10, ${mem.importance} + 2),
+                        needs_resummary = true
+                  where id = ${mem.id}`;
+      } else {
+        await tx`insert into memories (user_id, thread_id, experience_id, experience_ids, occurred_at, title, body, importance, trigger, triggers)
+                 values (${c.user_id}, ${e.thread_id}, ${e.id}, ${[e.id]}, ${e.occurred_at},
+                         ${t.title}, ${e.detail ?? e.summary}, ${imp}, 'thread_complete', ${['thread_complete']})`;
+      }
     });
     threadsBack += 1;
   }

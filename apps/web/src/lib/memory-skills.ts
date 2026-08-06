@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { eq, inArray } from 'drizzle-orm';
-import { experienceSkills, userSkills } from '@na/db';
+import { experienceSkills, experiences, userSkills } from '@na/db';
 import { db } from './db';
 
 // ============================================================
@@ -27,7 +27,8 @@ export type MemorySkill = {
 /** 기억 하나가 필요로 하는 최소 정보. 호출부의 행 모양에 의존하지 않는다. */
 export type MemoryRef = {
   id: string;
-  experienceId: string | null;
+  /** 이 기억을 만든 경험들. 갈래당 기억 하나에 쌓인다. */
+  experienceIds: string[];
   occurredAt: Date;
 };
 
@@ -36,7 +37,7 @@ export async function loadSkillsByMemory(
   userId: string,
   items: readonly MemoryRef[],
 ): Promise<Map<string, MemorySkill[]>> {
-  const expIds = items.map((m) => m.experienceId).filter((id): id is string => id != null);
+  const expIds = [...new Set(items.flatMap((m) => m.experienceIds))];
   if (expIds.length === 0) return new Map();
 
   const [rows, owned] = await Promise.all([
@@ -55,8 +56,15 @@ export async function loadSkillsByMemory(
   ]);
 
   const firstUsed = new Map(owned.map((s) => [s.name, s.firstUsedAt.getTime()]));
-  const occurredAt = new Map(
-    items.filter((m) => m.experienceId).map((m) => [m.experienceId!, m.occurredAt.getTime()]),
+  // "그때 처음이었나"는 그 **경험이 일어난 시각**과 비교해야 한다. 기억의
+  // occurred_at 은 처음 남을 만해진 순간이라 나중에 붙은 경험과는 어긋난다.
+  const expOccurredAt = new Map(
+    (
+      await db
+        .select({ id: experiences.id, occurredAt: experiences.occurredAt })
+        .from(experiences)
+        .where(inArray(experiences.id, expIds))
+    ).map((e) => [e.id, e.occurredAt.getTime()]),
   );
 
   const byExp = new Map<string, MemorySkill[]>();
@@ -65,15 +73,28 @@ export async function loadSkillsByMemory(
     list.push({
       name: r.name,
       weight: r.weight,
-      firstTime: firstUsed.get(r.name) === occurredAt.get(r.experienceId),
+      firstTime: firstUsed.get(r.name) === expOccurredAt.get(r.experienceId),
     });
     byExp.set(r.experienceId, list);
   }
   for (const list of byExp.values()) list.sort((a, b) => b.weight - a.weight);
 
+  // 기억 하나가 경험 여럿을 품으므로 스킬도 합친다. 같은 스킬이 여러 경험에서
+  // 나오면 비중이 큰 쪽을, "처음"은 한 번이라도 처음이면 처음으로 본다.
   const byMemory = new Map<string, MemorySkill[]>();
   for (const m of items) {
-    if (m.experienceId) byMemory.set(m.id, byExp.get(m.experienceId) ?? []);
+    const merged = new Map<string, MemorySkill>();
+    for (const id of m.experienceIds) {
+      for (const sk of byExp.get(id) ?? []) {
+        const prev = merged.get(sk.name);
+        if (!prev) merged.set(sk.name, { ...sk });
+        else {
+          prev.weight = Math.max(prev.weight, sk.weight);
+          prev.firstTime = prev.firstTime || sk.firstTime;
+        }
+      }
+    }
+    byMemory.set(m.id, [...merged.values()].sort((a, b) => b.weight - a.weight));
   }
   return byMemory;
 }

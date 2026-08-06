@@ -45,6 +45,8 @@ export type MemoryBody = {
   trigger: string;
   occurredAt: number;
   ageDays: number;
+  /** 남은 이유 전부. 방향·이심률은 위 trigger(가장 센 것)가 정한다. */
+  triggers: string[];
   /** 이 기억의 근거가 된 경험들 */
   referencedIds: string[];
   /** 그중 이 기억을 실제로 만든 경험 (memories.experience_id). 나머지는 같은 작업에서 딸려온 것들 */
@@ -106,7 +108,14 @@ const NEUTRAL: [number, number, number] = [150, 165, 190];
 // 나눠도 갈래가 뭉개지지 않는다 — thread 는 계속 늘어나는 값이라 등간격으로
 // 나누면 스물만 넘어도 18도씩이 되어 방향이 정보가 못 된다.
 // 그래서 굵은 분할은 trigger, 그 안에서의 자리는 thread 가 맡는다.
-export const TRIGGER_ORDER = ['new_skill', 'thread_complete', 'breakthrough', 'revival', 'comeback'];
+export const TRIGGER_ORDER = [
+  'new_skill',
+  'thread_complete',
+  'breakthrough',
+  'deepened',
+  'revival',
+  'comeback',
+];
 
 // 섹터를 π 로 나눈다(2π 가 아니라). 타원은 180도 돌리면 자기 자신이라
 // 그 너머는 같은 방향으로 보인다 — 실제로 쓸 수 있는 각도는 절반뿐이다.
@@ -134,6 +143,8 @@ const THREAD_BAND = 1.34;
 // 기억의 이심률 — 그 기억이 어떻게 남았는지가 궤도의 안정성이 된다.
 const ECC_TRIGGER: Record<string, number> = {
   thread_complete: 0.05, // 끝냈다. 자리를 잡았다.
+  // 오래 붙들고 있는 일. 아직 안 끝났지만 궤도는 잡혔다.
+  deepened: 0.12,
   new_skill: 0.16,
   comeback: 0.26,
   breakthrough: 0.34, // 막 뚫고 나와 아직 흔들린다

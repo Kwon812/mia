@@ -8,6 +8,7 @@ import { generateDailyQuestions } from "./jobs/daily-questions";
 import { recomputePersonality } from "./jobs/personality";
 import { refreshCharacterCache } from "./jobs/character-cache";
 import { markAbandonedThreads } from "./jobs/threads";
+import { resummarizeMemories } from "./jobs/memory-resummary";
 
 type Step = {
   name: string;
@@ -19,6 +20,9 @@ type Step = {
 // abandoned 가 되어, finishExplore 축이 늘 하루 늦게 반영된다.
 const STEPS: Step[] = [
   { name: "generateDailyLogs", run: generateDailyLogs },
+  // 일기 다음이다. 일기는 그날 경험을 읽지 기억을 안 읽으므로 순서에 의존이
+  // 없고, 기억 본문이 바뀌기 전에 일기가 먼저 쓰이는 편이 낫다.
+  { name: "resummarizeMemories", run: resummarizeMemories },
   { name: "markAbandonedThreads", run: markAbandonedThreads },
   { name: "recomputePersonality", run: recomputePersonality },
   { name: "refreshCharacterCache", run: refreshCharacterCache },

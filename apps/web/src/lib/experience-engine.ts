@@ -14,7 +14,7 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
-import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import {
   DIALOGUE_SLOTS,
   EXPERIENCE_OUTCOMES,
@@ -342,6 +342,10 @@ export const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
 // 신규 스킬 하나만으로는 여전히 부족하지만(50), 거기에 뭐라도 하나 겹치면 남는다.
 const MEMORY_SCORE_THRESHOLD = 60;
 
+/** 갈래에 경험이 이만큼 쌓이면 그 자체로 기억이 된다(trigger='deepened').
+ *  6개월치 분포에서 상위 21%. 자세한 근거는 사용처 주석에 있다. */
+const DEEPENED_THREAD_EXPERIENCES = 6;
+
 /** 경험 하나에 붙일 수 있는 스킬 수. 넘치면 비중 높은 것부터 남긴다. */
 const MAX_SKILLS_PER_EXPERIENCE = 10;
 /** 갈래 제목 상한. 제목은 짧은 명사구라 이 이상 길면 목록이 무너진다.
@@ -507,6 +511,87 @@ export interface DormantThreadRow extends ActiveThreadRow {
  * 고유명사가 제목에 그대로 뜨므로 단어 일치로 대부분 잡힌다 — 안 잡히는 게 눈에
  * 띄면 이 함수만 갈아끼우면 된다.
  */
+/**
+ * 기억을 갈래에 **모은다**. 이미 있으면 새로 만들지 않고 근거를 더한다.
+ *
+ * 예전에는 조건을 넘길 때마다 기억이 따로 생겼다. 그래서 같은 갈래에 기억이
+ * 셋씩 붙었고(실데이터: 경험 9건 → 기억 3개) 셋 다 누르면 같은 위성 9건이 떴다.
+ * 결국 같은 주제인데 제목만 다른 화면이 셋이었다.
+ *
+ * 제목·본문은 여기서 안 고친다. 근거가 늘었다는 표시(needs_resummary)만 세우고
+ * 밤 배치가 한 번에 다시 쓴다 — 세션 처리 중에 LLM 을 부르면 "세션당 1회"가
+ * 깨지고, 하루에 세 번 붙으면 세 번 부르게 된다.
+ */
+async function upsertThreadMemory(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  args: {
+    userId: string;
+    threadId: string;
+    experienceId: string;
+    occurredAt: Date;
+    title: string;
+    body: string;
+    importance: number;
+    trigger: string;
+  },
+): Promise<'created' | 'appended'> {
+  const [existing] = await tx
+    .select({
+      id: memories.id,
+      experienceIds: memories.experienceIds,
+      triggers: memories.triggers,
+      importance: memories.importance,
+    })
+    .from(memories)
+    .where(
+      and(
+        eq(memories.userId, args.userId),
+        eq(memories.threadId, args.threadId),
+        isNull(memories.forgottenAt),
+      ),
+    )
+    .limit(1);
+
+  if (!existing) {
+    await tx.insert(memories).values({
+      userId: args.userId,
+      threadId: args.threadId,
+      experienceId: args.experienceId,
+      experienceIds: [args.experienceId],
+      occurredAt: args.occurredAt,
+      title: args.title,
+      body: args.body,
+      importance: args.importance,
+      trigger: args.trigger,
+      triggers: [args.trigger],
+    });
+    return 'created';
+  }
+
+  // 같은 경험이 두 규칙에 동시에 걸릴 수 있다(6건째인데 점수도 높은 경우).
+  // 그때는 근거가 하나 늘어난 게 아니라 이유가 하나 더 붙은 것이다.
+  const ids = existing.experienceIds.includes(args.experienceId)
+    ? existing.experienceIds
+    : [...existing.experienceIds, args.experienceId];
+  const trs = existing.triggers.includes(args.trigger)
+    ? existing.triggers
+    : [...existing.triggers, args.trigger];
+
+  await tx
+    .update(memories)
+    .set({
+      experienceIds: ids,
+      triggers: trs,
+      // 근거가 쌓일수록 무겁다. 다만 개수만으로 10 에 닿지 않게 한 칸씩만.
+      importance: Math.min(10, Math.max(existing.importance, args.importance) + 1),
+      // occurred_at 은 안 건드린다. 그 일이 처음 남을 만해진 순간이고,
+      // 지도의 반경(나이)이 그 값이라 덮으면 오래된 일이 최근으로 보인다.
+      needsResummary: true,
+    })
+    .where(eq(memories.id, existing.id));
+  return 'appended';
+}
+
 async function findDormantCandidates(
   userId: string,
   session: SessionRow,
@@ -1131,8 +1216,9 @@ export async function processSession(sessionId: string, userId: string): Promise
 
       // thread 부착 — action='new' 는 위에서 이미 만들었으니, 'attach' 인 경우만
       // 활동시각·경험수를 갱신한다.
+      let attachedCount: number | null = null;
       if (threadAction === 'attach') {
-        await tx
+        const [updated] = await tx
           .update(threads)
           .set({
             // GREATEST 로 역행을 막는다 — 바로 위 userSkills upsert 와 같은 이유다.
@@ -1170,7 +1256,8 @@ export async function processSession(sessionId: string, userId: string): Promise
               limit 1
             ), ${threads.category})`,
           })
-          .where(eq(threads.id, threadId));
+          .where(eq(threads.id, threadId)).returning({ n: threads.experienceCount });
+        attachedCount = updated?.n ?? null;
       }
 
       // thread 완결 → status 전이 + 기억 생성. 점수 임계를 넘으면 그것도 기억이
@@ -1187,6 +1274,35 @@ export async function processSession(sessionId: string, userId: string): Promise
       // 완결 분기는 여기 없다. thread_complete 기억은 사람이 /threads 에서
       // 직접 표시할 때만 생긴다(app/actions.ts 의 completeThread) —
       // 모델이 못 내는 값이라 물어보지도 않는다(shared/experience.ts 참고).
+      // 오래 붙들고 있는 일은 그 자체로 남을 만하다.
+      //
+      // 지금 규칙은 경험 하나의 점수만 본다. 그래서 매 세션은 특별할 게 없는데
+      // 몇 달째 이어지는 갈래는 기억이 하나도 안 생긴다 — 6개월치로 재보니
+      // 6건 이상 갈래 27개 중 6개가 그랬다. 반대로 점수 높은 경험이 몰린
+      // 갈래에는 기억이 여럿 붙는다(실데이터: 경험 9건에 기억 3개).
+      //
+      // 문턱은 6건. 6개월치 분포에서 상위 21% 다(평균 3.5건). 3~4건은 이틀만
+      // 이어져도 닿아 기억이 흔해지고, 8건 이상은 11% 라 너무 드물다.
+      //
+      // === 6 이라 자연히 한 번만 발동한다. 재구축해도 같은 순서로 6을 지나므로
+      // 결과가 같다. 여기서 만들고 아래 점수 규칙도 따로 돌 수 있는데, 그건
+      // 근거가 서로 달라서(오래 이어짐 vs 이번 경험이 셌음) 둘 다 맞다.
+      if (attachedCount === DEEPENED_THREAD_EXPERIENCES) {
+        const r = await upsertThreadMemory(tx, {
+          userId,
+          threadId,
+          experienceId: insertedExperience.id,
+          occurredAt: session.startedAt,
+          title: threadTitle,
+          body: output.detail ?? output.summary,
+          // 점수를 못 쓴다 — 이 규칙이 잡으려는 게 애초에 점수 낮은 갈래라
+          // 전부 1이 된다. 얼마나 오래 붙들었나로 매긴다.
+          importance: Math.min(10, Math.max(1, 3 + Math.floor(attachedCount / 3))),
+          trigger: 'deepened',
+        });
+        if (r === 'created') newMemoriesCount += 1;
+      }
+
       if (memoryScoreResult.score >= MEMORY_SCORE_THRESHOLD) {
         // 어느 규칙이 이 기억을 만들었는지가 곧 trigger 다. 위에서부터 먼저 맞는 것.
         const trigger = bd.hasNewSkill || bd.isFirstTime
@@ -1202,19 +1318,17 @@ export async function processSession(sessionId: string, userId: string): Promise
         // 같으면 그때 처음 쓴 스킬이라, 추가 저장 없이 정확히 가려낼 수 있다.
         const memoryTitle = output.summary;
 
-        await tx.insert(memories).values({
+        const r = await upsertThreadMemory(tx, {
           userId,
           threadId,
           experienceId: insertedExperience.id,
           occurredAt: session.startedAt,
-          // experiences.summary 와 같은 상한으로 자른다. 안 그러면 같은 문장이
-          // 경험에는 100자, 기억에는 600자로 저장돼 두 화면이 다른 길이를 보여준다.
           title: memoryTitle,
           body: output.detail ?? output.summary,
           importance: clampImportance(memoryScoreResult.score),
           trigger,
         });
-        newMemoriesCount += 1;
+        if (r === 'created') newMemoriesCount += 1;
       }
 
       const [{ count: skillCount }] = await tx

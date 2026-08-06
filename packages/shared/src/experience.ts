@@ -42,6 +42,28 @@ export const EXPERIENCE_OUTCOMES = ['success', 'partial', 'stuck', 'explore'] as
  * 스킬은 휴면인데 갈래는 살아 있는 상태가 생긴다.
  */
 export const DORMANT_DAYS = 30;
+
+/** 기억이 남은 이유. 앞에 있을수록 세다.
+ *  기억 하나가 여러 이유를 가질 수 있어(1월에 처음 써봤고 3월에 6건째가 됐다)
+ *  배열로 저장하는데, 화면은 방향·이심률에 값 하나가 필요하다. */
+export const MEMORY_TRIGGERS = [
+  'thread_complete',
+  'new_skill',
+  'breakthrough',
+  'deepened',
+  'revival',
+  'comeback',
+] as const;
+
+/** 저장은 전부, 선택은 읽을 때. 목록에 없는 값은 맨 뒤로 민다. */
+export function strongestTrigger(triggers: readonly string[], fallback: string): string {
+  const rank = (t: string) => {
+    const i = MEMORY_TRIGGERS.indexOf(t as (typeof MEMORY_TRIGGERS)[number]);
+    return i < 0 ? MEMORY_TRIGGERS.length : i;
+  };
+  if (triggers.length === 0) return fallback;
+  return [...triggers].sort((a, b) => rank(a) - rank(b))[0];
+}
 export const DIALOGUE_SLOTS = ['morning', 'afternoon', 'evening', 'night'] as const;
 
 /** 스킬이 어느 갈래의 능력인가. user_skills 를 화면에서 묶는 축이다. */

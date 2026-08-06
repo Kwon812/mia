@@ -65,7 +65,11 @@ export default async function MemoriesPage() {
                         <br />
                         <span className="text-lum-4">중요도 {m.importance}</span>
                         <br />
-                        <span className="text-lum-4">{m.trigger}</span>
+                        {/* 이유가 여럿일 수 있다 — 처음 써본 게 있었고 나중에
+                            6건째가 됐다면 둘 다 사실이다. */}
+                        <span className="text-lum-4">
+                          {(m.triggers.length > 0 ? m.triggers : [m.trigger]).join(" · ")}
+                        </span>
                       </div>
                       <div>
                         <h2 className="mb-2 text-[16px] font-medium text-lum-0">{m.title}</h2>
