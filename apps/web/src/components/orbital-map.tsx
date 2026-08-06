@@ -500,10 +500,19 @@ export function OrbitalMap({
     // 기억이 하나도 없으면 궤도가 없다. 축척이 0 으로 무너지지 않게 바닥값을 둔다.
     const maxA = els.reduce((mx, e) => Math.max(mx, e.a * (1 + e.e)), 0.5);
 
-    /** trigger 는 기억만 갖는다. 갈래를 이 축 계산에 넣으면 ACTIVE 같은
-     *  라벨의 축이 기억 축들 사이에 끼어 두 어휘가 한 범례에 섞인다.
-     *  갈래는 궤도만 돌고 축은 갖지 않는다 — 기존 규칙을 안 건드린다는 뜻이다. */
-    const triggerOf = (o: OrbitBody) => (o.kind === "memory" ? o.trigger : null);
+    /** 궤도면 축의 이름. 그 방향이 무슨 뜻인지를 화면에 적어주는 값이다.
+     *
+     *  기억은 trigger, 갈래는 색 묶음이다. 예전에는 갈래가 축을 아예 못 갖게
+     *  막아놨는데(null), 그때 갈래의 방향이 status 라서 ACTIVE 같은 라벨이
+     *  기억의 trigger 축들 사이에 끼면 한 범례에 두 어휘가 섞였기 때문이다.
+     *  방향이 분야로 바뀌면서 그 이유가 없어졌다 — 이제 갈래 축의 라벨은
+     *  오른쪽 아래 색 범례와 **같은 단어**라 서로를 설명한다.
+     *
+     *  두 어휘가 실제로 한 화면에 섞이지는 않는다. 메인은 memories 만,
+     *  /threads 는 threads 만 받아서(각각 상대를 빈 배열로 넘긴다) 축 목록에
+     *  한 종류만 올라온다. */
+    const axisKeyOf = (o: OrbitBody) =>
+      o.kind === "memory" ? o.trigger : groupOfCategory(o.category).key;
     /** 포커스 원의 크기 근거. 기억은 중요도, 갈래는 붙은 경험 수. */
     const weightOf = (o: OrbitBody) =>
       o.kind === "memory" ? o.importance : Math.log1p(o.experienceCount) * 4.2;
@@ -787,7 +796,7 @@ export function OrbitalMap({
       const camY = fy + (cy - fy) * ez;
 
       // ── 계 전체 ──
-      const litTrigger = hovered?.startsWith("maxis:") ? hovered.slice(6) : null;
+      const litAxis = hovered?.startsWith("maxis:") ? hovered.slice(6) : null;
       if (sysAlpha > 0.01) {
         ctx!.save();
         if (fp && ft > 0.001) {
@@ -802,8 +811,7 @@ export function OrbitalMap({
         // 축이 궤도보다 먼저다 — 선은 배경이지 대상이 아니다.
         const mAxis = new Map<string, { sum: number; n: number }>();
         for (const el of els) {
-          const tr = triggerOf(el.mem);
-          if (tr == null) continue; // 갈래는 축을 갖지 않는다
+          const tr = axisKeyOf(el.mem);
           const acc = mAxis.get(tr) ?? { sum: 0, n: 0 };
           acc.sum += el.plane;
           acc.n += 1;
@@ -819,7 +827,7 @@ export function OrbitalMap({
           const ang = acc.sum / acc.n;
           const dx = Math.cos(ang);
           const dy = Math.sin(ang) * FLATTEN;
-          const on = litTrigger === tr;
+          const on = litAxis === tr;
           // 축은 색을 쓰지 않는다. 색은 분야의 것이라, 축에 색을 주면
           // 한 화면에 서로 다른 두 색 언어가 겹친다.
           ctx!.strokeStyle = on
@@ -853,7 +861,7 @@ export function OrbitalMap({
           }
         }
 
-        for (const el of els) drawOrbit(el, sysAlpha, litTrigger != null && litTrigger === triggerOf(el.mem));
+        for (const el of els) drawOrbit(el, sysAlpha, litAxis != null && litAxis === axisKeyOf(el.mem));
         // 깊이 정렬. 기울여 본 평면이므로 화면 아래쪽(y > cy)이 관찰자에게
         // 가까운 쪽이다. 뒤쪽을 먼저, 중심을, 그다음 앞쪽을 그려야 앞을 지나는
         // 천체가 중심 위로 지나간다 — 안 그러면 전부 중심 뒤로 숨는다.
@@ -862,7 +870,7 @@ export function OrbitalMap({
         for (const { el, p } of placed) {
           if (p.y > cy) continue; // 앞쪽은 나중에
           if (foc && el.id === foc.id) continue; // 모핑 중인 대상은 따로 그린다
-          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litTrigger != null && litTrigger === triggerOf(el.mem)), sysAlpha, t);
+          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t);
         }
 
         // 질량 중심
@@ -883,7 +891,7 @@ export function OrbitalMap({
         for (const { el, p } of placed) {
           if (p.y <= cy) continue; // 뒤쪽은 이미 그렸다
           if (foc && el.id === foc.id) continue;
-          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litTrigger != null && litTrigger === triggerOf(el.mem)), sysAlpha, t);
+          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t);
         }
         ctx!.restore();
 
