@@ -94,6 +94,7 @@ const ECC: Record<string, number> = {
 
 // 축과 중심처럼 어느 분야에도 속하지 않는 것들의 색. 근거가 화면 밖
 // (경험 220건 상한 바깥)이라 분야를 못 정하는 기억도 여기로 떨어진다.
+// etc 묶음과는 값이 달라야 한다 — 같으면 "기타 분야"와 "분야 없음"이 한 색이 된다.
 const NEUTRAL: [number, number, number] = [150, 165, 190];
 
 // 기억 궤도의 큰 갈래는 trigger 가 정한다. 다섯 개로 고정된 값이라 360도를
@@ -163,7 +164,11 @@ const CAT_GROUP_DEFS = [
     cats: ['news', 'finance', 'shopping', 'productivity'],
     color: [215, 140, 205],
   },
-  { key: 'etc', label: 'etc', cats: ['search', 'etc'], color: [150, 165, 190] },
+  // 채도를 거의 0으로 둔다. 예전에는 [150,165,190] 이라 파란기가 남아 dev
+  // 파랑과 헷갈렸고, 게다가 NEUTRAL 과 값이 **바이트까지 같아서** "기타 분야"와
+  // "분야를 못 정한 것"이 화면에서 구분되지 않았다. 무채색이면 색상환의 어느
+  // 분야와도 안 부딪히고, NEUTRAL 보다 어두워 축·중심과도 갈린다.
+  { key: 'etc', label: 'etc', cats: ['search', 'etc'], color: [130, 130, 132] },
 ] as const satisfies readonly {
   key: string;
   label: string;
