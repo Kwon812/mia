@@ -296,7 +296,18 @@ function phaseOf(id: string): number {
   return ((h >>> 0) % 100000) / 100000;
 }
 
-const radiusOf = (ageDays: number) => 0.16 + Math.log1p(ageDays) * 0.3;
+// 나이 → 반경. sqrt 다.
+//
+// 원래 log1p 였다. 확대가 없던 시절엔 오래된 것을 안쪽으로 끌어당겨 다 화면에
+// 담아야 했으니 맞는 선택이었는데, 대가가 컸다 — 6개월치로 재보니 최근 30일이
+// 반경의 69% 를 가져가고 나머지 150일이 31% 에 몰렸다. 갈래 131개 중 119개가
+// 바깥 절반에 겹쳤다.
+//
+// 확대가 생겼으니 그렇게까지 누를 이유가 없다. 그렇다고 압축을 아예 빼면
+// (선형) 지금은 제일 고르지만 오래 쓸수록 반대로 뒤집힌다 — 2년 시점에 첫 달이
+// 반경의 4% 로 찌그러진다. 이 지도는 "지금 뭘 붙들고 있나"를 먼저 답해야 하므로
+// 최근을 뭉개는 쪽이 더 나쁘다. sqrt 는 같은 시점에 20% 를 지킨다.
+const radiusOf = (ageDays: number) => 0.16 + Math.sqrt(ageDays) * 0.12;
 /** 케플러 제3법칙. 최근 것이 1분쯤에 한 바퀴, 오래된 것은 훨씬 느리게. */
 const speedOf = (a: number) => 0.012 / Math.pow(a, 1.5);
 
@@ -861,6 +872,15 @@ export function OrbitalMap({
         // 긴 뷰포트(태블릿 세로)에서 가로축 라벨이 캔버스 밖으로 나가고,
         // 그러면 hit 좌표도 화면 밖이라 그 축은 아예 겨눌 수 없다.
         const AX = Math.min(Math.min(w / 2, h / 2) * 1.02, w / 2 - 96);
+        // 축은 **뷰포트 기준**이다. 확대해도 안 밀리고 안 커진다.
+        //
+        // 축은 계의 일부가 아니라 계기다 — "이 방향이 무슨 분야냐"만 말한다.
+        // 그리고 방향은 확대·이동에 안 변하는 값이라(각도는 배율과 무관),
+        // 화면 한가운데에 그어도 뜻이 정확히 같다.
+        // 계를 따라 움직이게 두면 배율 8배에서 축이 화면 밖으로 나가 범례가
+        // 통째로 사라지고, 중심 이름표(DOM 이라 원래 고정)와도 어긋난다.
+        const ax0 = w / 2;
+        const ay0 = h / 2;
         ctx!.font = '11.5px ui-monospace, SFMono-Regular, Menlo, monospace';
         ctx!.textBaseline = "middle";
         for (const [tr, acc] of mAxis) {
@@ -876,14 +896,14 @@ export function OrbitalMap({
           ctx!.lineWidth = on ? 1.2 : 0.8;
           ctx!.setLineDash(on ? [] : [3, 7]);
           ctx!.beginPath();
-          ctx!.moveTo(cx - dx * AX, cy - dy * AX);
-          ctx!.lineTo(cx + dx * AX, cy + dy * AX);
+          ctx!.moveTo(ax0 - dx * AX, ay0 - dy * AX);
+          ctx!.lineTo(ax0 + dx * AX, ay0 + dy * AX);
           ctx!.stroke();
           ctx!.setLineDash([]);
 
           const label = tag(tr);
-          const lx = cx + dx * (AX + 16);
-          const ly = cy + dy * (AX + 16);
+          const lx = ax0 + dx * (AX + 16);
+          const ly = ay0 + dy * (AX + 16);
           ctx!.textAlign = dx >= 0 ? "left" : "right";
           ctx!.fillStyle = on
             ? `rgba(143,244,228,${sysAlpha})`
@@ -1192,7 +1212,11 @@ export function OrbitalMap({
             sub:
               m.kind === "thread"
                 ? `갈래 · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건`
-                : `기억 · ${tag(m.trigger)} · 중요도 ${m.importance} · 근거 ${m.referencedIds.length}건`,
+                // '근거'가 아니라 '경험'이다. 근거는 이 기억을 만든 결정적인
+                // 경험 하나(sourceId)를 가리키는 말인데, 그건 펼친 화면 안에서
+                // 따로 드러난다. 여기 숫자는 같은 갈래에 속한 경험 전부라
+                // 근거라고 부르면 "결정적인 경험이 여섯 개"로 읽힌다.
+                : `기억 · ${tag(m.trigger)} · 중요도 ${m.importance} · 경험 ${m.referencedIds.length}건`,
             // 스킬을 먼저 보여주고 내용을 그 아래에 둔다 — trigger 가 왜
             // 그 값인지(무슨 스킬이 처음이었나)를 제목보다 먼저 읽어야 한다.
             skills: m.kind === "memory" ? m.skills : undefined,
@@ -1435,7 +1459,7 @@ export function OrbitalMap({
             <div className="tick mb-2">
               {focus.kind === "thread"
                 ? `갈래 · ${tag(focus.status)} · 경험 ${focus.referencedIds.length}건`
-                : `${tag(focus.trigger)} · 근거 ${focus.referencedIds.length}건`}
+                : `${tag(focus.trigger)} · 경험 ${focus.referencedIds.length}건`}
             </div>
             <h2 className="text-[18px] font-medium text-lum-0">{focus.title}</h2>
 
