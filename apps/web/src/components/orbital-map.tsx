@@ -1383,10 +1383,15 @@ export function OrbitalMap({
                 // 경험 하나(sourceId)를 가리키는 말인데, 그건 펼친 화면 안에서
                 // 따로 드러난다. 여기 숫자는 같은 갈래에 속한 경험 전부라
                 // 근거라고 부르면 "결정적인 경험이 여섯 개"로 읽힌다.
-                : `기억 · ${tag(m.trigger)} · 중요도 ${m.importance} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)}`,
-            // 스킬을 먼저 보여주고 내용을 그 아래에 둔다 — trigger 가 왜
-            // 그 값인지(무슨 스킬이 처음이었나)를 제목보다 먼저 읽어야 한다.
-            skills: m.kind === "memory" ? m.skills : undefined,
+                // '기억'이라고 안 적는다 — 이 화면에 도는 게 기억뿐이라 매 줄에
+                // 같은 말이 붙는다. 중요도도 뺀다: 크기가 이미 그 값이다.
+                // trigger 는 전부 적는다. 남은 이유가 여럿이면 그게 곧 그 기억의
+                // 성격이라, 가장 센 것 하나만 보이면 나머지를 알 길이 없다.
+                : `${m.triggers.map(tag).join(' · ')} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)}`,
+            // 처음 쓴 스킬만. 호버는 훑는 자리라 일곱 개씩 늘어놓으면 아무것도
+            // 안 읽힌다. trigger 가 왜 그 값인지에 답하는 것도 신규 쪽이다.
+            // (전부는 눌러서 펼친 화면에 있다.)
+            skills: m.kind === "memory" ? m.skills.filter((sk) => sk.firstTime) : undefined,
           });
         } else {
           const b = byId.get(found)!;
@@ -1734,7 +1739,6 @@ export function OrbitalMap({
                     ].join(" ")}
                   >
                     {sk.name}
-                    {sk.firstTime && <span className="ml-1 text-lum-2">처음</span>}
                   </span>
                 ))}
               </div>
@@ -1797,7 +1801,6 @@ export function OrbitalMap({
                     ].join(" ")}
                   >
                     {sk.name}
-                    {sk.firstTime && <span className="ml-1 text-lum-2">처음</span>}
                   </span>
                 ))}
               </div>

@@ -93,7 +93,6 @@ export default async function MemoriesPage() {
                                 title={s.firstTime ? "이때 처음 썼다" : `비중 ${s.weight}`}
                               >
                                 {s.name}
-                                {s.firstTime && <span className="ml-1 text-lum-2">처음</span>}
                               </span>
                             ))}
                           </div>
