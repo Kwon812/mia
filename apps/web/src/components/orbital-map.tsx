@@ -398,6 +398,7 @@ export function OrbitalMap({
   memories,
   threads,
   centerLabel,
+  latestId,
   onComplete,
   onFocusChange,
 }: {
@@ -406,6 +407,9 @@ export function OrbitalMap({
   /** 갈래 — 기억과 같은 계를 돌되 바깥 궤도에 뜬다. 누르면 종속 경험이 위성으로. */
   threads: ThreadBody[];
   centerLabel: string;
+  /** 가장 최근에 들어온 경험이 속한 천체. 계에서 하나, 펼친 뒤 위성에서 하나가
+   *  같은 표식으로 뛴다 — "이게 방금 그거다"가 층을 건너 읽힌다. */
+  latestId?: string | null;
   /** 갈래를 완결로 표시한다. 갈래 화면에서만 넘어온다 — 메인은 기억을 다루니
    *  이 동작이 없다. 없으면 버튼 자체가 안 뜬다. */
   onComplete?: (threadId: string) => Promise<unknown>;
@@ -725,8 +729,12 @@ export function OrbitalMap({
       lit: boolean,
       alpha: number,
       color: [number, number, number] = [228, 238, 250],
+      /** 가장 최근 경험. 계 전체에서와 같은 표식이라 층을 건너도 같은 뜻이다. */
+      latest = false,
+      t = 0,
     ) {
-      const rad = size * (lit ? 1.6 : 1) * 4.1;
+      const breath = reduced || !latest ? 0 : 0.5 + Math.sin(t * 0.9) * 0.5;
+      const rad = size * (lit ? 1.6 : 1) * (1 + breath * 0.22) * 4.1;
       const c = lit ? [143, 244, 228] : color;
       const gc = c.join(",");
       // 하한을 두는 이유: 점수가 0인 경험도 "있다"는 건 보여야 한다.
@@ -759,10 +767,18 @@ export function OrbitalMap({
       lit: boolean,
       alpha: number,
       t: number,
+      /** 가장 최근 경험이 여기서 왔는가. 정적인 축은 전부 뜻이 있어서
+       *  (반경=나이 · 방향=trigger · 크기=중요도 · 색=분야 · 이심률=상태)
+       *  남은 채널이 시간축뿐이다. 숨쉬듯 크게 뛰는 것은 이것 하나다. */
+      latest = false,
     ) {
       const [r, g, b] = lit ? [143, 244, 228] : color;
       // 아주 느린 맥동. 살아 있다는 표시 정도로만.
-      const pulse = reduced ? 1 : 1 + Math.sin(t * 0.5 + x * 0.01) * 0.05;
+      const pulse = reduced
+        ? 1
+        : latest
+          ? 1 + Math.sin(t * 0.9) * 0.17
+          : 1 + Math.sin(t * 0.5 + x * 0.01) * 0.05;
       const rad = radius * pulse * (lit ? 1.45 : 1) * 3.2;
 
       // 안쪽 10%만 흰빛으로 타들어가고, 거기서부터 색을 거쳐 사그라든다.
@@ -778,6 +794,17 @@ export function OrbitalMap({
       ctx!.beginPath();
       ctx!.arc(x, y, rad, 0, Math.PI * 2);
       ctx!.fill();
+
+      // 숨결에 맞춰 얇은 테두리가 같이 뛴다. 후광만으로는 다른 천체와
+      // 겹쳐 있을 때 어느 쪽이 뛰는지 분간이 안 된다.
+      if (latest && !reduced) {
+        const breath = 0.5 + Math.sin(t * 0.9) * 0.5;
+        ctx!.strokeStyle = `rgba(${r},${g},${b},${(0.16 + breath * 0.3) * alpha})`;
+        ctx!.lineWidth = 0.9;
+        ctx!.beginPath();
+        ctx!.arc(x, y, radius * (1.9 + breath * 0.5), 0, Math.PI * 2);
+        ctx!.stroke();
+      }
     }
 
     // 프레임 하나가 던지면 rAF 사슬이 끊기고 루프가 영원히 멈춘다. 그러면
@@ -1113,7 +1140,7 @@ export function OrbitalMap({
         for (const { el, p } of placed) {
           if (p.y > cy) continue; // 앞쪽은 나중에
           if (foc && el.id === foc.id) continue; // 모핑 중인 대상은 따로 그린다
-          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t);
+          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t, el.id === latestId);
         }
 
         // 질량 중심
@@ -1134,7 +1161,7 @@ export function OrbitalMap({
         for (const { el, p } of placed) {
           if (p.y <= cy) continue; // 뒤쪽은 이미 그렸다
           if (foc && el.id === foc.id) continue;
-          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t);
+          drawMemory(p.x, p.y, el.size, el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha, t, el.id === latestId);
         }
         ctx!.restore();
 
@@ -1271,7 +1298,7 @@ export function OrbitalMap({
             hovered === st.b.id ||
             pickedRef.current?.id === st.b.id ||
             litOutcome === (st.b.outcome ?? "explore");
-          drawPoint(st.x, st.y, st.size, st.lum, on, ez, st.color);
+          drawPoint(st.x, st.y, st.size, st.lum, on, ez, st.color, st.b.id === latestId, ts);
           if (!st.isSource) return;
           ctx!.strokeStyle = `rgba(${st.color.join(",")},${0.5 * ez})`;
           ctx!.lineWidth = 0.9;

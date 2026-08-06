@@ -132,10 +132,15 @@ export default async function ThreadsPage() {
     sourceIds: [(expIdsByThread.get(t.id) ?? []).at(-1)].filter((id): id is string => id != null),
   }));
 
+  // 가장 최근 경험이 속한 갈래. 펼치면 그 경험 자체가 뛴다.
+  const latestExp = expRows[0] ?? null;
+
   return (
     <ThreadStage
       bodies={bodies}
       threads={threadBodies}
+      latestExperienceId={latestExp?.id ?? null}
+      latestThreadId={latestExp?.threadId ?? null}
       centerLabel={user.character.name ?? "—"}
       activeCount={threadRows.filter((t) => t.status === "active").length}
     />

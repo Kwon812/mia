@@ -61,6 +61,8 @@ export function MapStage({
   counts,
   todayMinutes,
   todaySessions,
+  latestExperienceId,
+  latestMemoryId,
   question,
 }: {
   bodies: Body[];
@@ -74,6 +76,10 @@ export function MapStage({
   counts: { experience: number; skill: number; memory: number };
   todayMinutes: number;
   todaySessions: number;
+  /** 가장 최근 경험과 그 경험이 속한 갈래의 기억. 둘이 같은 표식으로 뛴다 —
+   *  계에서는 기억이, 펼친 뒤에는 그 경험이. */
+  latestExperienceId: string | null;
+  latestMemoryId: string | null;
   /** 캐릭터가 오늘 묻는 것 (층 2). 없으면 안 그린다. */
   question: AskQuestion | null;
 }) {
@@ -120,6 +126,8 @@ export function MapStage({
           threads={[]}
           centerLabel={name}
           onFocusChange={handleFocusChange}
+          // 펼치면 위성 층이라 최근 경험이, 계 화면에서는 그 경험이 속한 기억이 뛴다.
+          latestId={reading ? latestExperienceId : latestMemoryId}
         />
       </div>
 

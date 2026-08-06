@@ -198,6 +198,14 @@ export default async function Home() {
   // 기억을 남긴 근거(무슨 스킬이 처음이었나). 지도의 판독값·상세 패널이 쓴다 —
   // trigger=new_skill 만 보여주면 "무슨 스킬?"에 답하는 게 화면에 없다.
   const liveMemories = memoryRows.filter((m) => m.forgottenAt == null);
+
+  // 가장 최근 경험이 속한 갈래의 기억. 그 경험 자체는 위성이라 계 화면에
+  // 안 보이고, 기억이 없는 갈래일 수도 있다(그러면 아무것도 안 뛴다).
+  const latestExp = expRows[0] ?? null;
+  const latestMemoryId =
+    latestExp?.threadId != null
+      ? (liveMemories.find((m) => m.threadId === latestExp.threadId)?.id ?? null)
+      : null;
   const skillsByMemory = await loadSkillsByMemory(user.userId, liveMemories);
 
   const moons: MemoryBody[] = liveMemories.map((m) => {
@@ -281,6 +289,8 @@ export default async function Home() {
       }}
       todayMinutes={todayMinutes}
       todaySessions={todaySessionRows.length}
+      latestExperienceId={latestExp?.id ?? null}
+      latestMemoryId={latestMemoryId}
       question={question}
     />
   );

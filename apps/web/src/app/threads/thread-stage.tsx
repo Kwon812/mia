@@ -25,12 +25,18 @@ export function ThreadStage({
   threads,
   centerLabel,
   activeCount,
+  latestExperienceId,
+  latestThreadId,
 }: {
   /** 위성으로 펼쳐질 경험들 */
   bodies: Body[];
   threads: ThreadBody[];
   centerLabel: string;
   activeCount: number;
+  /** 가장 최근 경험과 그 경험이 속한 갈래. 계에서는 갈래가, 펼친 뒤에는 그
+   *  경험이 같은 표식으로 뛴다 — 메인과 같은 규칙이다. */
+  latestExperienceId: string | null;
+  latestThreadId: string | null;
 }) {
   const [reading, setReading] = useState(false);
 
@@ -68,6 +74,7 @@ export function ThreadStage({
           centerLabel={centerLabel}
           onFocusChange={handleFocusChange}
           onComplete={handleComplete}
+          latestId={reading ? latestExperienceId : latestThreadId}
         />
       </div>
 
