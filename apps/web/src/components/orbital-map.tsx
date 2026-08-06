@@ -797,6 +797,117 @@ export function OrbitalMap({
       ctx!.restore();
     }
 
+    /** 방향축을 긋고 라벨을 놓는다.
+     *
+     *  계 전체(분야)와 포커스 안(결과)이 같은 규칙을 쓴다 — 두 곳에 같은 코드가
+     *  따로 있었고, 그래서 계 쪽만 고쳤을 때 포커스 안은 그대로 남아 확대하면
+     *  선이 같이 커지고 끌면 따라 밀렸다.
+     *
+     *  축은 계의 일부가 아니라 계기다. "이 방향이 무엇이냐"만 말하고, 방향은
+     *  확대·이동에 안 변하는 값이라(각도는 배율과 무관) 뷰포트 한가운데에 그어도
+     *  뜻이 정확히 같다. 계를 따라 움직이게 두면 배율을 올렸을 때 축이 화면 밖으로
+     *  나가 범례가 통째로 사라진다.
+     *
+     *  선은 화면 사각형 경계까지, 라벨은 고정 반경 위에. 라벨까지 경계로 밀면
+     *  방향마다 거리가 제각각이 되어(가로는 멀고 세로는 가깝다) 눌린 타원 형태가
+     *  무너진다 — 여덟 개가 같은 거리에 서야 그 형태가 "계기"라고 말한다. */
+    function drawAxes(o: {
+      angles: Map<string, { sum: number; n: number }>;
+      lit: string | null;
+      alpha: number;
+      /** 꺼져 있을 때의 선 색. 켜지면 상호작용 청록으로 통일한다. */
+      offRgb: string;
+      hitPrefix: string;
+      hitKind: string;
+      canHit: boolean;
+    }) {
+      const ax0 = w / 2;
+      const ay0 = h / 2;
+      const AX = Math.min(Math.min(w / 2, h / 2) * 1.5, w / 2 - 130);
+
+      ctx!.font = '11.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+      ctx!.textBaseline = "middle";
+
+      for (const [key, acc] of o.angles) {
+        const ang = acc.sum / acc.n;
+        const dx = Math.cos(ang);
+        const dy = Math.sin(ang) * FLATTEN;
+        const on = o.lit === key;
+
+        // 축은 색을 쓰지 않는다. 색은 분야의 것이라, 축에 색을 주면 한 화면에
+        // 서로 다른 두 색 언어가 겹친다.
+        ctx!.strokeStyle = on
+          ? `rgba(99,230,210,${0.6 * o.alpha})`
+          : `rgba(${o.offRgb},${0.22 * o.alpha})`;
+        ctx!.lineWidth = on ? 1.2 : 0.8;
+        ctx!.setLineDash(on ? [] : [3, 7]);
+
+        // 방향 벡터가 단위길이가 아니라(dy 에 FLATTEN 이 곱해져 있다) 성분별로
+        // 가장자리까지의 배율을 구해 작은 쪽을 쓴다.
+        const tEdge = Math.min(
+          Math.abs(dx) > 1e-6 ? w / 2 / Math.abs(dx) : Infinity,
+          Math.abs(dy) > 1e-6 ? h / 2 / Math.abs(dy) : Infinity,
+        );
+
+        const label = tag(key);
+        const tw = ctx!.measureText(label).width;
+        const lxRaw = ax0 + dx * (AX + 16);
+        const lyRaw = ay0 + dy * (AX + 16);
+        // 글자가 화면을 넘지 않게 가둔다. 정렬이 좌/우로 갈리니 뻗는 쪽만 본다.
+        const lx = dx >= 0 ? Math.min(lxRaw, w - 12 - tw) : Math.max(lxRaw, 12 + tw);
+        const ly = Math.max(15, Math.min(h - 15, lyRaw));
+
+        // 선이 글자 위를 지나가면 안 읽히므로 그 사각형만 비우고 두 토막으로
+        // 긋는다. 라벨은 dx 부호에 따라 정렬이 좌/우로 갈려 기준점 한쪽으로만
+        // 뻗으므로, 폭의 절반을 빼는 어림으로는 한쪽이 어긋난다 — 사각형과
+        // 직선의 교차를 슬랩으로 그대로 푼다.
+        const bx0 = (dx >= 0 ? lx : lx - tw) - 6;
+        const bx1 = (dx >= 0 ? lx + tw : lx) + 6;
+        const slab = (p: number, d: number, lo: number, hi: number): [number, number] =>
+          Math.abs(d) < 1e-6
+            ? p >= lo && p <= hi
+              ? [-Infinity, Infinity]
+              : [Infinity, -Infinity]
+            : d > 0
+              ? [(lo - p) / d, (hi - p) / d]
+              : [(hi - p) / d, (lo - p) / d];
+        const [txa, txb] = slab(ax0, dx, bx0, bx1);
+        const [tya, tyb] = slab(ay0, dy, ly - 9, ly + 9);
+        const tIn = Math.max(txa, tya);
+        const tOut = Math.min(txb, tyb);
+
+        ctx!.beginPath();
+        if (tIn < tOut) {
+          ctx!.moveTo(ax0 - dx * tEdge, ay0 - dy * tEdge);
+          ctx!.lineTo(ax0 + dx * Math.max(-tEdge, tIn), ay0 + dy * Math.max(-tEdge, tIn));
+          ctx!.moveTo(ax0 + dx * Math.min(tEdge, tOut), ay0 + dy * Math.min(tEdge, tOut));
+          ctx!.lineTo(ax0 + dx * tEdge, ay0 + dy * tEdge);
+        } else {
+          ctx!.moveTo(ax0 - dx * tEdge, ay0 - dy * tEdge);
+          ctx!.lineTo(ax0 + dx * tEdge, ay0 + dy * tEdge);
+        }
+        ctx!.stroke();
+        ctx!.setLineDash([]);
+
+        ctx!.textAlign = dx >= 0 ? "left" : "right";
+        ctx!.fillStyle = on
+          ? `rgba(143,244,228,${o.alpha})`
+          : `rgba(158,171,190,${0.9 * o.alpha})`;
+        ctx!.fillText(label, lx, ly);
+
+        // 라벨을 겨눌 수 있게 한다 — 방향을 이름으로 짚으면 그 갈래가 켜진다.
+        if (o.canHit) {
+          const half = tw / 2 + 8;
+          hit.set(`${o.hitPrefix}${key}`, {
+            x: lx + (dx >= 0 ? half - 8 : -(half - 8)),
+            y: ly,
+            r: Math.max(16, half),
+            kind: o.hitKind,
+          });
+        }
+      }
+    }
+
     function step(now: number) {
       const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
       lastNow = now;
@@ -894,115 +1005,18 @@ export function OrbitalMap({
           acc.n += 1;
           mAxis.set(tr, acc);
         }
-        // 라벨 폭까지 감안해 화면 안에 가둔다. min(w,h)*1.02 로 잡으면 세로가
-        // 긴 뷰포트(태블릿 세로)에서 가로축 라벨이 캔버스 밖으로 나가고,
-        // 그러면 hit 좌표도 화면 밖이라 그 축은 아예 겨눌 수 없다.
-        // 축은 **뷰포트 기준**이다. 확대해도 안 밀리고 안 커진다.
-        //
-        // 축은 계의 일부가 아니라 계기다 — "이 방향이 무슨 분야냐"만 말한다.
-        // 그리고 방향은 확대·이동에 안 변하는 값이라(각도는 배율과 무관),
-        // 화면 한가운데에 그어도 뜻이 정확히 같다.
-        // 계를 따라 움직이게 두면 배율 8배에서 축이 화면 밖으로 나가 범례가
-        // 통째로 사라지고, 중심 이름표(DOM 이라 원래 고정)와도 어긋난다.
-        const ax0 = w / 2;
-        const ay0 = h / 2;
-        ctx!.font = '11.5px ui-monospace, SFMono-Regular, Menlo, monospace';
-        ctx!.textBaseline = "middle";
-        for (const [tr, acc] of mAxis) {
-          const ang = acc.sum / acc.n;
-          const dx = Math.cos(ang);
-          const dy = Math.sin(ang) * FLATTEN;
-          const on = litAxis === tr;
-          // 축은 색을 쓰지 않는다. 색은 분야의 것이라, 축에 색을 주면
-          // 한 화면에 서로 다른 두 색 언어가 겹친다.
-          ctx!.strokeStyle = on
-            ? `rgba(99,230,210,${0.6 * sysAlpha})`
-            : `rgba(${NEUTRAL.join(",")},${0.22 * sysAlpha})`;
-          ctx!.lineWidth = on ? 1.2 : 0.8;
-          ctx!.setLineDash(on ? [] : [3, 7]);
-          // 선은 **화면 가장자리까지** 긋는다. 예전에는 짧은 변 기준의 원 반경
-          // 하나를 선과 라벨이 같이 썼는데, 가로로 긴 화면에서는 그 반경이 좌우
-          // 가장자리에 한참 못 미친다(1518×784 에서 800px). 확대해서 궤도가
-          // 화면을 꽉 채우면 그 선만 짧아 보인다 — 방향은 화면 전체를 가르는
-          // 기준선이지 계의 크기를 재는 눈금이 아니다.
-          //
-          // 방향 벡터가 단위길이가 아니라(dy 에 FLATTEN 이 곱해져 있다) 같은
-          // 매개변수 t 로 재야 라벨 위치와 계산이 맞는다.
-          const tEdge = Math.min(
-            Math.abs(dx) > 1e-6 ? w / 2 / Math.abs(dx) : Infinity,
-            Math.abs(dy) > 1e-6 ? h / 2 / Math.abs(dy) : Infinity,
-          );
-
-          const label = tag(tr);
-          const tw = ctx!.measureText(label).width;
-
-          // 라벨은 **반경 하나**로 놓는다. 여덟 개가 같은 거리에 서야 눌린 타원
-          // 하나가 그려지고, 그 형태 자체가 "이건 방향을 재는 계기다"라고 말한다.
-          //
-          // 선처럼 화면 사각형 경계까지 밀어봤더니 방향마다 거리가 제각각이 되어
-          // (가로는 멀고 세로는 가깝다) 그 형태가 무너졌다. 반대로 짧은 변에
-          // 딱 맞추면(1.02배) 궤도를 확대했을 때 계 한복판에 파묻힌다.
-          // 그 사이 — 짧은 변의 1.5배.
-          const AX = Math.min(Math.min(w / 2, h / 2) * 1.5, w / 2 - 130);
-          const lxRaw = ax0 + dx * (AX + 16);
-          const lyRaw = ay0 + dy * (AX + 16);
-          // 글자가 화면을 넘지 않게 가둔다. 정렬이 좌/우로 갈리니 뻗는 쪽만 본다.
-          const lx =
-            dx >= 0 ? Math.min(lxRaw, w - 12 - tw) : Math.max(lxRaw, 12 + tw);
-          const ly = Math.max(15, Math.min(h - 15, lyRaw));
-
-          // 선이 글자 위를 지나가면 안 읽히므로 그 사각형만 비우고 두 토막으로
-          // 긋는다. 라벨은 정렬이 좌/우로 갈려(dx 부호) 기준점 한쪽으로만
-          // 뻗으므로, 폭의 절반을 빼는 식으로 어림하면 한쪽이 어긋난다.
-          // 사각형과 직선의 교차를 그대로 푼다.
-          const bx0 = (dx >= 0 ? lx : lx - tw) - 6;
-          const bx1 = (dx >= 0 ? lx + tw : lx) + 6;
-          // 축마다 t 구간 [tIn, tOut] — 슬랩 방식. 축이 수평/수직에 가까우면
-          // 그 성분이 0 이라 나눗셈이 무한이 되는데, 그때는 그 축으로는 잘리지
-          // 않는다는 뜻이라 그대로 두면 맞다.
-          const slab = (p: number, d: number, lo: number, hi: number): [number, number] =>
-            Math.abs(d) < 1e-6
-              ? p >= lo && p <= hi
-                ? [-Infinity, Infinity]
-                : [Infinity, -Infinity]
-              : d > 0
-                ? [(lo - p) / d, (hi - p) / d]
-                : [(hi - p) / d, (lo - p) / d];
-          const [txa, txb] = slab(ax0, dx, bx0, bx1);
-          const [tya, tyb] = slab(ay0, dy, ly - 9, ly + 9);
-          const tIn = Math.max(txa, tya);
-          const tOut = Math.min(txb, tyb);
-
-          ctx!.beginPath();
-          if (tIn < tOut) {
-            // 글자를 지나간다 — 앞뒤로 나눠 긋는다.
-            ctx!.moveTo(ax0 - dx * tEdge, ay0 - dy * tEdge);
-            ctx!.lineTo(ax0 + dx * Math.max(-tEdge, tIn), ay0 + dy * Math.max(-tEdge, tIn));
-            ctx!.moveTo(ax0 + dx * Math.min(tEdge, tOut), ay0 + dy * Math.min(tEdge, tOut));
-            ctx!.lineTo(ax0 + dx * tEdge, ay0 + dy * tEdge);
-          } else {
-            ctx!.moveTo(ax0 - dx * tEdge, ay0 - dy * tEdge);
-            ctx!.lineTo(ax0 + dx * tEdge, ay0 + dy * tEdge);
-          }
-          ctx!.stroke();
-          ctx!.setLineDash([]);
-
-          ctx!.textAlign = dx >= 0 ? "left" : "right";
-          ctx!.fillStyle = on
-            ? `rgba(143,244,228,${sysAlpha})`
-            : `rgba(158,171,190,${0.9 * sysAlpha})`;
-          ctx!.fillText(label, lx, ly);
-
-          if (ez < 0.02) {
-            const half = ctx!.measureText(label).width / 2 + 8;
-            hit.set(`maxis:${tr}`, {
-              x: lx + (dx >= 0 ? half - 8 : -(half - 8)),
-              y: ly,
-              r: Math.max(16, half),
-              kind: "maxis",
-            });
-          }
-        }
+        drawAxes({
+          angles: mAxis,
+          lit: litAxis,
+          alpha: sysAlpha,
+          // 축과 중심처럼 어느 분야에도 속하지 않는 것들의 색.
+          offRgb: NEUTRAL.join(","),
+          hitPrefix: "maxis:",
+          hitKind: "maxis",
+          // 판정은 변환이 안 걸린 정지 상태에서만 받는다. 카메라가 움직이는
+          // 동안 등록하면 보이는 곳과 눌리는 곳이 어긋난다.
+          canHit: ez < 0.02,
+        });
 
         for (const el of els) drawOrbit(el, sysAlpha, litAxis != null && litAxis === axisKeyOf(el.mem));
         // 깊이 정렬. 기울여 본 평면이므로 화면 아래쪽(y > cy)이 관찰자에게
@@ -1131,47 +1145,15 @@ export function OrbitalMap({
           angleSum.set(oc, acc);
         }
 
-        ctx!.font = '11.5px ui-monospace, SFMono-Regular, Menlo, monospace';
-        ctx!.textBaseline = "middle";
-        for (const [oc, acc] of angleSum) {
-          const ang = acc.sum / acc.n;
-          const dx = Math.cos(ang);
-          const dy = Math.sin(ang) * FLATTEN;
-          // 위와 같은 이유로 가로 폭에 가둔다.
-          const len = Math.min(R * 1.62, w / 2 - 92);
-          const on = litOutcome === oc;
-
-          ctx!.strokeStyle = on
-            ? `rgba(99,230,210,${0.6 * ez})`
-            : `rgba(150,175,210,${0.22 * ez})`;
-          ctx!.lineWidth = on ? 1.1 : 0.8;
-          ctx!.setLineDash(on ? [] : [3, 6]);
-          ctx!.beginPath();
-          ctx!.moveTo(cx - dx * len, cy - dy * len);
-          ctx!.lineTo(cx + dx * len, cy + dy * len);
-          ctx!.stroke();
-          ctx!.setLineDash([]);
-
-          const label = tag(oc);
-          const lx = cx + dx * (len + 16);
-          const ly = cy + dy * (len + 16);
-          ctx!.textAlign = dx >= 0 ? "left" : "right";
-          ctx!.fillStyle = on
-            ? `rgba(143,244,228,${ez})`
-            : `rgba(158,171,190,${0.9 * ez})`;
-          ctx!.fillText(label, lx, ly);
-
-          // 라벨을 겨눌 수 있게 한다 — 방향을 이름으로 짚으면 그 갈래가 켜진다.
-          if (ez > 0.98) {
-            const half = ctx!.measureText(label).width / 2 + 8;
-            hit.set(`axis:${oc}`, {
-              x: lx + (dx >= 0 ? half - 8 : -(half - 8)),
-              y: ly,
-              r: Math.max(16, half),
-              kind: "axis",
-            });
-          }
-        }
+        drawAxes({
+          angles: angleSum,
+          lit: litOutcome,
+          alpha: ez,
+          offRgb: "150,175,210",
+          hitPrefix: "axis:",
+          hitKind: "axis",
+          canHit: ez > 0.98,
+        });
 
         // 궤도선은 전부 먼저. 선은 깊이를 다툴 만큼 두껍지 않다.
         for (const st of sats) {
