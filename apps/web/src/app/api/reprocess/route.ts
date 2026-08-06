@@ -15,7 +15,19 @@ import { ingestFailures, sessions } from '@na/db';
 import { db } from '@/lib/db';
 import { processSession } from '@/lib/experience-engine';
 
-const SWEEP_LIMIT = 20; // 한 번에 최대 20개 — 함수 타임아웃 방어
+/** 여기서는 세션을 순차로 태우므로 시간이 개수만큼 곱해진다. */
+export const maxDuration = 60;
+
+// 한 번에 처리할 개수. maxDuration 에서 거꾸로 계산한 값이다 —
+// processSession 이 실측 8초쯤(LLM 6.5초 + 조회·트랜잭션)이라 60초에 6건이면
+// 여유가 남는다.
+//
+// 예전에는 20 이었고 주석에 "함수 타임아웃 방어"라고 적혀 있었는데, 20 × 8초 =
+// 160초라 어떤 기본값으로도 방어가 안 되는 숫자였다. 넘긴 뒤의 세션들은 응답에
+// 성공으로 안 잡히고 그냥 안 돌았다.
+//
+// 남은 것은 다음 호출에서 처리된다 — processed_at 이 NULL 로 남아 다시 대상이 된다.
+const SWEEP_LIMIT = 6;
 // 이 횟수만큼 실패한 세션은 스윕 대상에서 뺀다. 사람이 프롬프트를 고친 뒤
 // ingest_failures 를 지우면 다시 대상이 된다.
 const MAX_ATTEMPTS = 3;

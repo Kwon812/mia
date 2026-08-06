@@ -54,6 +54,15 @@ function toSessionRow(userId: string, payload: SessionPayload) {
   };
 }
 
+/**
+ * after() 로 넘긴 작업도 **같은 함수 안에서** 돌아 이 시간에 포함된다.
+ * 응답은 이미 나갔지만 processSession 은 그 뒤에 도는데, 실측으로 LLM 1회가
+ * 6.5초이고 조회·트랜잭션까지 8초쯤이다. 플랫폼 기본값(플랜에 따라 10~15초)에
+ * 아슬아슬해서, 모델이 한 번 느리면 조용히 잘린다 — 잘리면 processed_at 이
+ * NULL 로 남아 /api/reprocess 대상이 되므로 유실은 아니지만 그만큼 밀린다.
+ */
+export const maxDuration = 60;
+
 export async function POST(req: Request) {
   try {
     const user = await getUserByExtensionKey(req);
