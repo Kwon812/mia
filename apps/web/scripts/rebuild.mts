@@ -76,8 +76,27 @@ const declared = {
     select q.user_id, e.session_id, q.field, q.model_value, q.text,
            q.asked_at, q.answered_at, q.dismissed_at
     from questions q join experiences e on e.id = q.experience_id`,
+  // 완결도 사람 판단이다. 모델은 이 값을 못 낸다 — 브라우징 기록은 "무엇을
+  // 했나"를 말하는데 완결은 "더 할 게 없다"는 판단이라 기록에 흔적이 없다.
+  // 역대 LLM 호출 75회 중 completed=true 가 한 번도 없었다.
+  //
+  // **제목으로는 못 찾는다.** 제목은 모델이 매번 새로 짓고 개수도 달라진다 —
+  // 오늘 재구축에서 "기술 아키텍처 논의"가 "기술 아키텍처 설계"가 됐고 갈래가
+  // 6개에서 5개로 줄었다. 세션 id 가 유일하게 안 변하는 열쇠다.
+  //
+  // 마지막 세션 하나만 적어둔다. 갈래가 쪼개져도 "그 일을 끝낸 세션"이 들어간
+  // 쪽 하나가 정해지므로 되돌릴 자리가 모호해지지 않는다.
+  completedThreads: await sql`
+    select t.user_id, t.completed_at,
+           (select e.session_id from experiences e
+             where e.thread_id = t.id order by e.occurred_at desc limit 1) as last_session_id
+    from threads t
+    where t.status = 'completed'`,
 };
-console.log(`사람 판단 보관: 교정 ${declared.corrections.length}건 · 질문 ${declared.questions.length}건`);
+console.log(
+  `사람 판단 보관: 교정 ${declared.corrections.length}건 · 질문 ${declared.questions.length}건` +
+    ` · 완결 갈래 ${declared.completedThreads.length}건`,
+);
 
 // 백업
 const backup = {
@@ -134,7 +153,37 @@ console.log(`\n${ok}/${sessions.length} 처리 성공`);
       values (${c.user_id}, ${e.id}, ${c.field}, ${c.model_value}, ${c.human_value}, ${c.source}, ${c.created_at})`;
     restored += 1;
   }
-  console.log(`사람 판단 복원: ${restored}건${orphaned ? ` · 세션 매칭 실패 ${orphaned}건 (백업 파일에 남아있다)` : ''}`);
+  // 완결 갈래 되돌리기. 마지막 세션의 경험이 새로 붙은 갈래를 찾아 다시
+  // 완결시키고, 완결 기억도 같이 만든다 — 엔진이 completed 를 낼 때와 같은
+  // 일이라야 사람이 누른 것과 결과가 갈리지 않는다.
+  let threadsBack = 0;
+  for (const c of declared.completedThreads) {
+    const [e] = await sql`
+      select id, thread_id, occurred_at, summary, detail, memory_score
+      from experiences where session_id = ${c.last_session_id}`;
+    if (!e || !e.thread_id) { orphaned += 1; continue; }
+    const [t] = await sql`select title, status from threads where id = ${e.thread_id}`;
+    // 이미 완결이면 이번 재구축에서 모델이 냈다는 뜻이다. 덮지 않는다.
+    if (!t || t.status !== 'active') continue;
+
+    await sql.begin(async (tx) => {
+      await tx`update threads set status = 'completed', completed_at = ${c.completed_at}
+                where id = ${e.thread_id}`;
+      // importance 는 엔진과 같은 식이다(clampImportance): 점수를 60~200 구간에
+      // 놓고 1~10 으로 옮긴다. 스크립트에서 엔진을 import 하면 앱 쪽 db 연결이
+      // 하나 더 열려 좀비가 되므로 식만 옮겨 적는다.
+      const imp = Math.min(10, Math.max(1, 1 + Math.round(((e.memory_score - 60) / 140) * 9)));
+      await tx`insert into memories (user_id, thread_id, experience_id, occurred_at, title, body, importance, trigger)
+               values (${c.user_id}, ${e.thread_id}, ${e.id}, ${e.occurred_at},
+                       ${t.title}, ${e.detail ?? e.summary}, ${imp}, 'thread_complete')`;
+    });
+    threadsBack += 1;
+  }
+
+  console.log(
+    `사람 판단 복원: ${restored}건 · 완결 갈래 ${threadsBack}건` +
+      `${orphaned ? ` · 세션 매칭 실패 ${orphaned}건 (백업 파일에 남아있다)` : ''}`,
+  );
 }
 
 // 캐릭터 캐시 재계산 (배치의 character-cache 와 같은 정의)

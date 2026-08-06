@@ -1,11 +1,12 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { characters, questions } from "@na/db";
+import { characters, experiences, memories, questions, threads } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { recordCorrection, type CorrectionField } from "@/lib/corrections";
+import { clampImportance } from "@/lib/experience-engine";
 import { FIELD_OPTIONS } from "@/lib/labels";
 
 const MIN_NAME_LENGTH = 1;
@@ -135,5 +136,69 @@ export async function dismissQuestion(questionId: string): Promise<CorrectResult
     .where(and(eq(questions.id, questionId), eq(questions.userId, user.userId)));
 
   revalidatePath("/");
+  return {};
+}
+
+/**
+ * 갈래를 완결로 표시한다 — 사람이 직접.
+ *
+ * 완결은 모델이 못 맞히는 값이다. 브라우징 기록은 "무엇을 했나"를 말하는데
+ * 완결은 "더 할 게 없다"는 판단이라, 안 한 일에 대한 진술이어서 기록에 흔적이
+ * 없다. 실제로 역대 LLM 호출 75회 중 completed=true 가 **한 번도** 나온 적이
+ * 없고, 프롬프트가 완결 예시로 못 박은 세션("배포가 끝나 동작을 확인했다")을
+ * 그대로 재현해 넣어도 false 였다.
+ *
+ * 그래서 이 값은 inferred 가 아니라 declared 다(lib/assertion.ts 의 위계).
+ * 모델은 계속 false 를 뱉게 두고, 사람이 말할 때만 확정한다.
+ *
+ * 엔진이 completed 를 낼 때와 **같은 일**을 한다 — 상태만 바꾸고 기억을 안
+ * 만들면 같은 완결인데 결과가 갈린다.
+ */
+export async function completeThread(threadId: string): Promise<CorrectResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "연결이 끊겼어. 다시 연결해줘." };
+
+  const [thread] = await db
+    .select()
+    .from(threads)
+    .where(and(eq(threads.id, threadId), eq(threads.userId, user.userId)));
+  if (!thread) return { error: "없는 갈래야." };
+  // 이미 끝났거나 놓은 것은 건드리지 않는다. 두 번 누르면 기억이 둘 생긴다.
+  if (thread.status !== "active") return { error: "이미 진행 중이 아니야." };
+
+  // 완결의 근거가 되는 경험 = 그 갈래의 마지막 경험. 기억의 occurred_at 과
+  // 본문이 여기서 나온다 — 엔진도 "이번 세션의 경험"을 같은 자리에 쓴다.
+  const [last] = await db
+    .select()
+    .from(experiences)
+    .where(and(eq(experiences.threadId, threadId), eq(experiences.userId, user.userId)))
+    .orderBy(desc(experiences.occurredAt))
+    .limit(1);
+  if (!last) return { error: "이 갈래엔 경험이 없어." };
+
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(threads)
+      .set({ status: "completed", completedAt: now })
+      .where(eq(threads.id, threadId));
+
+    await tx.insert(memories).values({
+      userId: user.userId,
+      threadId,
+      experienceId: last.id,
+      occurredAt: last.occurredAt,
+      // 제목은 갈래 이름만. 엔진의 완결 기억과 같은 규칙이다.
+      title: thread.title,
+      body: last.detail ?? last.summary,
+      importance: clampImportance(last.memoryScore),
+      trigger: "thread_complete",
+    });
+  });
+
+  revalidatePath("/threads");
+  // 기억이 하나 늘었으니 메인 궤도도 다시 그려야 한다.
+  revalidatePath("/");
+  revalidatePath("/memories");
   return {};
 }

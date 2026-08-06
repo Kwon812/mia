@@ -81,7 +81,16 @@ const DAYS = 180;
 // ── 지우기 ───────────────────────────────────────────────────
 if (CLEAR) {
   // FK 순서대로. memories → experience_skills → experiences → threads → sessions
-  const r1 = await sql`delete from memories where id::text like '5eed%'`;
+  //
+  // 기억은 **자기 id 로만 지우면 안 된다.** 앱이 만든 기억(예: /threads 의
+  // "이 일 끝났어" 버튼)은 id 가 무작위라 표식이 없는데 시드 갈래를 참조할 수
+  // 있다. 그러면 threads 삭제가 FK 에 막혀 지우기가 통째로 실패한다 —
+  // 실제로 그렇게 한 번 막혔다. 가리키는 대상이 시드면 같이 지운다.
+  const r1 = await sql`
+    delete from memories
+     where id::text like '5eed%'
+        or thread_id::text like '5eed%'
+        or experience_id::text like '5eed%'`;
   const r2 = await sql`delete from experience_skills where experience_id::text like '5eed%'`;
   const r3 = await sql`delete from experiences where id::text like '5eed%'`;
   const r4 = await sql`delete from threads where id::text like '5eed%'`;

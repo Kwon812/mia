@@ -370,7 +370,7 @@ const MAX_MEMORY_SCORE = 200;
  *
  *  문턱을 거치지 않는 thread_complete 기억은 60 미만일 수 있어 1 로 떨어진다 —
  *  다른 신호 없이 작업만 끝낸 기억이므로 그게 맞다. */
-function clampImportance(score: number): number {
+export function clampImportance(score: number): number {
   const t = (score - MEMORY_SCORE_THRESHOLD) / (MAX_MEMORY_SCORE - MEMORY_SCORE_THRESHOLD);
   return Math.min(10, Math.max(1, 1 + Math.round(t * 9)));
 }

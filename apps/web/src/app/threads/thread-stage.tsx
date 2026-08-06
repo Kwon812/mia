@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { completeThread } from "@/app/actions";
 import {
   CAT_GROUPS,
   OrbitalMap,
@@ -43,6 +44,11 @@ export function ThreadStage({
 
   const handleFocusChange = useCallback((focused: boolean) => setReading(focused), []);
 
+  // 서버 액션이 revalidatePath 로 이 화면을 다시 그린다. 여기서 낙관적 갱신을
+  // 하지 않는 이유 — 완결은 기억까지 만드는 일이라, 실패했는데 화면만 바뀌면
+  // "끝냈다고 눌렀는데 기억이 없다"가 된다.
+  const handleComplete = useCallback((threadId: string) => completeThread(threadId), []);
+
   // 실제로 색으로 쓰인 분야만 범례에 올린다. 갈래는 자기 category 를 쓰므로
   // 기억처럼 근거에서 추론할 필요가 없다.
   const groups = (() => {
@@ -61,6 +67,7 @@ export function ThreadStage({
           threads={threads}
           centerLabel={centerLabel}
           onFocusChange={handleFocusChange}
+          onComplete={handleComplete}
         />
       </div>
 

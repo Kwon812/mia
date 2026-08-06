@@ -383,6 +383,7 @@ export function OrbitalMap({
   memories,
   threads,
   centerLabel,
+  onComplete,
   onFocusChange,
 }: {
   bodies: Body[];
@@ -390,6 +391,9 @@ export function OrbitalMap({
   /** 갈래 — 기억과 같은 계를 돌되 바깥 궤도에 뜬다. 누르면 종속 경험이 위성으로. */
   threads: ThreadBody[];
   centerLabel: string;
+  /** 갈래를 완결로 표시한다. 갈래 화면에서만 넘어온다 — 메인은 기억을 다루니
+   *  이 동작이 없다. 없으면 버튼 자체가 안 뜬다. */
+  onComplete?: (threadId: string) => Promise<unknown>;
   /** 기억 하나에 붙었는지. 지도 바깥(계기판)이 읽는 상태에 맞춰 물러나도록. */
   onFocusChange?: (focused: boolean) => void;
 }) {
@@ -410,6 +414,7 @@ export function OrbitalMap({
   }, [focus, onFocusChange]);
 
   // 판독값 DOM. 렌더 루프와 아래 레이아웃 이펙트가 함께 잡는다.
+  const [completing, setCompleting] = useState(false);
   const probeRef = useRef<HTMLDivElement>(null);
   /** 중심 이름표. 질량중심을 따라다녀야 하므로 매 프레임 자리를 직접 옮긴다.
    *  state 로 두면 프레임마다 리렌더가 돌아 계 전체가 느려진다. */
@@ -1737,6 +1742,30 @@ export function OrbitalMap({
                 : `${tag(focus.trigger)} · 경험 ${focus.referencedIds.length}건 · ${ymd(focus.occurredAt)}`}
             </div>
             <h2 className="text-[18px] font-medium text-lum-0">{focus.title}</h2>
+
+            {/* 완결은 사람만 안다. 브라우징 기록은 "무엇을 했나"를 말하는데
+                완결은 "더 할 게 없다"는 판단이라 기록에 흔적이 없다 — 역대 LLM
+                호출 75회 중 completed=true 가 한 번도 없었다.
+                pointer-events-none 인 부모 안이라 이 버튼만 다시 켠다. */}
+            {focus.kind === "thread" && focus.status === "active" && onComplete && (
+              <button
+                type="button"
+                disabled={completing}
+                onClick={() => {
+                  setCompleting(true);
+                  // 끝내고 나면 이 갈래는 진행 중이 아니다. 펼친 화면을 닫아
+                  // 목록으로 돌려보낸다 — 남아 있으면 방금 누른 버튼이 사라진
+                  // 자리를 보게 된다.
+                  onComplete(focus.id).finally(() => {
+                    setCompleting(false);
+                    setFocus(null);
+                  });
+                }}
+                className="readout pointer-events-auto mt-4 rounded-sm border border-[rgba(99,230,210,0.3)] px-3 py-1.5 text-[12.5px] text-lum-1 transition-colors hover:border-[rgba(99,230,210,0.6)] hover:text-lum-0 disabled:opacity-40"
+              >
+                {completing ? "기록하는 중…" : "이 일 끝났어"}
+              </button>
+            )}
 
             {/* 이 기억을 남긴 근거. 제목 바로 아래에 두고 본문과는 헤어라인으로
                 가른다 — 무엇이 처음이었나가 먼저, 무슨 일이 있었나가 그다음이다. */}
