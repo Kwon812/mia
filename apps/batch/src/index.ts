@@ -4,6 +4,7 @@
 
 import { createDb, type Db } from "@na/db";
 import { generateDailyLogs } from "./jobs/daily-logs";
+import { generateDailyQuestions } from "./jobs/daily-questions";
 import { recomputePersonality } from "./jobs/personality";
 import { refreshCharacterCache } from "./jobs/character-cache";
 import { markAbandonedThreads } from "./jobs/threads";
@@ -21,6 +22,9 @@ const STEPS: Step[] = [
   { name: "markAbandonedThreads", run: markAbandonedThreads },
   { name: "recomputePersonality", run: recomputePersonality },
   { name: "refreshCharacterCache", run: refreshCharacterCache },
+  // 마지막이다. 앞 단계들이 그날 경험을 다 반영한 뒤라야 후보가 온전하고,
+  // 실패해도 일기·성격·레벨에 영향이 없다 (질문은 있으면 좋은 것이지 필수가 아니다).
+  { name: "generateDailyQuestions", run: generateDailyQuestions },
 ];
 
 async function main(): Promise<void> {

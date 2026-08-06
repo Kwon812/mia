@@ -37,6 +37,7 @@ import {
   type ExperienceOutput,
 } from '@na/shared';
 import { db } from './db';
+import { effective, isCorrected, loadCorrections } from './corrections';
 import { calculateMemoryScore, type RecentExperienceSummary } from './memory-score';
 
 // ------------------------------------------------------------
@@ -48,9 +49,9 @@ export const MODEL = 'claude-haiku-4-5';
 
 export const TOOL_NAME = 'record_experience';
 
-/** SYSTEM_PROMPT_V3 의 버전 번호. llm_outputs 에 남겨 프롬프트 간 비교의
+/** SYSTEM_PROMPT_V4 의 버전 번호. llm_outputs 에 남겨 프롬프트 간 비교의
  *  기준으로 쓴다 — 프롬프트를 고치면 여기도 올린다. */
-export const PROMPT_VERSION = 3;
+export const PROMPT_VERSION = 4;
 
 /** 프롬프트에 넣는 보유 스킬 목록의 최대 개수. 판정용 집합과는 다르다. */
 const PROMPT_SKILL_LIMIT = 50;
@@ -69,11 +70,17 @@ function kstYmd(date: Date): string {
 //          고를지 한 마디도 없었다 — 실측 6건 중 5건이 explore 로 쏠렸고
 //          success/stuck 이 하나도 나오지 않아, 이 값에 의존하는 감정 판정과
 //          '막힘 돌파' 기억 규칙이 통째로 죽어 있었다.
+// v4 — 사람 판단(declared)을 도입했다. 이전까지 이 프롬프트가 받는 값은 전부
+//      모델 자신이 만든 것(inferred)이라 "무엇을 믿을지"라는 문제 자체가 없었다.
+//      이제 /diary 의 판정 교정과 캐릭터 질문의 답이 들어오므로, 충돌 시
+//      우선순위를 명시하지 않으면 모델이 사람이 고쳐놓은 값을 자기 추론으로
+//      다시 덮는다 — 그러면 교정은 아무 데도 쓰이지 않는 라벨 더미가 된다.
+//      (assertion class: packages/shared/src/assertion.ts)
 // v2 — compressed_log 에 검색 쿼리(queries)와 페이지 제목(segments[].title),
 // 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
 // (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
 // 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
-export const SYSTEM_PROMPT_V3 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
+export const SYSTEM_PROMPT_V4 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
@@ -83,6 +90,23 @@ compressed_log 에는 구간(segments)마다 도메인·카테고리·시각 외
 검색 쿼리는 사용자가 무엇을 궁금해했는지, 페이지 제목은 무엇을 읽었는지 알려준다.
 
 **모든 시각은 KST(+09:00) 다.** 새벽·심야 여부를 판단할 때 그대로 읽으면 된다.
+
+## 무엇을 믿을 것인가
+
+네가 받는 정보는 출처가 세 종류이고, 충돌하면 **아래 순서대로** 믿는다.
+
+  1. **사람이 정한 것(확정)** — 최근 경험 목록에서 [사람이 고침] 이 붙은 값.
+     사용자가 직접 보고 고른 값이라 **논박 대상이 아니다.** 네 추론과 어긋나도
+     사람 쪽이 맞다. 특히 그 값을 근거로 이번 세션을 판단할 때, "지난번 것도
+     사실은 달랐을 것"이라고 되짚지 마라.
+  2. **관측된 것(사실)** — 세션 길이, 방문 도메인, 검색어와 반복 횟수, 페이지
+     제목, 종료 사유. 센서가 본 값이라 확실하다.
+  3. **네가 추론하는 것** — summary·outcome·category 등 지금 만들 값 전부.
+
+사람이 고친 값이 있다는 것은 **그 종류의 판정에서 네가 틀린 적이 있다**는
+뜻이다. 같은 실수를 반복하지 마라 — 예를 들어 사람이 지난 경험의 outcome 을
+explore 에서 stuck 으로 고쳤다면, 이번에도 비슷한 상황에서 explore 로
+도망가고 있지 않은지 다시 보라.
 
 queries 는 문자열 목록이 아니라 {q, n, first, last} 객체 목록이다 — q 는 검색어, **n 은 그
 검색어가 반복된 횟수**, first/last 는 처음·마지막 등장 시각이다. **n 이 크고 first~last
@@ -406,6 +430,9 @@ interface RecentExperienceRow {
   summary: string;
   category: string;
   outcome: string | null;
+  /** 이 경험의 판정을 사람이 고쳤는가. 프롬프트에서 declared 로 표시된다 —
+   *  표시가 없으면 모델은 자기가 예전에 낸 값과 구분하지 못한다. */
+  corrected?: boolean;
 }
 
 interface ActiveThreadRow {
@@ -452,7 +479,15 @@ export function buildUserMessage(
 
   const recentList =
     recentExperiences.length > 0
-      ? recentExperiences.map((e, i) => `${i + 1}. [${e.category}/${e.outcome ?? '-'}] ${e.summary}`).join('\n')
+      ? recentExperiences
+          .map((e, i) => {
+            // [사람이 고침] 표시가 이 목록의 핵심이다. 이게 없으면 모델은
+            // 사람이 정정한 값과 자기가 예전에 낸 값을 구분하지 못하고,
+            // 프롬프트의 우선순위 규칙이 걸릴 대상 자체가 사라진다.
+            const mark = e.corrected ? ' [사람이 고침]' : '';
+            return `${i + 1}. [${e.category}/${e.outcome ?? '-'}]${mark} ${e.summary}`;
+          })
+          .join('\n')
       : '(아직 기록된 경험 없음)';
 
   return [
@@ -525,6 +560,21 @@ export async function processSession(sessionId: string, userId: string): Promise
       .orderBy(desc(experiences.occurredAt))
       .limit(3);
 
+    // 사람이 고친 판정을 겹친다. experiences 는 불변이라 저장된 값이 모델 값
+    // 그대로고, 유효값은 읽을 때 만든다(lib/corrections.ts). 이걸 안 하면
+    // 사용자가 어제 고쳐놓은 outcome 을 모델이 오늘 다시 자기 값으로 보고
+    // 같은 실수를 반복한다 — 교정이 아무 데도 안 쓰이는 라벨 더미가 된다.
+    const recentCorrections = await loadCorrections(recentExperienceRows.map((e) => e.id));
+    const recentForPrompt: RecentExperienceRow[] = recentExperienceRows.map((e) => ({
+      summary: e.summary,
+      category: effective(recentCorrections, e.id, 'category', e.category),
+      outcome: effective(recentCorrections, e.id, 'outcome', e.outcome ?? ''),
+      corrected:
+        isCorrected(recentCorrections, e.id, 'category') ||
+        isCorrected(recentCorrections, e.id, 'outcome') ||
+        isCorrected(recentCorrections, e.id, 'is_first_time'),
+    }));
+
     // 최근 경험 3건 각각의 "주요 스킬"(weight 최댓값) — 반복 패턴 판정용.
     const primarySkillByExperienceId = new Map<string, string | null>();
     if (recentExperienceRows.length > 0) {
@@ -596,13 +646,13 @@ export async function processSession(sessionId: string, userId: string): Promise
       // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
       // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
       temperature: 0,
-      system: SYSTEM_PROMPT_V3,
+      system: SYSTEM_PROMPT_V4,
       tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [
         {
           role: 'user',
-          content: buildUserMessage(sessionForPrompt, skillRowsForPrompt, recentExperienceRows, activeThreadRows),
+          content: buildUserMessage(sessionForPrompt, skillRowsForPrompt, recentForPrompt, activeThreadRows),
         },
       ],
     });

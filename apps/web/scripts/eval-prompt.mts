@@ -6,7 +6,7 @@
 // temperature 0 이어도 실행마다 답이 갈리므로 여러 번 돌려 안정성도 함께 본다.
 import fs from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
-import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V3, buildUserMessage } from '../src/lib/experience-engine';
+import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V4, buildUserMessage } from '../src/lib/experience-engine';
 
 const RUNS = Number(process.argv[2] ?? 3);
 const env = fs.readFileSync('.env.local', 'utf8');
@@ -30,7 +30,7 @@ type Case = {
   검증: string;
   session: { primaryCategory: string; durationMin: number; closeReason?: string; activityScore?: number; domains: Record<string, number>; compressedLog: unknown };
   skills?: typeof SKILLS;
-  recent?: { summary: string; category: string; outcome: string | null }[];
+  recent?: { summary: string; category: string; outcome: string | null; corrected?: boolean }[];
   threads?: (typeof THREAD_A)[];
   expect: Record<string, unknown>;
 };
@@ -228,6 +228,29 @@ const CASES: Case[] = [
     // 정답이 하나가 아니다. 다만 존재하지 않는 id 를 만들어내면 안 된다.
     expect: { 'thread.action': ['attach', 'new'] },
   },
+  {
+    // v4 — 사람 판단(declared) 우선 규칙의 행동 검증.
+    //
+    // github.com 은 도메인 사전이 dev 로 찍는다. 그리고 이 세션은 실제로
+    // 남의 코드를 읽기만 했다(편집·실행 흔적 없음) — 프롬프트 기준으로는 study 다.
+    // 도메인 편향 때문에 모델이 dev 로 기울기 쉬운 자리인데, 최근 경험에
+    // **같은 상황을 사람이 study 로 고친 선례**가 붙어 있다.
+    // 이 선례를 따르면 study, 무시하면 dev 가 나온다.
+    name: 'declared — 사람이 고친 선례를 따른다 (dev 편향 vs study)',
+    검증: 'declared 우선',
+    recent: [
+      { summary: '오픈소스 저장소를 읽으며 구조를 파악했다', category: 'study', outcome: 'explore', corrected: true },
+      { summary: 'Project NA 확장 빌드를 고쳤다', category: 'dev', outcome: 'success' },
+      { summary: 'Drizzle 스키마 문서를 봤다', category: 'docs', outcome: 'success' },
+    ],
+    session: { primaryCategory: 'dev', durationMin: 53, domains: { 'github.com': 3180 },
+      compressedLog: { tags: [], queries: [],
+        segments: [ seg('github.com','dev','drizzle-team/drizzle-orm — src/pg-core',14,0,14),
+          seg('github.com','dev','drizzle-team/drizzle-orm — dialect.ts',14,14,13),
+          seg('github.com','dev','drizzle-team/drizzle-orm — Discussions',14,27,12),
+          seg('github.com','dev','drizzle-team/drizzle-orm — src/relations.ts',14,39,14) ] } },
+    expect: { category: 'study' },
+  },
 ];
 
 const get = (o: any, path: string) => path.split('.').reduce((a, k) => a?.[k], o);
@@ -251,12 +274,42 @@ async function run(c: Case) {
   );
   const res = await client.messages.create({
     model: MODEL, max_tokens: 1024, temperature: 0,
-    system: SYSTEM_PROMPT_V3, tools: [RECORD_EXPERIENCE_TOOL],
+    system: SYSTEM_PROMPT_V4, tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content }],
   });
   const tu: any = res.content.find((b: any) => b.type === 'tool_use');
   return tu?.input ?? {};
+}
+
+// ── 프롬프트 조립 검증 (LLM 호출 없음) ──
+// declared 우선 규칙은 [사람이 고침] 표시가 프롬프트에 실제로 실려야만 걸린다.
+// 아래 LLM 케이스는 확률적이라 표시가 통째로 빠져도 우연히 통과할 수 있어,
+// 이 결정적 검증이 진짜 회귀 방어선이다.
+{
+  const msg = buildUserMessage(
+    { primaryCategory: 'dev', durationMin: 30, closeReason: 'idle', activityScore: 360,
+      domains: { 'github.com': 1800 }, compressedLog: { tags: [], queries: [], segments: [] } } as any,
+    SKILLS as any,
+    [
+      { summary: '고친 것', category: 'study', outcome: 'explore', corrected: true },
+      { summary: '안 고친 것', category: 'dev', outcome: 'success' },
+    ] as any,
+    [] as any,
+  );
+  const problems: string[] = [];
+  if (!msg.includes('[study/explore] [사람이 고침] 고친 것')) {
+    problems.push('교정된 경험에 [사람이 고침] 표시가 없다');
+  }
+  if (msg.includes('[dev/success] [사람이 고침]')) {
+    problems.push('교정되지 않은 경험에 표시가 잘못 붙었다');
+  }
+  if (problems.length > 0) {
+    console.error('✗ 프롬프트 조립 검증 실패');
+    for (const p of problems) console.error(`   - ${p}`);
+    process.exit(1);
+  }
+  console.log('✓ 프롬프트 조립 — [사람이 고침] 표시가 최근 경험 목록에 실린다\n');
 }
 
 const summary: any[] = [];

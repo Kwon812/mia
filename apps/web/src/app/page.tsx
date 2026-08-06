@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation";
-import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
-import { dialogues, experienceSkills, experiences, memories, sessions } from "@na/db";
+import { and, desc, eq, gte, inArray, isNull, lt } from "drizzle-orm";
+import { dialogues, experienceSkills, experiences, memories, questions, sessions } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { getCurrentDialogueSlot, getKstDayBoundary, kstDaysTogether, DAY_MS } from "@/lib/date";
 import { deriveEmotion, type EmotionExperienceInput, type EmotionSkillInput } from "@/lib/emotion";
 import { NameForm } from "@/components/name-form";
 import { MapStage } from "./map-stage";
+import type { AskQuestion } from "@/components/ask-card";
 import type { Body, MemoryBody } from "@/components/orbital-map";
 
 // 감정 파생에 넣는 최근 경험 표본 크기 (계획서 06장)
@@ -191,6 +192,27 @@ export default async function Home() {
 
   const todayMinutes = todaySessionRows.reduce((sum, s) => sum + s.durationMin, 0);
 
+  // 층 2 — 오늘 캐릭터가 물을 것. **읽기만 한다.**
+  // 질문 생성은 야간 배치(apps/batch/src/jobs/daily-questions.ts)가 한다 —
+  // 여기서 만들면 서버 컴포넌트가 렌더마다 쓰기를 하게 되고, "하루 1건"이라는
+  // 예산을 사용자의 새로고침 횟수가 좌우하게 된다.
+  const [openQuestion] = await db
+    .select({ id: questions.id, field: questions.field, text: questions.text })
+    .from(questions)
+    .where(
+      and(
+        eq(questions.userId, user.userId),
+        isNull(questions.answeredAt),
+        isNull(questions.dismissedAt),
+      ),
+    )
+    .orderBy(desc(questions.askedAt))
+    .limit(1);
+
+  const question: AskQuestion | null = openQuestion
+    ? { id: openQuestion.id, field: openQuestion.field, text: openQuestion.text }
+    : null;
+
   return (
     <MapStage
       bodies={bodies}
@@ -208,6 +230,7 @@ export default async function Home() {
       }}
       todayMinutes={todayMinutes}
       todaySessions={todaySessionRows.length}
+      question={question}
     />
   );
 }

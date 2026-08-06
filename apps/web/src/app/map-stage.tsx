@@ -10,6 +10,7 @@ import {
   type Body,
   type MemoryBody,
 } from "@/components/orbital-map";
+import { AskCard, type AskQuestion } from "@/components/ask-card";
 
 // 계기판. 지도가 화면 전체를 차지하고, 판독값은 네 모서리에 붙는다.
 // 카드도 패널도 없다 — 값은 여백 위에 그냥 놓여 있고 헤어라인이 구획한다.
@@ -50,6 +51,7 @@ export function MapStage({
   counts,
   todayMinutes,
   todaySessions,
+  question,
 }: {
   bodies: Body[];
   memories: MemoryBody[];
@@ -62,6 +64,8 @@ export function MapStage({
   counts: { experience: number; skill: number; memory: number };
   todayMinutes: number;
   todaySessions: number;
+  /** 캐릭터가 오늘 묻는 것 (층 2). 없으면 안 그린다. */
+  question: AskQuestion | null;
 }) {
   // 기억의 색은 그 기억을 만든 경험들 중 가장 많은 분야에서 온다.
   // 범례에는 실제로 색으로 쓰인 분야만 올린다 — 경험에만 있고 어떤 기억도
@@ -200,6 +204,10 @@ export function MapStage({
           >
             {dialogue}
           </p>
+          {/* 캐릭터의 말 바로 아래에 붙인다 — 이건 폼이 아니라 대화의 연장이다.
+              지도를 읽는 중(reading)에는 위 컨테이너가 통째로 사라지므로
+              질문도 함께 물러난다. */}
+          {question && <AskCard question={question} />}
         </div>
       </div>
     </main>

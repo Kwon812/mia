@@ -23,6 +23,7 @@ import {
   smallint,
   text,
   timestamp,
+  unique,
   uuid,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
@@ -415,6 +416,88 @@ export const llmOutputs = pgTable(
     index('idx_llm_outputs_session').on(t.sessionId).where(sql`${t.sessionId} is not null`),
     index('idx_llm_outputs_user_time').on(t.userId, t.createdAt.desc()),
     check('llm_outputs_kind_check', sql`${t.kind} in ('experience','daily_log')`),
+  ],
+);
+
+// ============================================================
+// 11. 사람 판단 (declared)
+//
+// supabase/migrations/20260806000002_corrections.sql 대응.
+// experiences·dialogues·daily_logs 가 전부 LLM 생성물(inferred)이라,
+// 사람의 판단이 시스템에 들어오는 유일한 통로다.
+// ============================================================
+
+/** 교정 가능한 필드 — 이산값만 받는다. 자유 서술은 받지 않는다(사용자 결정). */
+export const CORRECTION_FIELDS = ['outcome', 'category', 'is_first_time'] as const;
+export const CORRECTION_SOURCES = ['diary', 'ask'] as const;
+
+/**
+ * 캐릭터가 던진 질문. **침묵을 기록하기 위한 테이블**이다.
+ *
+ * answered_at 도 dismissed_at 도 NULL 이면 무응답 — "안 고쳤다"를 "맞다"로
+ * 세면 데이터가 조용히 오염된다. 무응답은 대개 동의가 아니라 안 본 것이다.
+ */
+export const questions = pgTable(
+  'questions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    experienceId: uuid('experience_id')
+      .notNull()
+      .references(() => experiences.id, { onDelete: 'cascade' }),
+
+    field: text('field', { enum: CORRECTION_FIELDS }).notNull(),
+    modelValue: text('model_value').notNull(),
+    text: text('text').notNull(), // 캐릭터가 던진 문장
+
+    askedAt: timestamp('asked_at', { withTimezone: true }).notNull().defaultNow(),
+    answeredAt: timestamp('answered_at', { withTimezone: true }),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }), // "모르겠어" — 침묵과 구분
+  },
+  (t) => [
+    index('idx_questions_open').on(t.userId, t.askedAt.desc()),
+    check('questions_field_check', sql`${t.field} in ('outcome','category','is_first_time')`),
+    unique('questions_unique_target').on(t.experienceId, t.field),
+  ],
+);
+
+/**
+ * 사람이 실제로 내린 판단. **append-only** — UPDATE 하지 않는다.
+ *
+ * 같은 필드를 두 번 고치면 두 행이 쌓이고 최신 행이 이긴다. 덮어쓰면
+ * (모델 출력, 사람 정답) 쌍이 사라지는데, 학습에 필요한 건 정답이 아니라
+ * 그 쌍이다. experiences 를 직접 UPDATE 하지 않는 이유도 같다 —
+ * 그쪽은 불변이 설계 전제고 재처리(apply-reprocess)가 그 위에 서 있다.
+ */
+export const corrections = pgTable(
+  'corrections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    experienceId: uuid('experience_id')
+      .notNull()
+      .references(() => experiences.id, { onDelete: 'cascade' }),
+
+    field: text('field', { enum: CORRECTION_FIELDS }).notNull(),
+    /** 모델이 냈던 값의 **사본**. 참조가 아니라 사본인 이유는 재처리로
+     *  experiences 값이 바뀌어도 쌍이 보존돼야 하기 때문이다. */
+    modelValue: text('model_value').notNull(),
+    humanValue: text('human_value').notNull(),
+
+    source: text('source', { enum: CORRECTION_SOURCES }).notNull(),
+    questionId: uuid('question_id').references(() => questions.id, { onDelete: 'set null' }),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('idx_corrections_latest').on(t.experienceId, t.field, t.createdAt.desc()),
+    index('idx_corrections_user_time').on(t.userId, t.createdAt.desc()),
+    check('corrections_field_check', sql`${t.field} in ('outcome','category','is_first_time')`),
+    check('corrections_source_check', sql`${t.source} in ('diary','ask')`),
   ],
 );
 
