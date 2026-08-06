@@ -39,6 +39,16 @@ function Readout({
   );
 }
 
+/** 에폭 ms → KST 'MM.DD HH:MM'. 목록이 좁아서 연도는 뺀다. */
+function kstHm(ms: number): string {
+  const d = new Date(ms + 9 * 60 * 60 * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getUTCMonth() + 1)}.${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
+/** 목록에 몇 줄까지. 넷을 넘으면 아래 통계와 붙어 읽히기 시작한다. */
+const RECENT_LIMIT = 3;
+
 export function MapStage({
   bodies,
   memories,
@@ -85,6 +95,9 @@ export function MapStage({
   // 캐릭터가 계속 말을 걸고 있으면 읽을 것이 둘이 된다 — 게다가 그 대사는
   // 지금 보고 있는 기억이 아니라 오늘 전체에 대한 말이라 문맥도 어긋난다.
   const [reading, setReading] = useState(false);
+
+  // bodies 는 occurred_at 내림차순이라(page.tsx 쿼리) 앞에서부터가 최근이다.
+  const recent = bodies.slice(0, RECENT_LIMIT);
 
   // 조준점이 OS 커서를 대신하는 동안에는 화면 전체에서 커서를 감춘다.
   // 이 화면에서만 — 하위 페이지에는 조준점이 없으므로 커서가 있어야 한다.
@@ -168,6 +181,35 @@ export function MapStage({
           </div>
         </div>
       </div>
+
+      {/* 좌하 위 — 최근에 들어온 경험.
+          숫자만 있으면 "오늘 세션 5"가 무슨 5인지 알 수 없다. 무엇이 방금
+          들어왔는지 한 줄씩 보이면 지도를 안 뒤져도 확인이 된다.
+          누르는 대상은 아니다 — 경험은 기억을 펼쳐야 보이는 층이고, 여기서
+          바로 열면 그 위계가 무너진다. */}
+      {recent.length > 0 && (
+        <div
+          className="pointer-events-none absolute bottom-24 left-5 max-w-[34ch]"
+          style={{
+            opacity: reading ? 0 : 1,
+            transition: "opacity 420ms ease",
+          }}
+        >
+          <div className="tick mb-2">최근 경험</div>
+          <div className="flex flex-col gap-1.5">
+            {recent.map((b, i) => (
+              <div
+                key={b.id}
+                className="settle readout flex gap-2 text-[12.5px] leading-relaxed"
+                style={{ "--d": `${340 + i * 60}ms` } as React.CSSProperties}
+              >
+                <span className="shrink-0 text-lum-4">{kstHm(b.occurredAt)}</span>
+                <span className="truncate text-lum-2">{b.summary}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 좌하 — 오늘 */}
       <div className="pointer-events-none absolute bottom-8 left-5 flex gap-10">
