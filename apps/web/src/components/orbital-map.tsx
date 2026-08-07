@@ -894,6 +894,27 @@ export function OrbitalMap({
       0.5,
     );
 
+    /**
+     * 우주의 **바깥 상자**. 축마다 따로 잰다 — 끌기 한계가 여기서 나온다.
+     *
+     * 반경(maxR) 하나로 두면 안 된다. 예전 한계는 `maxR × FLATTEN` 을 세로에
+     * 썼는데, 그건 계가 원점 둘레의 **납작한 원반** 하나였을 때 값이다.
+     * 지금 은하 자리(GALAXY_SITES)의 y 는 안 눌린 생값이라 — 눌리는 건 은하
+     * *안*의 원반뿐이다 — 세로로 실제보다 좁게 잡혔다.
+     *
+     * 그래서 y 가 큰 은하는 화면 가운데로 데려올 수가 없었다. 실측: ETC 가
+     * y=-1.34 인데 한계는 1.05 뿐이라 zr 9 부터 벽에 걸렸고, applyCamera 가
+     * 앵커를 다시 잡으면서 화면이 위로 튕겼다. 드래그로도 안 올라갔다.
+     * (COMMUNITY 는 -0.94 라 한계 안이었다 — 그래서 ETC 쪽만 그랬다.)
+     *
+     * 은하 **안**의 세로 폭에만 FLATTEN 을 먹인다. starXY 가 거기서만 눌렀다.
+     */
+    const worldMaxX =
+      galaxies.reduce((mx, g) => Math.max(mx, Math.abs(g.x)), 0) + GALAXY_R * GALAXY_EDGE;
+    const worldMaxY =
+      galaxies.reduce((mx, g) => Math.max(mx, Math.abs(g.y)), 0) +
+      GALAXY_R * GALAXY_EDGE * FLATTEN;
+
     /** 코스믹 웹의 실. 은하마다 가장 가까운 이웃 하나씩 이어 마디를 만든다 —
      *  전부 이으면 그물이 아니라 덩어리가 되고, 안 이으면 흩뿌린 점이 된다.
      *  중복(A→B 와 B→A)은 한 번만 그린다. */
@@ -1084,16 +1105,17 @@ export function OrbitalMap({
       applyCamera();
     }
 
-    /** 이동량 한계. 바깥 궤도가 화면에서 통째로 사라지지 않는 선까지만 —
-     *  그 너머는 아무것도 없는 검은 화면이라 갈 이유가 없다. */
+    /** 이동량 한계. 우주가 화면에서 통째로 사라지지 않는 선까지만 —
+     *  그 너머는 아무것도 없는 검은 화면이라 갈 이유가 없다.
+     *
+     *  **축마다 제 폭으로 잰다**(worldMaxX·worldMaxY). 반경 하나에 FLATTEN 을
+     *  먹여 쓰던 예전 식은 세로를 실제보다 좁게 잡아서, 위쪽 은하를 가운데로
+     *  데려올 수가 없었다 — 근거는 worldMaxY 주석에. */
     function offLimit(z: number) {
-      // 가장 먼 천체까지는 갈 수 있어야 한다. 고정 축척이라 계가 화면보다
-      // 커졌으므로, 예전 기준("바깥 궤도가 화면에서 안 사라지는 선")은 아예
-      // 성립하지 않는다 — 그 선은 이미 화면 밖이다.
-      const radX = maxR * baseUnit * z;
+      const u = baseUnit * z;
       return {
-        x: radX + w / 2,
-        y: radX * FLATTEN + h / 2,
+        x: worldMaxX * u + w / 2,
+        y: worldMaxY * u + h / 2,
       };
     }
 
@@ -1165,28 +1187,40 @@ export function OrbitalMap({
 
     /**
      * 세계점 (wx, wy) 를 화면 가운데로 데려오며 배율 z 로 간다. 클릭이 쓴다.
-     * **목표만** 정한다 — 앵커가 이징하면서 대상이 가운데로 미끄러져 온다.
+     *
+     * **대상을 지금 그 자리에 못박고, 그 화면점만 가운데로 미끄러뜨린다.**
+     *
+     * 예전에는 세계점(anchorW)을 이징했다. 그런데 배율은 로그로 가고 세계점은
+     * 선형으로 가니 — 배율이 훨씬 빨리 자란다 — 중간 프레임에서는 아직 원점
+     * 근처에 있는 채로 깊이 들어가 버렸다. 그래서 "권도형과 그 분야를 잇는
+     * 선 가운데로 확 확대됐다가, 그다음 그 분야로 이동"처럼 **두 동작으로
+     * 쪼개져** 보였다. 물러날 때도 같은 이유로 그랬다.
+     *
+     * 대상을 처음부터 앵커로 잡으면 그 일이 원천적으로 없다. 대상은 한 순간도
+     * 화면에서 벗어나지 않고, 그 자리가 가운데로 미끄러지는 동안 배율만 자란다 —
+     * 확대와 이동이 **한 동작**이 된다. 화면점 이징이라 눈에 보이는 속도도
+     * 고르다(세계점 이징은 배율에 따라 화면 속도가 수천 배로 널뛴다).
+     *
+     * 시작할 때 화면은 한 칸도 안 움직인다: anchorS 를 지금 자리로 잡으므로
+     * cx = anchorSX - wx·unit = (cx + wx·unit) - wx·unit = cx.
      */
     function zoomToPoint(wx: number, wy: number, z: number) {
       // 새 손짓이 앞선 손짓의 여운을 끈다.
       flingX = 0;
       flingY = 0;
-      anchorWXT = wx;
-      anchorWYT = wy;
+      anchorWX = anchorWXT = wx;
+      anchorWY = anchorWYT = wy;
+      anchorSX = cx + wx * unit; // 지금 화면에서 대상이 있는 자리
+      anchorSY = cy + wy * unit;
       anchorSXT = w / 2;
       anchorSYT = h / 2;
       zoomTarget = z;
     }
 
-    /** 우주 전체로 물러난다. 원점을 화면 가운데에. */
+    /** 우주 전체로 물러난다. 원점(권도형)을 화면 가운데로 —
+     *  들어갈 때와 **같은 규칙**이라 나오는 길도 한 동작이다. */
     function resetCamera() {
-      zoomTarget = fitZoom;
-      anchorWXT = 0;
-      anchorWYT = 0;
-      anchorSXT = w / 2;
-      anchorSYT = h / 2;
-      flingX = 0;
-      flingY = 0;
+      zoomToPoint(0, 0, fitZoom);
     }
 
     /**
