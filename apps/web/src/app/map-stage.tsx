@@ -115,7 +115,9 @@ export function MapStage({
     return CAT_GROUPS.filter((g) => used.has(g.key));
   })();
 
-  // 남은 것이 몇 개인가. 별의 밝기가 그 값이라 숫자로도 한 번 적는다.
+  // 기억이 남은 갈래가 몇 개인가. 별의 밝기가 그 값이라 숫자로도 한 번 적는다.
+  // "남은 것"이라고 적었었는데, 그게 곧 기억이라 우하단 '기억 5' 와 같은 값을
+  // 다른 이름으로 부르고 있었다 — 한 화면에 두 어휘를 두지 않는다.
   const keptCount = threads.filter((t) => t.memory != null).length;
 
   // bodies 는 occurred_at 내림차순이라(page.tsx 쿼리) 앞에서부터가 최근이다.
@@ -182,7 +184,7 @@ export function MapStage({
           <div className="readout text-[16px] text-lum-0">
             은하 {usedGroups.length}
             <span className="ml-1 text-[13.5px] text-lum-2">
-              · 별 {threads.length} · 남은 것 {keptCount} / 경험 {counts.experience}
+              · 별 {threads.length} · 기억 {keptCount} / 경험 {counts.experience}
             </span>
           </div>
 
@@ -210,7 +212,7 @@ export function MapStage({
             <br />
             나선팔 = 진행 중 · 안쪽이 최근이다
             <br />
-            팔 밖으로 밀려난 것 = 끝냈거나(안쪽) 놓은(바깥) 일
+            팔 밖으로 밀려난 것 = 끝냈거나(안쪽) 잊혀진(바깥) 일
             <br />
             밝을수록 많이 남았다 · 크기 = 경험 수
             <br />

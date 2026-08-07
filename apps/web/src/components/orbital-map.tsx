@@ -2633,18 +2633,28 @@ export function OrbitalMap({
         else if (p.kind === "galaxy") {
           // 은하 하나가 분야 하나다. 별의 밝기가 말하는 것을 숫자로도 적는다.
           const g = galaxyByKey.get(found.slice(4));
-          const all = g?.members.length ?? 0;
-          const inDisc = g?.members.filter((t) => t.status === "active").length ?? 0;
+          const ms = g?.members ?? [];
+          const n = (st: string) => ms.filter((t) => t.status === st).length;
           setProbe({
             x: p.x,
             y: p.y,
             kind: "은하",
             text: tag(g?.key ?? ""),
+            // **halo 를 화면에 안 쓴다.** 코드 용어가 그대로 새어 나갔었다
+            // ("나머지 0건은 halo") — 범례는 이미 한국어로 "팔 밖으로 밀려난 것 =
+            // 끝냈거나 놓은 일" 이라 말하고 있는데 여기만 다른 어휘였다.
+            // 상태 셋을 각 줄로 푼다. 화면에서 자리로 갈리는 것이니 숫자로도
+            // 그렇게 읽는다 — 진행 중은 나선팔, 나머지 둘은 그 밖이다.
             rows: [
-              { k: "갈래", v: `${all}건` },
-              { k: "남은 것", v: `${g?.kept ?? 0}건` },
-              // 원반과 halo 는 화면에서 자리로 갈리는 것이라, 숫자로도 그렇게 읽는다.
-              { k: "진행 중", v: `${inDisc}건 · 나머지 ${all - inDisc}건은 halo` },
+              { k: "갈래", v: `${ms.length}건` },
+              { k: "기억", v: `${g?.kept ?? 0}건` },
+              // 진행 중은 안 적는다 — 갈래에서 나머지 둘을 뺀 값이라 화면에
+              // 이미 있는 정보고, 나선팔에 있느냐 밖에 있느냐로 더 잘 읽힌다.
+              { k: "끝냄", v: `${n("completed")}건` },
+              // status 는 'abandoned' 지만 화면에서는 '잊혀짐' 이라 부른다.
+              // 사람이 놓은 게 아니라 손이 안 가서 밀려난 것이라(야간 배치가
+              // 30일 무활동으로 넘긴다) 그쪽이 실제에 가깝다.
+              { k: "잊혀짐", v: `${n("abandoned")}건` },
             ],
           });
         } else if (p.kind === "axis") {
@@ -2676,23 +2686,25 @@ export function OrbitalMap({
               // 못한다 — 밝기는 "많이 남았다"인데 이름은 여전히 "갈래"였다.
               kind: m.memory ? "기억" : "갈래",
               text: clampSentence(m.title, PROBE_TEXT_LEN),
+              // **날짜와 분야가 맨 위다.** "언제, 무슨 갈래냐"가 먼저 잡히고
+              // 나머지는 그 뒤에 딸리는 값이다. 반경이 이미 "시작한 지"를
+              // 말하지만 그건 상대값이라 날짜를 못 읽는다.
               rows: [
-                // 남은 이유는 **전부** 적는다. 여럿이면 그게 곧 그 기억의
-                // 성격이라, 가장 센 것 하나만 보이면 나머지를 알 길이 없다.
-                // 중요도는 안 적는다 — 광도가 이미 그 값이다.
-                ...(m.memory
-                  ? [{ k: "남은 이유", v: m.memory.triggers.map(tag).join(" · ") }]
-                  : []),
-                { k: "분야", v: tag(m.category) },
-                { k: "상태", v: tag(m.status) },
-                { k: "경험", v: `${m.referencedIds.length}건` },
-                // 반경이 이미 "시작한 지"를 말하지만 그건 상대값이라 날짜를 못 읽는다.
                 {
                   k: m.completedAt ? "기간" : "시작",
                   v: m.completedAt
                     ? `${ymd(m.occurredAt)} → ${ymd(m.completedAt)}`
                     : ymd(m.occurredAt),
                 },
+                { k: "분야", v: tag(m.category) },
+                { k: "상태", v: tag(m.status) },
+                { k: "경험", v: `${m.referencedIds.length}건` },
+                // 남은 이유는 **전부** 적는다. 여럿이면 그게 곧 그 기억의
+                // 성격이라, 가장 센 것 하나만 보이면 나머지를 알 길이 없다.
+                // 중요도는 안 적는다 — 광도가 이미 그 값이다.
+                ...(m.memory
+                  ? [{ k: "남은 이유", v: m.memory.triggers.map(tag).join(" · ") }]
+                  : []),
               ],
               // 처음 쓴 스킬만. 호버는 훑는 자리라 일곱 개씩 늘어놓으면 아무것도
               // 안 읽힌다. trigger 가 왜 그 값인지에 답하는 것도 신규 쪽이다.
@@ -2706,12 +2718,14 @@ export function OrbitalMap({
             y: p.y,
             kind: "경험",
             text: clampSentence(b.summary, PROBE_TEXT_LEN),
+            // 갈래와 **같은 순서**다 — 날짜·분야가 먼저. 층을 오가며 같은
+            // 자리에서 같은 것을 읽게 된다.
             rows: [
+              { k: "날짜", v: formatKstYmd(new Date(b.occurredAt), ".") },
               { k: "분야", v: tag(b.category) },
               { k: "결과", v: tag(b.outcome) },
               // 60 이 기억이 되는 문턱이다. 그 앞뒤가 곧 "이게 남았나"의 근거다.
               { k: "기억 점수", v: `M${b.memoryScore}` },
-              { k: "날짜", v: formatKstYmd(new Date(b.occurredAt), ".") },
             ],
           });
         }
