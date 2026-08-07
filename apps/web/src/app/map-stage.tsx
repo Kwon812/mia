@@ -180,9 +180,9 @@ export function MapStage({
         <div className="settle" style={{ "--d": "80ms" } as React.CSSProperties}>
           <div className="tick mb-2">계에 있는 것</div>
           <div className="readout text-[16px] text-lum-0">
-            별 {threads.length}
+            은하 {usedGroups.length}
             <span className="ml-1 text-[13.5px] text-lum-2">
-              · 남은 것 {keptCount} / 경험 {counts.experience}
+              · 별 {threads.length} · 남은 것 {keptCount} / 경험 {counts.experience}
             </span>
           </div>
 
@@ -206,13 +206,15 @@ export function MapStage({
 
           <div className="mt-3 ml-auto h-px w-28" style={{ background: "var(--color-lum-4)" }} />
           <div className="readout mt-3 text-[13px] leading-relaxed text-lum-2">
-            별 하나 = 하나의 일. 밝을수록 많이 남았다
+            은하 하나 = 분야 하나 · 별 하나 = 하나의 일
             <br />
-            선이 끊긴 것은 놓은 일
+            나선팔 = 진행 중 · 안쪽이 최근이다
             <br />
-            거리 = 시작한 지 · 크기 = 경험 수 · 방향·색 = 분야
+            팔 밖으로 밀려난 것 = 끝냈거나(안쪽) 놓은(바깥) 일
             <br />
-            당기거나 누르면 그 안의 경험이 보인다
+            밝을수록 많이 남았다 · 크기 = 경험 수
+            <br />
+            누르면 한 층 안으로 — 우주 → 은하 → 항성계
           </div>
         </div>
       </div>

@@ -175,39 +175,110 @@ function tempered(
 const LUM_DARK = 0.2;
 const LUM_KEPT_MIN = 0.46;
 
-/**
- * 별자리가 시작하는 반경(궤도 단위). 중심(권도형)에서 이만큼 떨어진 곳부터다.
- *
- * 예전에는 실제 천체들의 가장 안쪽을 재서 정했는데, 그러면 갈래가 하나
- * 늘거나 오래될 때마다 **별 전체가 통째로 움직였다.** 자리가 기록이려면
- * 남의 사정으로 흔들리면 안 된다. 상수여야 한다.
- */
-const STAR_BASE = 1.0;
+// ══════════════════════════════════════════════════════════════
+// 층 — 우주 · 은하 · 항성계 · 행성
+// ══════════════════════════════════════════════════════════════
+//
+// 원리 셋(계획서):
+//   1. 층마다 **하나의 종류만** 천체다. 위층은 배경, 아래층은 없는 것.
+//   2. 자식 계의 반경 ≤ 부모끼리 간격 / LAYER_RATIO (힐 구면).
+//      겹침을 사후에 밀지 않고 **배치 규칙으로** 막는다.
+//   3. 시간은 로그 나선 r = a·e^(bθ). 각도까지 쓰므로 같은 면적에 훨씬 많이
+//      들어가고, 로그라 시간이 쌓여도 안쪽 생김새가 안 변한다.
+//
+// 원리 2 가 이 파일에서 가장 큰 것을 지웠다: **축척 역산이 통째로 사라졌다.**
+// 예전에는 가장 빽빽한 한 쌍을 찾아 그 둘이 안 겹칠 만큼 축척을 키웠는데
+// (unitNeed · PACK_MARGIN · PACK_MAX), 그건 겹침을 사후에 미는 일이었다.
+// 배치가 애초에 안 겹치면 그 계산은 할 이유가 없다.
 
 /**
- * 궤도 1단위가 화면에서 몇 px 인가 — **고정 축척**.
+ * 층 사이 배율. 자식 계의 반경 = 부모끼리 간격 / 이 값.
  *
- * 예전에는 `(화면 절반 × 0.88) / maxA` 였다. 가장 바깥 천체에 맞춰 전부를
- * 화면에 우겨넣는 식이라, 데이터가 두 배면 축척이 절반이 됐다. 6개월치에서
- * 이미 계가 가운데 덩어리로 뭉갠 게 이것 때문이다.
+ * 이 한 값이 세 가지를 동시에 정한다:
+ *   - 은하 반경 = 은하끼리 간격 / R
+ *   - 항성계 반경 = 은하 안 별끼리 간격 / R
+ *   - 한 층 내려가는 데 필요한 확대 배율 = R
+ * 그래서 문턱을 손으로 맞출 일이 없다(4단계).
  *
- * 고정하면 반경이 실제 거리가 된다. 오늘 남은 기억은 3년 뒤에도 같은 자리에
- * 뜨고, 늘어나는 것은 바깥으로만 간다. 대신 계가 화면보다 커지므로 물러나기
- * 와 끌기가 그만큼 넓어져야 한다(zoomMin).
- *
- * 화면 짧은 변에 매단다 — px 로 못박으면 작은 화면에서 계가 통째로 밖으로
- * 나간다. 축척이 고정이라는 말은 "데이터에 안 흔들린다"는 뜻이지
- * "창 크기에도 안 흔들린다"는 뜻이 아니다.
+ * 실제 우주는 훨씬 크다 — 은하 안의 별은 1:3천만이다. 그래서 별밭이 비어
+ * 보인다. 30 은 그 성질(위층에서 아래층은 점)을 지키면서 화면에서 오갈 수
+ * 있는 선으로 잡은 값이다. 휑하면 이 숫자 하나만 낮추면 전부 따라온다.
  */
-const UNIT_FRAC = 0.27;
+const LAYER_RATIO = 30;
 
-/** 두 별의 후광이 이만큼 떨어져야 "안 겹친다"로 친다. 1 이면 가장자리끼리
- *  딱 닿는다 — 그건 겹친 것처럼 보인다. 사이가 배경으로 읽힐 여유를 준다. */
-const PACK_MARGIN = 1.45;
+/**
+ * 은하 자리 — **코스믹 웹**(5단계).
+ *
+ * 손으로 놓은 표다. 두 필라멘트가 권도형 곁을 스쳐 지나가며 교차하고,
+ * 몇은 그 바깥에 떨어져 있다. 균등한 원 배치를 안 쓴 이유는 그게 실제
+ * 우주에서 가장 안 나오는 모양이기 때문이다 — 물질은 실과 마디로 뭉친다.
+ *
+ * **표여야 한다.** 데이터에서 계산하면 갈래가 하나 늘 때마다 은하가 통째로
+ * 움직이고, 그러면 "어제 저기 있던 게 오늘 여기"가 된다. 색(colorOfCategory)
+ * 을 등장 순서와 무관하게 고정한 것과 같은 이유다.
+ *
+ * 순서 = CAT_GROUPS 순서. 단위는 궤도 단위이고, 이웃 간격이 대략 1 이다.
+ */
+const GALAXY_SITES: readonly (readonly [number, number])[] = [
+  [0.62, 0.34], // dev        ┐
+  [1.74, 0.96], // docs       ├ 필라멘트 A — 왼쪽 아래에서 오른쪽 위로
+  [2.72, 1.58], // study      ┘
+  [-0.58, -0.32], // ai       ┐
+  [-1.72, -0.94], // community┘ 같은 실의 반대쪽 끝
+  [-1.54, 1.16], // media     ┐
+  [-0.54, 0.74], // design    ├ 필라멘트 B — A 와 권도형 곁에서 엇갈린다
+  [0.78, -0.72], // life      │
+  [1.76, -1.34], // etc       ┘
+];
 
-/** 축척 상한(기본값의 몇 배). 자리 계산이 최소 거리를 고르게 만든 뒤로는
- *  이 값에 걸릴 일이 거의 없다 — 데이터가 이상할 때를 위한 안전장치로만 둔다. */
-const PACK_MAX = 24;
+/** 은하끼리의 이웃 간격(궤도 단위). 위 표에서 잰 값이다 — 표를 고치면
+ *  여기도 같이 봐야 한다. 은하 반경이 이 값에서 나온다. */
+const GALAXY_GAP = 1.2;
+
+/** 은하 원반의 반경(궤도 단위). 원리 2 그대로. */
+const GALAXY_R = GALAXY_GAP / LAYER_RATIO;
+
+// ── 은하 안 (2·3단계) ──
+
+/** 나선팔 개수. 둘이 고전적인 나선은하 모양이고, 갈래가 적은 은하에서도
+ *  팔 하나에 몇 개씩은 남아 곡선이 읽힌다 — 넷으로 쪼개면 팔마다 한둘이라
+ *  그냥 흩뿌린 것과 구분이 안 된다. */
+const ARMS = 2;
+
+/**
+ * 나선의 감김. 로그 나선 r = r0·e^(bθ) 의 b 이고, **피치각 = atan(b)** 다.
+ * 실제 나선은하가 10~25도라 0.30(약 17도)으로 잡았다.
+ *
+ * b 가 작을수록 한 바퀴 도는 동안 반경이 덜 늘어난다 — 즉 각도를 많이 쓴다.
+ * 그게 원리 3 이 노린 것이다: 같은 면적에 더 많이 들어간다.
+ */
+const ARM_PITCH = 0.3;
+
+/** 팔이 시작하는 반경(원반 반경에 대한 비율). 안쪽은 팽대부(bulge)라
+ *  나선이 없다 — 0 에서 시작하면 중심에서 모든 팔이 한 점으로 모여 엉킨다. */
+const BULGE = 0.18;
+
+/** 팔이 감기는 총 각도(라디안). 팔 끝에서 반경이 딱 원반 끝이 되도록 역산한다 —
+ *  `BULGE·e^(b·θmax) = 1  →  θmax = ln(1/BULGE)/b`. 그래야 팔이 원반을 꽉
+ *  채우고 밖으로도 안 삐져나간다. 지금 값으로 0.91 바퀴다.
+ *  **배치와 그리기가 이 한 값을 같이 쓴다** — 갈리면 별이 팔에서 벗어난다. */
+const ARM_SPAN = Math.log(1 / BULGE) / ARM_PITCH;
+
+/** 팔의 두께(라디안). 팔은 선이 아니라 띠다 — 0 이면 자로 그은 곡선이 되어
+ *  1단계의 격자와 같은 문제(너무 규칙적이라 계기판이 아니라 도표)가 된다. */
+const ARM_WIDTH = 0.55;
+
+/** halo 가 놓이는 반경대(원반 반경에 대한 비율).
+ *  **완결이 안쪽, 방치가 바깥이다.** 둘 다 원반을 떠난 것이지만 같지 않다 —
+ *  끝낸 것은 자리를 잡고 멈춘 것이고, 놓은 것은 흘러나간 것이다.
+ *  예전에는 이 구분을 '중심과의 선이 끊겼나'로 말했다(별자리 선). 그 선은
+ *  버렸고, 이제 얼마나 멀리 나갔느냐가 그 말을 대신한다. */
+const HALO_DONE = [1.08, 1.32] as const;
+const HALO_LEFT = [1.44, 1.78] as const;
+
+/** 은하가 차지하는 가장 바깥(원반 반경에 대한 비율). halo 끝이다 —
+ *  이름표를 어디에 붙일지, 화면 밖 판정을 어디서 자를지가 여기서 나온다. */
+const GALAXY_EDGE = HALO_LEFT[1];
 
 // 위성(경험) 궤도면의 갈래는 outcome 이 정한다. 네 개로 고정된 값이라
 // 나눠도 뭉개지지 않는다 — category 는 LLM 이 자유 텍스트로 쓰는 값이라
@@ -298,23 +369,6 @@ export function groupOfCategory(cat: string) {
   return GROUP_BY_CAT.get(cat) ?? CAT_GROUPS[CAT_GROUPS.length - 1];
 }
 
-/**
- * 별의 방향을 나눈 조각. **분야 묶음이 나눈다. 이 계의 유일한 방향 문법이다.**
- *
- * 예전에는 두 벌이었다 — 별(기억)은 trigger 로 온 원을 여섯 조각, 도는 갈래는
- * 분야로 반원을 여덟 조각. 그래서 축 라벨이 열넷이 되고 NEW_SKILL 옆에 DEV 가
- * 붙었다. 한 계에 어휘가 둘이면 그때부터 방향은 아무 뜻도 못 갖는다.
- *
- * 남긴 쪽은 분야다. 색이 이미 분야이므로 방향과 색이 서로를 설명하고,
- * 카테고리 열셋을 그대로 나누면 조각이 27도라 눈으로 못 읽지만(위성이 45도다)
- * 색이 쓰는 여덟 묶음이면 40도다.
- *
- * 온 원(2π)을 쪼갠다. 별은 안 돌아서 평면 위의 점이 아니라 **중심에서 뻗은
- * 방향 위의 점**이라(theta0=0), θ 와 θ+π 가 화면 반대쪽이다 — 맞은편도
- * 쓸 수 있는 자리다.
- */
-const SECTOR = (Math.PI * 2) / CAT_GROUPS.length;
-
 /** 카테고리 → 색. 등장 순서와 무관하게 언제나 같은 색이다 —
  *  예전에는 화면에 있는 값들을 정렬해 순서대로 팔레트를 나눠줬는데,
  *  값이 하나 늘면 그 뒤가 전부 밀려 어제 외운 색이 오늘 다른 뜻이 됐다. */
@@ -322,8 +376,12 @@ export function colorOfCategory(cat: string): [number, number, number] {
   return groupOfCategory(cat).color;
 }
 
-/** 이 갈래가 어느 방향 조각에 서는가. 색 묶음의 순서가 곧 조각의 순서다. */
-function sectorIndexOf(t: ThreadBody): number {
+/** 이 갈래가 어느 은하에 속하는가. 색 묶음의 순서가 곧 은하의 순서(GALAXY_SITES)다.
+ *
+ *  **방향은 이제 아무 뜻도 없다.** 예전에는 분야가 방향 조각(SECTOR)이었는데,
+ *  분야가 은하가 되면서 그 문법이 통째로 사라졌다 — 분야는 이제 '어느 쪽'이
+ *  아니라 '어디'다. 조각을 나눌 이유도, 축을 그을 이유도 없어졌다. */
+function galaxyIndexOf(t: ThreadBody): number {
   return CAT_GROUPS.indexOf(groupOfCategory(t.category));
 }
 
@@ -372,18 +430,17 @@ function phaseOf(id: string): number {
   return ((h >>> 0) % 100000) / 100000;
 }
 
-// 나이 → 반경. sqrt 다.
+// 나이 → 반경의 절대식(`0.16 + √경과일 × 0.12`)이 여기 있었다. 로그 나선이
+// 대신한다 — 이제 반경은 절대 경과일이 아니라 **그 은하 안에서의 나이 순위**
+// 에서 나오고(spanOf), 그 순위가 나선 위의 θ 가 된다.
 //
-// 원래 log1p 였다. 확대가 없던 시절엔 오래된 것을 안쪽으로 끌어당겨 다 화면에
-// 담아야 했으니 맞는 선택이었는데, 대가가 컸다 — 6개월치로 재보니 최근 30일이
-// 반경의 69% 를 가져가고 나머지 150일이 31% 에 몰렸다. 갈래 131개 중 119개가
-// 바깥 절반에 겹쳤다.
+// 절대식을 버린 이유: 은하마다 시간대가 다르다. 4년 된 분야와 이번 주에 시작한
+// 분야에 같은 자를 대면, 앞쪽은 전부 가장자리에 몰리고 뒤쪽은 전부 중심에
+// 뭉친다 — 은하 안이 텅 비거나 테두리만 찬다. 은하는 저마다 제 시간을 갖는다.
 //
-// 확대가 생겼으니 그렇게까지 누를 이유가 없다. 그렇다고 압축을 아예 빼면
-// (선형) 지금은 제일 고르지만 오래 쓸수록 반대로 뒤집힌다 — 2년 시점에 첫 달이
-// 반경의 4% 로 찌그러진다. 이 지도는 "지금 뭘 붙들고 있나"를 먼저 답해야 하므로
-// 최근을 뭉개는 쪽이 더 나쁘다. sqrt 는 같은 시점에 20% 를 지킨다.
-const radiusOf = (ageDays: number) => 0.16 + Math.sqrt(ageDays) * 0.12;
+// 잃은 것: 은하끼리 나이를 견줄 수 없다("저 분야가 더 오래됐나"). 얻은 것:
+// 어느 은하를 들여다봐도 그 안이 고르게 차 있다. 지도가 먼저 답해야 하는 것은
+// "이 분야 안에서 뭐가 오래된 일인가"라 이쪽이 맞다.
 
 // ── 최근 표식 — 잔광 궤적 ───────────────────────────────
 //
@@ -401,40 +458,30 @@ const radiusOf = (ageDays: number) => 0.16 + Math.sqrt(ageDays) * 0.12;
 // 라디안으로 잰다. 초 단위로 재면 궤도마다 각속도가 달라(케플러) 안쪽 천체는
 // 반 바퀴를 끌고 바깥 천체는 점 하나만 남는다 — 같은 "최근"이 다르게 보인다.
 /**
- * 경험(위성)이 배어 나오기 시작하는 배율과 다 보이는 배율.
- * 계 전체가 보이는 배율에 대한 비율이다(zr).
+ * ── 층이 배어 나오는 배율 (4단계) ──
  *
- * 1.45 였다. 그런데 **별끼리를 견주려고 당기는 구간**이 바로 거기다 —
- * 어느 별이 더 밝고 큰지 보려고 조금 당기면 위성이 벌써 새어 나와서, 견주기
- * 전에 화면이 궤도선으로 덮였다. 위성은 "그 별 안으로 들어갔을 때" 나와야 한다.
+ * **크기에서 유도한다. 손으로 맞춘 값이 없다.**
  *
- * 늦춘다. 1~2.6 은 순수한 별밭이라 밝기와 크기를 마음껏 견줄 수 있고,
- * 그 뒤부터 배어 나온다. 누르면 zoomForStar 가 3.8 이상으로 데려가므로
- * (아래) 클릭 한 번이면 여전히 다 펼쳐진다.
+ * 한때 `R`, `R²` 으로 잡았다. "한 층 내려가는 배율 = LAYER_RATIO"(원리 2)를
+ * 그대로 믿은 것인데 틀렸다 — 원리 2 는 **간격**에 대한 규칙이라 자식 반경은
+ * 부모 *간격*의 1/R 이지 부모 *크기*의 1/R 이 아니다. 코스믹 웹은 은하 간격
+ * (1.2)보다 훨씬 넓게 퍼져 있어서(반경 3.3) 우주/은하 비가 30 이 아니라 80 이
+ * 된다. 그 어긋남 때문에 `R²`(=900)까지 당겨도 항성계가 별 후광 속에 파묻혀
+ * 있었다 — 실제로는 만 배 넘게 당겨야 나오는 자리였다.
+ *
+ * 그래서 배율을 **"그게 화면을 채우는 지점"** 으로 직접 푼다. 반경 s 인 것은
+ * `zr = FILL·maxR/s` 에서 화면을 채운다(fitZoom 의 정의에서 나온다).
+ * 배어 나오기 시작하는 곳은 그 REVEAL_ONSET 배 — 문턱이 아니라 경사라,
+ * 다 나오기 전에 이미 "저기 뭔가 있다"가 읽힌다.
  */
-const SAT_REVEAL_FROM = 2.6;
-const SAT_REVEAL_TO = 3.8;
+const FILL = 0.8;
+const REVEAL_ONSET = 0.25;
 
-/** 위성계 반경이 화면 짧은 변에서 차지하는 몫. 위성이 많을수록 조금 넓힌다 —
- *  열한 개를 두 개와 같은 반경에 밀어 넣으면 궤도가 안 보이고 덩어리가 된다.
- *  상한을 두는 이유는 별끼리 위성계가 겹치기 시작하면 어느 별의 것인지 모르게
- *  되기 때문이다. 배율은 곱하는 쪽(호출부)에서 붙인다. */
 /** id → 천체. */
 function dominantBody(id: string | null, threads: ThreadBody[]): OrbitBody | null {
   if (!id) return null;
   return threads.find((t) => t.id === id) ?? null;
 }
-
-const satFieldF = (n: number) => Math.min(0.115, 0.045 + n * 0.007);
-
-/** 별 하나를 화면에 꽉 채우는 배율. 위성이 적은 별은 더 당겨야 같은 크기로
- *  보인다 — 눌렀을 때 어느 별이든 같은 크기로 열려야 "들어왔다"가 일정하다.
- *
- *  하한이 `SAT_REVEAL_TO` 여야 한다. 기하학적으로는 위성이 많은 별일수록 덜
- *  당겨도 되는데(0.3/satFieldF 가 2.6 까지 내려간다), 그 배율에서는 위성이
- *  아직 다 안 드러난다 — 눌러서 들어갔는데 안이 반쯤 비어 보이게 된다.
- *  위성계가 화면보다 조금 커지는 쪽이 낫다. */
-const zoomForStar = (n: number) => Math.max(SAT_REVEAL_TO, Math.min(11, 0.3 / satFieldF(n)));
 
 /** 위성계의 기준 반경(펼친 뒤). 계 화면의 작은 위성계는 이보다 훨씬 작으므로,
  *  위성 크기를 그 비율로 줄인다 — 안 줄이면 반경 60px 짜리 계 안에 반경 10px
@@ -456,45 +503,20 @@ const satScaleOf = (R: number) => Math.max(0.42, Math.min(1, Math.sqrt(R / SAT_R
 const SIZE_MIN = 3.2;
 const SIZE_MAX = 13;
 
-/** 조각 안에서 별을 흩뿌리는 폭 — 조각 폭에 대한 비율이다. 축을 가운데 두고
- *  ±절반씩 쓴다. 나머지(1-이 값)는 옆 조각과의 여백으로 남아, 얼마를 흩든
- *  **다른 분야의 자리를 절대 침범하지 않는다.**
- *
- *  각도는 조각 안에서 아무 뜻도 없는 자유 축이라(뜻은 조각 전체가 갖는다)
- *  여기서 흩는 건 공짜다 — 반면 반경은 경과일이라 흩을수록 뜻이 깎인다.
- *  그래서 흩뿌림을 각도 쪽에 몰아준다.
- *  0.6 이면 40도 조각에서 ±12도를 쓰고 16도가 여백으로 남는다. */
-const STAR_FILL = 0.6;
-
-/** 반경 쪽 흔들림 — 이웃 간격(STAR_SEP)에 대한 비율. 최소 간격 때문에 같은 날
- *  시작한 갈래들이 자로 잰 듯 균등하게 늘어서는 걸 깬다. 1 보다 작아야 한다.
- *  넘으면 흔들림이 간격을 먹어 다시 겹친다. */
-const STAR_RADIAL_JITTER = 0.5;
-
-/** 이웃한 별 사이의 간격(궤도 단위). **한 값이 두 방향을 다 맡는다** —
- *  같은 각도 자리에 놓인 것끼리의 반경 간격이자, 옆 자리로 비켜설 거리다.
- *  둘을 같은 값으로 두어야 최소 거리가 계 전체에서 하나로 수렴하고,
- *  그래야 "가장 빽빽한 한 쌍"이 축척을 혼자 끌고 가지 않는다. */
-const STAR_SEP = 0.15;
-
-/** 조각을 가로지르는 각도 자리 수. 반경 순으로 훑으며 이 자리들을 번갈아 쓴다.
- *  많을수록 부챗살처럼 벌어지고 반경을 밀 일이 줄지만, 너무 많으면 조각 안이
- *  격자처럼 보인다. */
-const STAR_SLOTS = 5;
-
 /**
  * 별은 배율을 따라 같이 커진다.
  *
  * 위성(경험)은 제 궤도 반경에 맞춰 커지다가 satScaleOf 의 상한에서 멈춘다.
  * 별을 고정 크기로 두면 확대할수록 그 차이가 좁혀져서, 다 당겼을 때 별이
  * 제 위성들과 같은 크기가 된다 — "누가 중심인가"가 화면에서 뒤집힌다.
- * (실측: 배율 3 에서 별 반경 56px, 가장 큰 위성 44px.)
  *
- * 계 화면(배율 1)에서는 1 이라 별자리 모양은 한 칸도 안 바뀐다.
- * 제곱근으로 누르고 상한을 둔다 — 배율에 그대로 비례시키면 다 당겼을 때
+ * 은하 안에 막 들어선 배율(zr≈R)에서 1 이 되게 맞춘다 — 거기가 별밭을
+ * 견주는 자리라, 그 화면의 크기가 기준이어야 한다.
+ * 제곱근으로 누르고 상한을 둔다: 배율에 그대로 비례시키면 다 당겼을 때
  * 별 하나가 화면을 통째로 덮는다.
  */
-const starGrowOf = (zoom: number) => Math.min(2.4, Math.max(0.28, Math.sqrt(zoom)));
+const starGrowOf = (zr: number, starLayerZoom: number) =>
+  Math.min(2.4, Math.max(0.28, Math.sqrt(zr / starLayerZoom)));
 
 /** 광도가 후광을 얼마나 번지게 하나. 심(질량)은 안 건드린다 — drawStar 참고.
  *  크기 하한(별이 제 위성보다 커야 한다)이 이 값을 되나눠야 해서 밖으로 뺐다. */
@@ -563,15 +585,17 @@ const pullAt = (t: number) => Math.pow(1 - Math.min(1, Math.max(0, t)), 0.45);
 // 궤도면을 위에서 살짝 기울여 본다. 3D 를 쓰지 않고 깊이를 만드는 방법.
 const FLATTEN = 0.46;
 
-/** 계에 놓인 별 하나. **안 돈다** — e·omega·n 이 전부 0 이고, 자리는
- *  `a × (cos plane, sin plane)` 로 고정이다. 도는 것은 위성뿐이라 궤도 요소는
- *  위성 층(Sat)에만 남아 있다. */
+/** 계에 놓인 별 하나. **안 돈다** — 자리가 고정이고 도는 것은 위성뿐이라
+ *  궤도 요소는 위성 층(Sat)에만 남아 있다.
+ *
+ *  극좌표(a·plane)였다가 직교좌표가 됐다. 분야가 은하가 되면서 천체가 원점
+ *  하나를 도는 게 아니라 **저마다 제 은하 중심 곁**에 놓이기 때문이다 —
+ *  중심이 여럿이면 극좌표로는 표현이 안 된다. */
 type Elem = {
   id: string;
-  /** 중심에서의 거리(궤도 단위) */
-  a: number;
-  /** 중심에서 뻗은 방향. 분야 조각 안의 자리다 */
-  plane: number;
+  /** 궤도 단위 좌표. 원점은 권도형이다. */
+  x: number;
+  y: number;
   /** 광도 — 남은 기억의 중요도. 알파에 곱해진다 */
   lum: number;
   size: number;
@@ -726,82 +750,126 @@ export function OrbitalMap({
     const sizeOfMass = (n: number) =>
       SIZE_MIN + (SIZE_MAX - SIZE_MIN) * massRatio(Math.log1p(n));
 
-    // 별자리가 시작하는 곳. 상수다 — 근거는 STAR_BASE 주석에.
-    const starBase = STAR_BASE;
+    // ══════════════════════════════════════════════════════
+    // 은하 — 분야 하나가 은하 하나 (2·3·5단계)
+    // ══════════════════════════════════════════════════════
+    //
+    // 예전에는 분야가 **방향**이었다. 중심에서 뻗은 40도 조각 하나가 분야
+    // 하나였고, 별은 그 안에서 자리를 다퉜다. 그게 격자를 만들었다 —
+    // 각도 자리 다섯 개(STAR_SLOTS)를 반경 순으로 번갈아 쓰니 별이 많아지면
+    // 행과 열이 눈에 보였다.
+    //
+    // 조각 안에서는 나선을 감을 수가 없다. 로그 나선의 힘은 **각도를 많이
+    // 쓴다**는 데 있는데(원리 3) 40도로는 감을 각도가 없다. 그래서 분야를
+    // 방향이 아니라 **자리**로 옮긴다 — 은하다. 은하 하나를 얻으면 그 안에서
+    // 온 원을 다 쓸 수 있고, 나선이 나선이 된다.
+    //
+    // 방향 문법은 여기서 완전히 사라진다. 조각도 축도 없다.
 
-    // ── 조각 안에 별 놓기 ──
-    //
-    // 각도와 반경을 **같이** 정한다. 따로 정하면 안 되는 이유가 실측으로
-    // 드러났다: 6개월치를 넣었더니 한 조각에 열몇 개가 몰렸는데, 각도는 해시라
-    // 겹치고 그 겹침을 반경 쪽 최소 간격이 혼자 감당했다. 밀린 것이 다음 것을
-    // 또 밀어 사슬이 폭주했고(마지막 별이 시작 반경의 다섯 배 밖), maxA 가
-    // 그만큼 커지면서 축척이 무너져 계 전체가 가운데 작은 덩어리로 뭉갰다.
-    //
-    // 조각 폭이 아직 통째로 남아 있는데 반경만 밀어낸 게 잘못이었다. 자리를
-    // 각도로 먼저 갈라 쓰고, 반경은 **같은 각도 자리에 놓인 것끼리만**
-    // 최소 간격을 건다.
-    const starA = new Map<string, number>();
-    const starPlane = new Map<string, number>();
+    /** 화면에 실제로 올라온 은하. 갈래가 하나도 없는 분야는 은하가 없다 —
+     *  빈 자리를 그리면 "여기 뭔가 있었나"가 되고, 색 범례도 그렇게 정리했다. */
+    type Galaxy = {
+      key: string;
+      label: string;
+      /** 궤도 단위 좌표. GALAXY_SITES 에서 그대로 온다 — 데이터에 안 흔들린다. */
+      x: number;
+      y: number;
+      color: [number, number, number];
+      members: ThreadBody[];
+      /** 그중 기억이 남은 것 */
+      kept: number;
+    };
+
+    const galaxies: Galaxy[] = [];
     {
-      // 묶는 기준은 카테고리가 아니라 **조각이 실제로 쓰는 칸**(색 묶음)이다.
-      // 목록에 없는 category 는 전부 etc 칸으로 떨어지므로(같은 줄에 선다),
-      // 카테고리로 묶으면 같은 줄에 있는 것들이 다른 무리로 갈린다.
-      const byAxis = new Map<number, ThreadBody[]>();
+      const byGalaxy = new Map<number, ThreadBody[]>();
       for (const t of threads) {
-        const key = sectorIndexOf(t);
-        const list = byAxis.get(key) ?? [];
+        const i = galaxyIndexOf(t);
+        const list = byGalaxy.get(i) ?? [];
         list.push(t);
-        byAxis.set(key, list);
+        byGalaxy.set(i, list);
       }
-      for (const [key, list] of byAxis) {
-        const base = key * SECTOR;
-        // 안쪽(최근)부터. 동률이면 id 로 갈라 렌더마다 순서가 안 바뀌게 한다.
-        const rBase = (t: ThreadBody) =>
-          radiusOf(t.ageDays) + (phaseOf(`${t.id}r`) - 0.5) * STAR_SEP * STAR_RADIAL_JITTER;
-        const sorted = [...list].sort((x, y) => rBase(x) - rBase(y) || x.id.localeCompare(y.id));
+      for (const [i, members] of [...byGalaxy].sort((a, b) => a[0] - b[0])) {
+        const g = CAT_GROUPS[i] ?? CAT_GROUPS[CAT_GROUPS.length - 1];
+        const site = GALAXY_SITES[i] ?? GALAXY_SITES[GALAXY_SITES.length - 1];
+        galaxies.push({
+          key: g.key,
+          label: g.label,
+          x: site[0],
+          y: site[1],
+          color: g.color,
+          members,
+          kept: members.filter((t) => t.memory != null).length,
+        });
+      }
+    }
+    const galaxyByKey = new Map(galaxies.map((g) => [g.key, g]));
 
-        // 각도 자리를 번갈아 쓴다. 반경 순으로 훑으며 자리를 옮겨가므로,
-        // 같은 자리에 다시 오는 것은 STAR_SLOTS 개 뒤 — 그만큼 반경이
-        // 벌어진 뒤라 애초에 안 겹친다.
-        //
-        // **자리를 각도가 아니라 거리로 잡는다.** 예전에는 조각 폭을 각도로
-        // 5등분했는데, 호 길이는 반경 × 각도라 같은 각도라도 안쪽에서 훨씬
-        // 좁다(반경 1 에서 4도는 0.07단위, 반경 3 에서는 0.21단위).
-        // 그래서 가장 빽빽한 쌍이 늘 안쪽에서 나왔고, 축척을 그 한 쌍이
-        // 끌고 가면서 바깥은 필요 이상으로 멀어지고 안쪽은 상한에 걸려
-        // 겹쳤다 — 최악이 한 군데에 몰리는 구조였다.
-        //
-        // 옆으로 벌리는 거리를 상수(STAR_SEP)로 두고 각도는 반경으로 나눠
-        // 역산한다. 그러면 안이든 밖이든 이웃 간격이 같고, 최소 거리가
-        // 계 전체에서 하나의 값으로 수렴한다. 조각 폭을 넘지는 않게 가둔다.
-        const half = (SECTOR * STAR_FILL) / 2;
-        const prevPerSlot = new Array<number>(STAR_SLOTS).fill(-Infinity);
-        sorted.forEach((m, i) => {
-          const slot = i % STAR_SLOTS;
-          const t = slot / Math.max(1, STAR_SLOTS - 1);
-          const a = Math.max(starBase + rBase(m), prevPerSlot[slot] + STAR_SEP);
-          starA.set(m.id, a);
-          prevPerSlot[slot] = a;
+    // ── 은하 안에 갈래 놓기 ──
+    //
+    // 원반(진행 중)과 halo(완결·방치)로 갈린다. **같은 은하 안에서 두 층이다.**
+    //
+    //   원반  나선팔 위. 안쪽이 최근, 팔을 따라 나갈수록 오래됐다.
+    //   halo  팔을 떠나 구형으로 흩어진다. 완결이 안쪽, 방치가 바깥.
+    //
+    // 이게 예전 '별자리 선'이 하던 말을 대신한다(계획서: 나선팔과 halo 이주가
+    // 대신한다). 선이 끊겼나로 말하던 것을 이제 **어느 층에 있느냐**로 말한다 —
+    // 선은 중심이 하나일 때만 성립하는 문법이라 은하가 여덟이면 못 쓴다.
+    //
+    // 나이는 **그 은하 안에서의 몫**으로 잰다. 절대 경과일을 쓰면 오래된 분야는
+    // 전부 바깥에 몰리고 새 분야는 전부 중심에 몰려, 은하마다 안이 텅 비거나
+    // 가장자리만 찬다. 은하는 저마다 제 시간을 갖는다.
+    const starXY = new Map<string, { x: number; y: number }>();
+    for (const g of galaxies) {
+      // **원반과 halo 가 각자 제 자를 쓴다.** 은하 전체로 한 번에 재면 안 된다 —
+      // 진행 중인 것은 대개 최근이라 나이 순위의 아래쪽에 몰리고, 그러면 원반의
+      // 별이 전부 팽대부 언저리에 뭉쳐 나선이 감기다 만다(실측: DEV 은하 37개
+      // 중 진행 중이 12개였는데 전부 안쪽 1/3 에 들어갔다).
+      // 층마다 제 안에서 순위를 매기면 어느 층이든 있는 폭을 다 쓴다 —
+      // 광도·질량을 관측 범위로 정규화한 것과 같은 규칙이다.
+      const disc = g.members.filter((t) => t.status === "active");
+      const halo = g.members.filter((t) => t.status !== "active");
+      const discAge = spanOf(disc.length > 0 ? disc.map((t) => Math.sqrt(t.ageDays)) : [0]);
+      const haloAge = spanOf(halo.length > 0 ? halo.map((t) => Math.sqrt(t.ageDays)) : [0]);
+      for (const t of g.members) {
+        const inDisc = t.status === "active";
+        const at = (inDisc ? discAge : haloAge)(Math.sqrt(t.ageDays));
 
-          // 옆으로 얼마나 비켜설까 — 거리로 정하고 각도로 옮긴다.
-          const lateral = (t - 0.5) * STAR_SEP * (STAR_SLOTS - 1);
-          // 자리를 정확히 맞추면 격자로 보인다. 자리 폭 안에서만 조금 튼다.
-          const jitter = (phaseOf(m.id) - 0.5) * STAR_SEP * 0.5;
-          const off = (lateral + jitter) / a;
-          starPlane.set(m.id, base + Math.max(-half, Math.min(half, off)));
+        let r: number;
+        let th: number;
+        if (inDisc) {
+          // 로그 나선 r = r0·e^(bθ). θ 를 나이에 매달면 반경이 저절로 따라온다.
+          const arm = Math.floor(phaseOf(`${t.id}arm`) * ARMS) % ARMS;
+          // 팔은 선이 아니라 띠다. 안 흩으면 자로 그은 곡선이 되어 1단계의
+          // 격자와 같은 문제가 된다 — 규칙적이면 계기판이 아니라 도표다.
+          const spread = (phaseOf(`${t.id}w`) - 0.5) * ARM_WIDTH;
+          th = at * ARM_SPAN + spread + (arm * Math.PI * 2) / ARMS;
+          r = BULGE * Math.exp(ARM_PITCH * (at * ARM_SPAN));
+          // 반경 쪽도 조금 흩는다. 팔의 두께는 각도만으로는 안 나온다 —
+          // 바깥으로 갈수록 같은 각도가 더 넓어져 안쪽만 얇아 보인다.
+          r *= 1 + (phaseOf(`${t.id}rr`) - 0.5) * 0.16;
+        } else {
+          // halo — 팔을 떠났다. 각도는 뜻이 없다(궤도를 벗어난 것이니까).
+          // 반경만 말한다: 끝낸 것은 가까이 멈추고, 놓은 것은 흘러나간다.
+          const band = t.status === "completed" ? HALO_DONE : HALO_LEFT;
+          th = phaseOf(`${t.id}h`) * Math.PI * 2;
+          r = band[0] + (band[1] - band[0]) * at;
+        }
+        starXY.set(t.id, {
+          x: g.x + Math.cos(th) * r * GALAXY_R,
+          // 원반을 위에서 기울여 본다. 위성 층과 같은 투영이라 두 층이 한
+          // 공간에 있는 것으로 읽힌다 — 정면으로 보면 그냥 점 무리다.
+          y: g.y + Math.sin(th) * r * GALAXY_R * FLATTEN,
         });
       }
     }
 
     const els: Elem[] = threads.map((t) => {
-      // 반경은 started_at 에서 나온다 — "시작한 지 얼마나 됐나". 한번 서면
-      // 안쪽으로 되돌아오지 않고 나이를 따라 밖으로만 간다. last_activity_at
-      // 으로 바꾸는 안은 검토했고 안 하기로 했다(HANDOFF「정한 것」).
+      const at = starXY.get(t.id) ?? { x: 0, y: 0 };
       return {
         id: t.id,
-        a: starA.get(t.id) ?? starBase + radiusOf(t.ageDays),
-        // 자리는 `a × (cos plane, sin plane)`. 조각(분야) 안의 한 점이다.
-        plane: starPlane.get(t.id) ?? sectorIndexOf(t) * SECTOR,
+        x: at.x,
+        y: at.y,
         lum: lumOf(t),
         color: colorOf(t),
         size: sizeOfMass(t.experienceCount),
@@ -809,40 +877,38 @@ export function OrbitalMap({
       };
     });
 
-    // ── 겹치지 않을 축척을 데이터에서 역산한다 ──
-    //
-    // 축척을 정하는 방식이 세 번 바뀌었다. 셋 다 이유가 있었다.
-    //   1) maxA 로 나눠 전부 화면에 넣기 — 데이터 2배면 축척 절반. 6개월치에
-    //      계가 가운데 덩어리로 뭉갰다.
-    //   2) 상수(화면 짧은 변 × 0.27) — 데이터에 안 흔들리지만, 한 조각에 별이
-    //      몰리면 그 안에서는 여전히 겹친다. 무엇을 보고 있는지 분간이 안 된다.
-    //   3) 지금 — **가장 빽빽한 한 쌍**을 찾아, 그 둘이 안 겹칠 만큼으로 잡는다.
-    //
-    // 별은 안 돈다. 그래서 자리가 `a × (cos plane, sin plane)` 로 고정이고,
-    // 쌍마다 거리를 정확히 잴 수 있다. 크기(size)는 경험 수에서 나온 px 값이라
-    // 축척과 무관하다 — 순환이 없다.
-    //
-    //   필요한 축척 = (두 후광 반지름의 합 × 여유) / 두 별 사이 거리(궤도 단위)
-    //
-    // 가장 큰 값을 고르면 나머지는 저절로 만족한다. 데이터가 빽빽해질수록
-    // 계가 커지고, 그만큼 물러나서 본다 — 안쪽 생김새는 안 바뀐다.
-    //
-    // 131개면 8515쌍이다. 이펙트당 한 번이라 프레임에는 안 실린다.
-    let unitNeed = 0;
-    for (let i = 0; i < els.length; i++) {
-      const A = els[i];
-      const ax = A.a * Math.cos(A.plane);
-      const ay = A.a * Math.sin(A.plane);
-      for (let j = i + 1; j < els.length; j++) {
-        const B = els[j];
-        const d = Math.hypot(ax - B.a * Math.cos(B.plane), ay - B.a * Math.sin(B.plane));
-        if (d < 1e-6) continue;
-        unitNeed = Math.max(unitNeed, ((A.size + B.size) * 3.2 * PACK_MARGIN) / d);
+    /** 우주의 크기(궤도 단위). 은하 자리 표에서 나오므로 **데이터에 안 흔들린다** —
+     *  갈래가 백 개 늘어도 우주는 그대로고, 은하 안이 빽빽해질 뿐이다. */
+    const maxR = galaxies.reduce(
+      (mx, g) => Math.max(mx, Math.hypot(g.x, g.y) + GALAXY_R * GALAXY_EDGE),
+      0.5,
+    );
+
+    /** 코스믹 웹의 실. 은하마다 가장 가까운 이웃 하나씩 이어 마디를 만든다 —
+     *  전부 이으면 그물이 아니라 덩어리가 되고, 안 이으면 흩뿌린 점이 된다.
+     *  중복(A→B 와 B→A)은 한 번만 그린다. */
+    const filaments: [Galaxy, Galaxy][] = [];
+    for (let i = 0; i < galaxies.length; i++) {
+      let best = -1;
+      let bestD = Infinity;
+      for (let j = 0; j < galaxies.length; j++) {
+        if (i === j) continue;
+        const d = Math.hypot(galaxies[i].x - galaxies[j].x, galaxies[i].y - galaxies[j].y);
+        if (d < bestD) {
+          bestD = d;
+          best = j;
+        }
+      }
+      if (best > i) filaments.push([galaxies[i], galaxies[best]]);
+      else if (best >= 0 && best < i) {
+        const dup = filaments.some(
+          ([a, b]) =>
+            (a === galaxies[i] && b === galaxies[best]) ||
+            (b === galaxies[i] && a === galaxies[best]),
+        );
+        if (!dup) filaments.push([galaxies[best], galaxies[i]]);
       }
     }
-
-    // 천체가 하나도 없으면 계가 없다. 축척이 0 으로 무너지지 않게 바닥값을 둔다.
-    const maxA = els.reduce((mx, e) => Math.max(mx, e.a), 0.5);
 
     /** 방향 축의 이름. 그 방향이 무슨 뜻인지를 화면에 적어주는 값이다.
      *  **어휘가 하나다** — 분야. 색 범례와 같은 단어라 서로를 설명한다. */
@@ -946,28 +1012,26 @@ export function OrbitalMap({
       canvas!.style.width = `${w}px`;
       canvas!.style.height = `${h}px`;
       ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // 궤도면이 제각기 기울어 있으므로 어떤 궤도든 세로로 설 수 있다.
-      // FLATTEN 을 믿고 세로 여유를 크게 잡으면 화면 밖으로 나간다.
-      // 데이터가 성길 때는 화면을 채우는 쪽이, 빽빽할 때는 안 겹치는 쪽이 이긴다.
+      // ── 축척 ──
       //
-      // **상한이 반드시 있어야 한다.** 가장 빽빽한 한 쌍이 전체를 끌고 가는
-      // 구조라, 우연히 거의 포개진 쌍이 하나만 있어도(해시가 같은 자리를
-      // 뽑으면 그렇게 된다) 축척이 수만 px/단위로 튄다 — 실측으로 다 물러나도
-      // 화면에 권도형만 남았다. 그 한 쌍을 위해 계 전체를 못 보게 되는 건
-      // 거래가 안 맞는다. 상한을 넘는 쌍은 겹친 채로 둔다.
-      const floor = Math.min(w, h) * UNIT_FRAC;
-      baseUnit = Math.min(Math.max(unitNeed, floor), floor * PACK_MAX);
+      // **역산이 사라졌다.** 예전에는 가장 빽빽한 한 쌍을 찾아 그 둘이 안
+      // 겹칠 만큼 축척을 키웠는데(unitNeed · PACK_MARGIN · PACK_MAX), 그건
+      // 겹침을 사후에 미는 일이었다. 배치가 원리 2(힐 구면)를 지키면 애초에
+      // 안 겹치므로 그 계산이 통째로 필요 없다. 그리고 그 역산에는 병이
+      // 있었다 — 우연히 거의 포개진 쌍이 하나만 있어도 축척이 수만 px/단위로
+      // 튀어서, 다 물러나도 화면에 권도형만 남았다.
+      //
+      // 이제 궤도 단위는 그냥 화면 짧은 변에 매단다. 여기서 나온 baseUnit 은
+      // 아래 fitZoom 이 다시 나눠 쓰므로 절대값 자체는 뜻이 없다 —
+      // 화면 크기에 따라 계가 통째로 커지고 작아지기만 하면 된다.
+      baseUnit = Math.min(w, h);
 
-      // ── 기본 배율은 "계 전체" 다 ──
+      // ── 기본 배율은 "우주 전체" 다 ──
       //
-      // 축척을 데이터에서 역산하면 계가 화면보다 훨씬 커진다(실측: 별 91개에
-      // 바깥 반경 4666px, 화면 반높이는 382px). 배율 1 에서 시작하면 가장
-      // 안쪽 별조차 화면 밖이라 **권도형만 덩그러니 뜬다.**
-      //
-      // 배율 1 의 뜻을 바꾼다: "px 그대로"가 아니라 "계가 화면에 들어오는 배율".
-      // 확대·축소는 그 위에 얹힌다. 물러나기 하한도 이 값에 매달아, 어떤
-      // 데이터에서도 한 번은 전체를 볼 수 있게 한다.
-      fitZoom = Math.min(1, (Math.min(w, h) * 0.44) / Math.max(1, maxA * baseUnit));
+      // 배율 1 의 뜻: "px 그대로"가 아니라 **우주가 화면에 들어오는 배율**.
+      // 확대·축소는 그 위에 얹히고, 층이 배어 나오는 문턱도 전부 이 값에
+      // 대한 비율(zr)로 잰다 — 그래야 창 크기나 데이터가 문턱을 안 흔든다.
+      fitZoom = (Math.min(w, h) * 0.44) / Math.max(1e-6, maxR * baseUnit);
       if (!fitted) {
         fitted = true;
         zoom = zoomTarget = fitZoom;
@@ -984,7 +1048,7 @@ export function OrbitalMap({
       // 가장 먼 천체까지는 갈 수 있어야 한다. 고정 축척이라 계가 화면보다
       // 커졌으므로, 예전 기준("바깥 궤도가 화면에서 안 사라지는 선")은 아예
       // 성립하지 않는다 — 그 선은 이미 화면 밖이다.
-      const radX = maxA * baseUnit * z;
+      const radX = maxR * baseUnit * z;
       return {
         x: radX + w / 2,
         y: radX * FLATTEN + h / 2,
@@ -998,15 +1062,43 @@ export function OrbitalMap({
       cy = h / 2 + offY;
     }
 
-    /** 별의 화면 좌표. **시간을 안 받는다** — 별은 안 돈다.
+    /** 궤도 단위 좌표 → 화면 좌표. 카메라(cx·cy·unit) 하나만 걸린다. */
+    const worldX = (x: number) => cx + x * unit;
+    const worldY = (y: number) => cy + y * unit;
+
+    /**
+     * 항성계의 반경(궤도 단위) — **원리 2 그대로**(4단계).
      *
-     *  중심에서 plane 방향으로 a 만큼 나간 점. 눌리지 않은 온전한 원 위다 —
-     *  FLATTEN 은 궤도면을 위에서 기울여 보느라 생기는 것이라 도는 것(위성)
-     *  에만 걸린다. 축척 역산(unitNeed)도 이 좌표로 거리를 재므로 둘이 어긋나면
-     *  겹침 계산이 통째로 틀어진다. */
+     *   은하 안 별끼리의 간격 = 원반 반경 / √(별 수)   (넓이를 고르게 나눈 값)
+     *   항성계 반경          = 그 간격 / LAYER_RATIO
+     *
+     * 예전에는 `min(w,h) × satFieldF(n) × zr` 이었다 — 위성 수에 따라 손으로
+     * 맞춘 곡선에 화면 크기를 곱한 값이라, 층 사이의 관계가 아니라 그냥 숫자
+     * 였다. 이제는 은하가 커지면 항성계도 같이 커지고, 별이 빽빽해지면 같이
+     * 줄어든다. 문턱(SAT_REVEAL)도 같은 비율에서 나오므로 서로 안 어긋난다.
+     *
+     * 별 수는 계 전체에서 가장 붐비는 은하를 기준으로 잡는다 — 은하마다
+     * 다른 크기로 그리면 "이 별이 크다"가 은하마다 다른 뜻이 된다.
+     */
+    const densest = galaxies.reduce((mx, g) => Math.max(mx, g.members.length), 1);
+    const starGap = (GALAXY_R * GALAXY_EDGE) / Math.sqrt(Math.max(4, densest));
+    const satFieldR = starGap / LAYER_RATIO;
+
+    // ── 층 배율 ──
+    //
+    // 반경 s 인 것이 화면을 채우는 배율. fitZoom 이 "우주(maxR)가 화면의
+    // FILL 만큼을 덮는 배율"로 정의되므로, 같은 몫을 s 가 덮으려면
+    // zr = FILL·maxR/s 다. 크기에서 바로 나오니 손으로 맞출 값이 없다.
+    const fillZoom = (s: number) => (FILL * maxR) / Math.max(1e-9, s);
+    /** 은하 하나가 화면을 채우는 배율 — 여기서 별이 다 드러난다 */
+    const galaxyLayer = fillZoom(GALAXY_R * GALAXY_EDGE);
+    /** 항성계 하나가 화면을 채우는 배율 — 여기서 경험이 다 드러난다 */
+    const starLayer = fillZoom(satFieldR);
+
+    /** 별의 화면 좌표. **시간을 안 받는다** — 별은 안 돈다.
+     *  기울임(FLATTEN)은 은하 원반을 놓을 때 이미 y 에 먹여뒀다(starXY). */
     function orbitPoint(el: Elem) {
-      const r = el.a * unit;
-      return { x: cx + r * Math.cos(el.plane), y: cy + r * Math.sin(el.plane), theta: 0 };
+      return { x: worldX(el.x), y: worldY(el.y), theta: 0 };
     }
 
     // ── 위성(경험) 배치 ──
@@ -1620,17 +1712,21 @@ export function OrbitalMap({
       ctx!.clearRect(0, 0, w, h);
       hit.clear();
 
-      // 경험이 배어 나오는 정도. 계 화면은 별자리만 보여주고, 당겨야 그 안이
-      // 보인다 — 확대가 곧 "안을 들여다본다"라는 뜻을 갖는다.
-      // 1.0(기본 배율)에서 0, SAT_REVEAL_TO 에서 1. 문턱이 아니라 경사라
-      // 휠을 굴리는 동안 서서히 배어 나온다.
-      // 문턱을 절대 배율로 박으면 안 된다 — 기본 배율이 데이터마다 다르다.
-      // "전체에서 얼마나 당겼나"로 잰다.
+      // ── 지금 어느 층을 보고 있나 ──
+      //
+      // 확대가 곧 "안을 들여다본다"라는 뜻을 갖는다. 층마다 배어 나오는
+      // 구간이 있고, 그 구간은 전부 LAYER_RATIO 에서 나온다(4단계).
+      // 문턱이 아니라 경사라 휠을 굴리는 동안 서서히 나타난다.
+      //
+      // 절대 배율로 박으면 안 된다 — 창 크기마다 기본 배율이 다르다.
+      // "우주 전체에서 얼마나 당겼나"(zr)로 잰다.
       const zr = zoom / Math.max(1e-6, fitZoom);
-      const satReveal = Math.max(
-        0,
-        Math.min(1, (zr - SAT_REVEAL_FROM) / (SAT_REVEAL_TO - SAT_REVEAL_FROM)),
-      );
+      const ramp = (from: number, to: number) =>
+        Math.max(0, Math.min(1, (zr - from) / (to - from)));
+      /** 은하 안의 별이 드러난 정도 */
+      const starReveal = ramp(galaxyLayer * REVEAL_ONSET, galaxyLayer);
+      /** 별 안의 경험이 드러난 정도 */
+      const satReveal = ramp(starLayer * REVEAL_ONSET, starLayer);
 
       /**
        * 화면에 실제로 쓰는 광도. **위성이 나올수록 1 로 올라간다.**
@@ -1695,7 +1791,7 @@ export function OrbitalMap({
         // 저도 커져야 "누가 중심인가"가 안 뒤집힌다.
         // 중심(권도형)은 안 커진다. 당겨 들어갔다는 건 중심을 벗어났다는 뜻이라
         // 어차피 화면 밖이고, 커지면 그 계의 주인과 크기를 다툰다.
-        const starGrow = starGrowOf(zr);
+        const starGrow = starGrowOf(zr, galaxyLayer);
         /** 질량에서 나온 크기. 아래에서 위성보다 작아지지 않게 한 번 더 걸러진다. */
         const massSizeOf = (el: Elem) =>
           el.mem.referencedIds.length > 0 ? el.size * starGrow : el.size;
@@ -1724,11 +1820,11 @@ export function OrbitalMap({
                     !(foc && el.id === foc.id) &&
                     // 위성계 반경만큼 더 잡아준다 — 별은 밖인데 위성은 안으로
                     // 들어와 있을 수 있다.
-                    onScreen(p.x, p.y, Math.min(w, h) * 0.13 * zr + 60),
+                    onScreen(p.x, p.y, satFieldR * unit + 60),
                 )
                 .map(({ el, p }) => {
                   const refs = refsOf(el.mem);
-                  const R = Math.min(w, h) * satFieldF(refs.length) * zr;
+                  const R = satFieldR * unit;
                   return { el, p, R, sats: layoutSats(refs, el.mem.sourceIds, R, p.x, p.y, ts) };
                 })
             : [];
@@ -1829,43 +1925,121 @@ export function OrbitalMap({
         const otherDim = inStar ? 1 - 0.86 * satReveal : 1;
         const dimOf = (id: string) => (inStar && id !== inStar.el.id ? otherDim : 1);
 
-        // ── 축은 한 벌뿐이다 ──
+        // ══════════════════════════════════════════════════
+        // 층 0 — 우주: 은하와 그 사이를 잇는 실
+        // ══════════════════════════════════════════════════
         //
-        // 예전에는 두 벌이었다. 기억의 축(trigger)과 갈래의 축(분야)을 배율로
-        // 건너다녔는데, 그건 천체가 둘이라 어휘도 둘이었기 때문이다 — 합쳐
-        // 그렸더니 라벨이 열넷이 되고 NEW_SKILL 옆에 DEV 가 붙어서, 층으로
-        // 나눠 하나씩 보여주는 게 그때 할 수 있는 최선이었다.
+        // 예전에는 여기에 **축**이 있었다. 중심에서 뻗은 점선에 분야 이름을
+        // 붙여 "이 방향이 무엇인가"를 적었다. 분야가 은하가 되면서 방향이
+        // 아무 뜻도 안 갖게 됐고, 축도 같이 사라졌다 — 이제 분야는 '어느 쪽'이
+        // 아니라 '어디'라, 이름표를 그 자리에 직접 붙이면 된다.
         //
-        // 천체가 하나가 되면서 어휘도 하나(분야)가 됐다. 층을 나눌 이유가
-        // 사라졌고, 축은 배율과 무관하게 늘 같은 것을 가리킨다.
-        // 더 안쪽 — 별 하나 안에서는 경험의 축(결과)으로 갈아 끼운다(axisMix).
-        const catAxis = new Map<string, { sum: number; n: number }>();
-        for (const el of els) {
-          const key = axisKeyOf(el.mem);
-          const acc = catAxis.get(key) ?? { sum: 0, n: 0 };
-          acc.sum += el.plane;
-          acc.n += 1;
-          catAxis.set(key, acc);
+        // 별이 다 드러날수록(starReveal) 이 층은 물러난다. 위층은 배경이고
+        // 아래층은 없는 것 — 원리 1 이다.
+        const galAlpha = sysAlpha * (1 - 0.72 * starReveal) * (1 - axisMix);
+
+        if (galAlpha > 0.01) {
+          // 필라멘트. 은하보다 먼저 — 실은 배경이지 마디가 아니다.
+          ctx!.lineWidth = 1;
+          for (const [a, b] of filaments) {
+            const ax = worldX(a.x);
+            const ay = worldY(a.y);
+            const bx = worldX(b.x);
+            const by = worldY(b.y);
+            if (!onScreen(ax, ay, w) && !onScreen(bx, by, w)) continue;
+            // 양 끝이 제 은하 색으로 물들고 가운데에서 만난다. 한 색으로
+            // 그으면 실이 어느 쪽 것인지 모르게 되고, 그러면 그냥 배경 격자다.
+            const lg = ctx!.createLinearGradient(ax, ay, bx, by);
+            lg.addColorStop(0, `rgba(${a.color.join(",")},${0.3 * galAlpha})`);
+            lg.addColorStop(0.5, `rgba(${NEUTRAL.join(",")},${0.1 * galAlpha})`);
+            lg.addColorStop(1, `rgba(${b.color.join(",")},${0.3 * galAlpha})`);
+            ctx!.strokeStyle = lg;
+            ctx!.beginPath();
+            ctx!.moveTo(ax, ay);
+            ctx!.lineTo(bx, by);
+            ctx!.stroke();
+          }
+
+          // 은하 자체. 원반 크기 그대로 그린다 — 멀리서는 점이고, 당기면
+          // 그 안에서 별이 배어 나오면서 이 빛이 뒤로 물러난다.
+          for (const g of galaxies) {
+            const gx = worldX(g.x);
+            const gy = worldY(g.y);
+            const R = GALAXY_R * unit;
+            // 아무리 물러나도 점 하나로는 남아야 한다. 안 그러면 우주 전체를
+            // 보려고 물러났을 때 화면이 통째로 비어 "다 사라졌다"가 된다.
+            const rad = Math.max(7, R * 1.5);
+            if (!onScreen(gx, gy, rad * 3 + 60)) continue;
+            const lit = hovered === `gal:${g.key}`;
+            const rgb = (lit ? [143, 244, 228] : g.color).join(",");
+            const a0 = galAlpha * (lit ? 1 : 0.9);
+            const grd = ctx!.createRadialGradient(gx, gy, 0, gx, gy, rad * 2.6);
+            grd.addColorStop(0, `rgba(${rgb},${0.62 * a0})`);
+            grd.addColorStop(0.28, `rgba(${rgb},${0.26 * a0})`);
+            grd.addColorStop(0.62, `rgba(${rgb},${0.07 * a0})`);
+            grd.addColorStop(1, `rgba(${rgb},0)`);
+            ctx!.fillStyle = grd;
+            ctx!.beginPath();
+            ctx!.arc(gx, gy, rad * 2.6, 0, Math.PI * 2);
+            ctx!.fill();
+
+            // 이름표. 축 라벨이 하던 일을 여기서 한다 — 다만 허공의 방향이
+            // 아니라 실제로 그것이 있는 자리에 붙는다.
+            // 원반 가장자리 바로 아래에 붙인다. 후광 반경(rad)에 매달면 당길수록
+            // 이름표가 화면 밖으로 밀려나 정작 그 은하 안에서는 안 보인다.
+            ctx!.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
+            ctx!.textAlign = "center";
+            ctx!.textBaseline = "top";
+            ctx!.fillStyle = `rgba(${rgb},${(lit ? 0.95 : 0.6) * galAlpha})`;
+            ctx!.fillText(g.label.toUpperCase(), gx, gy + Math.max(12, R * GALAXY_EDGE * FLATTEN) + 9);
+
+            // 판정. 카메라가 움직이는 동안에는 안 받는다 — 보이는 곳과 눌리는
+            // 곳이 어긋난다.
+            if (ez < 0.02 && galAlpha > 0.35) {
+              hit.set(`gal:${g.key}`, { x: gx, y: gy, r: Math.max(18, rad), kind: "galaxy" });
+            }
+          }
         }
 
-        const catAlpha = sysAlpha * (1 - axisMix);
-        if (catAlpha > 0.01) {
-          drawAxes({
-            angles: catAxis,
-            lit: litAxis,
-            alpha: catAlpha,
-            // 축과 중심처럼 어느 분야에도 속하지 않는 것들의 색.
-            offRgb: NEUTRAL.join(","),
-            hitPrefix: "maxis:",
-            hitKind: "maxis",
-            // 판정은 변환이 안 걸린 정지 상태에서만 받는다. 카메라가 움직이는
-            // 동안 등록하면 보이는 곳과 눌리는 곳이 어긋난다.
-            canHit: ez < 0.02 && catAlpha > 0.5,
-            // 반직선이다. 별은 안 돌아서 방향이 궤도면 기울기가 아니라 중심에서
-            // 뻗은 방향이고, 온 원을 쪼개 쓰므로 맞은편은 다른 조각이다.
-            ray: () => true,
-          });
+        // ── 나선팔 자취 ──
+        //
+        // 팔 위에 놓인 별만으로는 나선이 안 읽힌다. 진행 중인 갈래는 원래
+        // 소수라(실측: DEV 은하 37개 중 12개) 팔 하나에 예닐곱이고, 그 둘레를
+        // halo 스물다섯이 감싸면 곡선이 묻힌다.
+        //
+        // 그래서 팔 자체를 긋는다. **예전 축 점선이 하던 일이다** — 라벨이
+        // 가리키는 곳에 아무도 없으면 안 되듯, 별이 놓인 곡선은 보여야 그
+        // 자리가 뜻을 갖는다. 배치와 **같은 식**을 쓰므로 별은 반드시 이 선
+        // 위에 얹힌다(ARM_SPAN 을 상수로 뺀 이유).
+        //
+        // 은하 빛과 **반대로** 나타난다. 멀리서는 은하가 점이라 팔이 있을 자리가
+        // 없고, 당겨서 별이 드러나는 만큼 팔도 같이 드러난다.
+        const armAlpha = sysAlpha * starReveal * (1 - axisMix) * 0.42;
+        if (armAlpha > 0.01) {
+          ctx!.lineWidth = 1;
+          for (const g of galaxies) {
+            if (!g.members.some((t) => t.status === "active")) continue; // 원반이 비었다
+            const R = GALAXY_R * unit;
+            if (!onScreen(worldX(g.x), worldY(g.y), R * 2.6 + 80)) continue;
+            for (let arm = 0; arm < ARMS; arm++) {
+              ctx!.beginPath();
+              for (let k = 0; k <= 56; k++) {
+                const at = k / 56;
+                const th = at * ARM_SPAN + (arm * Math.PI * 2) / ARMS;
+                const r = BULGE * Math.exp(ARM_PITCH * (at * ARM_SPAN));
+                const px = worldX(g.x + Math.cos(th) * r * GALAXY_R);
+                const py = worldY(g.y + Math.sin(th) * r * GALAXY_R * FLATTEN);
+                if (k === 0) ctx!.moveTo(px, py);
+                else ctx!.lineTo(px, py);
+              }
+              ctx!.strokeStyle = `rgba(${g.color.join(",")},${armAlpha})`;
+              ctx!.stroke();
+            }
+          }
         }
+
+        // 별 하나 안에 들어왔을 때의 결과(outcome) 축. 이건 남는다 —
+        // 위성은 여전히 돌고, 그 방향에는 뜻이 있다.
         if (axisAngles && axisMix > 0.01) {
           drawAxes({
             angles: axisAngles,
@@ -1880,37 +2054,15 @@ export function OrbitalMap({
           });
         }
 
-        // ── 별자리 선 ──
+        // ── 별자리 선은 없다 ──
         //
-        // 별을 중심과 잇는다. 도는 것이 없어져 궤도선이 사라졌으니, 이 선이
-        // 없으면 "권도형과 무슨 상관인지"가 화면에서 끊긴다 — 궤도선이 하던
-        // 말을 이 선이 대신한다.
+        // 별을 권도형과 잇던 실선이 있었다. 중심이 하나일 때만 성립하는
+        // 문법이라 은하가 여덟이 되면서 못 쓰게 됐다 — 137개가 남의 은하를
+        // 가로질러 원점까지 가면 그건 그물이 아니라 얼룩이다.
         //
-        // 놓은 갈래(abandoned)는 **선을 안 긋는다.** 별은 그대로 남는다 —
-        // 있었던 일은 사실이니까. 끊긴 선이 "그런데 놓았다"를 말한다.
-        //
-        // 축(drawAxes)도 중심에서 뻗는 방사선이라 구분이 필요하다. 축은 점선에
-        // 라벨이 붙고, 이 선은 실선에 그 별의 색을 쓴다 — 선이 천체와 같은
-        // 색이면 "저 선이 누구 것인가"를 눈으로 잇는다.
-        for (const { el, p } of placed) {
-          if (el.mem.status === "abandoned") continue;
-          const on = hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem));
-          const g = ctx!.createLinearGradient(cx, cy, p.x, p.y);
-          const rgb = el.color.join(",");
-          // 중심 쪽이 흐리다. 별에 가까울수록 진해야 선이 별에 매달린 것으로
-          // 읽힌다 — 균일하면 중심에서 뻗어나온 바퀴살이 되어 축과 헷갈린다.
-          // 광도를 태운다: 어두운 별의 선도 같이 옅어야 한 천체로 읽힌다.
-          const la = sysAlpha * dimOf(el.id) * starLumOf(el);
-          g.addColorStop(0, `rgba(${rgb},0)`);
-          g.addColorStop(0.25, `rgba(${rgb},${(on ? 0.2 : 0.08) * la})`);
-          g.addColorStop(1, `rgba(${rgb},${(on ? 0.6 : 0.28) * la})`);
-          ctx!.strokeStyle = g;
-          ctx!.lineWidth = on ? 1.3 : 0.8;
-          ctx!.beginPath();
-          ctx!.moveTo(cx, cy);
-          ctx!.lineTo(p.x, p.y);
-          ctx!.stroke();
-        }
+        // 그 선이 하던 말("이어져 있나 / 놓았나")은 이제 **어느 층에 있느냐**가
+        // 한다: 원반에 있으면 진행 중, halo 안쪽이면 끝낸 것, halo 바깥이면
+        // 놓은 것. 계획서가 "나선팔과 halo 이주가 대신한다"고 한 자리다.
 
         // ── 최근에 들어온 것 ──
         //
@@ -1925,7 +2077,7 @@ export function OrbitalMap({
           const rank = latestRankRef.current.get(el.id);
           if (rank == null || rank >= TRAIL_SPAN.length) continue;
           if (!onScreen(p.x, p.y, sizeOf(el) * 6 + 40)) continue;
-          drawCorona(p.x, p.y, sizeOf(el), rank, el.color, sysAlpha * dimOf(el.id));
+          drawCorona(p.x, p.y, sizeOf(el), rank, el.color, sysAlpha * dimOf(el.id) * starReveal);
         }
 
         // ── 위성계 ──
@@ -1987,7 +2139,7 @@ export function OrbitalMap({
           if (p.y > cy) continue; // 앞쪽은 나중에
           if (foc && el.id === foc.id) continue; // 모핑 중인 대상은 따로 그린다
           if (!onScreen(p.x, p.y, sizeOf(el) * 4 + 40)) continue;
-          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * starLumOf(el), starLumOf(el), t);
+          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * starLumOf(el) * starReveal, starLumOf(el), t);
         }
 
         // 질량 중심
@@ -2009,15 +2161,17 @@ export function OrbitalMap({
           if (p.y <= cy) continue; // 뒤쪽은 이미 그렸다
           if (foc && el.id === foc.id) continue;
           if (!onScreen(p.x, p.y, sizeOf(el) * 4 + 40)) continue;
-          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * starLumOf(el), starLumOf(el), t);
+          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * starLumOf(el) * starReveal, starLumOf(el), t);
         }
         ctx!.restore();
 
         // 판정은 변환이 걸리지 않은 정지 상태에서만 받는다. hit 좌표는 변환
         // 이전 공간이라, 카메라가 움직이는 동안 등록하면 보이는 곳과 눌리는
         // 곳이 어긋난다. 전환 중에는 아무것도 못 누르는 편이 낫다.
+        // 보이는 것만 눌린다. 은하만 떠 있는 배율에서 아직 안 드러난 별이
+        // 판정을 가로채면, 은하를 누르려다 그 안의 별로 끌려 들어간다.
         for (const { el, p } of placed) {
-          if (ez < 0.02 && onScreen(p.x, p.y, 60)) {
+          if (ez < 0.02 && starReveal > 0.35 && onScreen(p.x, p.y, 60)) {
             hit.set(el.id, { x: p.x, y: p.y, r: sizeOf(el) + 14, kind: "mem" });
           }
         }
@@ -2138,17 +2292,16 @@ export function OrbitalMap({
         hovered = found;
         const p = found ? hit.get(found) : null;
         if (!found || !p) setProbe(null);
-        else if (p.kind === "maxis") {
-          const key = found.slice(6);
-          // 그리기와 **같은 함수**로 센다. 한때 여기만 memories.trigger 로
-          // 세고 있어서 갈래만 있는 화면에서는 늘 0건이었다.
-          const onAxis = threads.filter((o) => axisKeyOf(o) === key);
-          const kept = onAxis.filter((o) => o.memory != null).length;
+        else if (p.kind === "galaxy") {
+          // 은하 하나가 분야 하나다. 그 안에 무엇이 몇 개 있는지, 그리고
+          // 그중 얼마가 남았는지 — 별의 밝기가 말하는 것을 숫자로도 적는다.
+          const g = galaxyByKey.get(found.slice(4));
+          const inDisc = g?.members.filter((t) => t.status === "active").length ?? 0;
           setProbe({
             x: p.x,
             y: p.y,
-            text: `${tag(key)} 분야의 갈래 ${onAxis.length}건${kept > 0 ? ` · 그중 ${kept}건이 남았다` : ""}`,
-            sub: "이 방향의 별들",
+            text: `${tag(g?.key ?? "")} · 갈래 ${g?.members.length ?? 0}건 · 그중 ${g?.kept ?? 0}건이 남았다`,
+            sub: `은하 · 진행 중 ${inDisc} · 나머지는 halo`,
           });
         } else if (p.kind === "axis") {
           const oc = found.slice(5);
@@ -2306,22 +2459,28 @@ export function OrbitalMap({
      * 목표만 정하고 실제 이동은 매 프레임 이징이 맡는다 — 배율과 이동이 같은
      * 계수로 수렴해야 당기는 동안 대상이 미끄러지지 않는다(onWheel 과 같은 규칙).
      */
-    function zoomToBody(id: string, z: number) {
-      const el = els.find((e) => e.id === id);
-      if (!el) return;
+    /** 궤도 단위의 한 점을 화면 가운데로 데려오며 배율 z 로 당긴다. */
+    function zoomToPoint(wx: number, wy: number, z: number) {
       // 휠과 같은 이유로 관성을 끈다 — 안 끄면 관성 블록이 여기서 넣은 이동
       // 목표를 다음 프레임에 지워버려서, 배율만 오르고 대상은 가운데로 안 온다.
       flingX = 0;
       flingY = 0;
+      const lim = offLimit(z);
+      zoomTarget = z;
+      // 목표 배율에서의 자리로 푼다. 지금 배율(unit)로 재서 k 를 곱하던 식은
+      // 배율이 이징 중일 때 어긋났다 — 목표 공간에서 직접 푸는 게 정확하다.
+      const u = baseUnit * z;
+      offXTarget = Math.max(-lim.x, Math.min(lim.x, -wx * u));
+      offYTarget = Math.max(-lim.y, Math.min(lim.y, -wy * u));
+    }
+
+    function zoomToBody(id: string, z: number) {
+      const el = els.find((e) => e.id === id);
+      if (!el) return;
       // 당기는 동안 계를 멈춘다. 별은 안 돌지만 위성은 돌고, 그 위성계를
       // 겨눈 채로 들어가는 것이라 멈춰야 착지점이 안 어긋난다.
       lockedId = id;
-      const p = orbitPoint(el);
-      const k = z / zoom;
-      const lim = offLimit(z);
-      zoomTarget = z;
-      offXTarget = Math.max(-lim.x, Math.min(lim.x, -(p.x - cx) * k));
-      offYTarget = Math.max(-lim.y, Math.min(lim.y, -(p.y - cy) * k));
+      zoomToPoint(el.x, el.y, z);
     }
 
     // 클릭 시점에 다시 판정한다. hovered 는 rAF 루프가 갱신하는 값이라,
@@ -2369,7 +2528,13 @@ export function OrbitalMap({
       const p = hit.get(hovered);
       if (!p) return;
       if (p.kind === "axis" || p.kind === "maxis") return; // 축은 겨누기만 한다
-      if (p.kind === "mem") {
+      if (p.kind === "galaxy") {
+        // **한 층 내려간다.** 은하를 누르면 그 은하가 화면을 채우고 별이
+        // 드러난다 — 층을 하나씩 밟고 내려가는 것이 이 지도의 규칙이다.
+        const g = galaxyByKey.get(hovered.slice(4));
+        if (g) zoomToPoint(g.x, g.y, fitZoom * galaxyLayer);
+        setPicked(null);
+      } else if (p.kind === "mem") {
         const body = orbitById.get(hovered) ?? null;
         // **펼치지 않고 당긴다.** 확대하면 이미 그 안의 경험이 나오고 축도
         // 판독값도 그것의 것으로 갈리므로, 따로 펼친 층을 만들 이유가 없다 —
@@ -2377,7 +2542,7 @@ export function OrbitalMap({
         //
         // 경험이 하나도 안 걸린 것은 당겨봐야 나올 게 없다. 그건 펼친다.
         if (body && body.referencedIds.length > 0) {
-          zoomToBody(hovered, zoomForStar(body.referencedIds.length));
+          zoomToBody(hovered, fitZoom * starLayer);
           setFocus(null);
         } else {
           setFocus(body);
@@ -2413,19 +2578,14 @@ export function OrbitalMap({
       }
     }
 
-    /** 확대 범위. 아래로는 딱 맞춤(1)까지만 — 그보다 줄이면 화면 가장자리에
-     *  빈 검은 띠만 늘어난다.
+    /** 확대 범위. **층 수가 정한다**(4단계).
      *
-     *  위로는 32배. 8배로는 부족했다 — 화면 배율이 **가장 바깥 궤도 하나**에
-     *  맞춰지는 구조라(unit = 짧은 변 절반의 88% / maxA), 4년 된 갈래가 하나만
-     *  있어도 최근 것들이 반경의 2% 안으로 눌린다. 그걸 읽을 만큼 벌리려면
-     *  스무 배 넘게 필요하다. */
-    // 1 은 이제 "전체 보기"가 아니라 **기본 배율**이다(고정 축척). 계가 화면보다
-    // 크므로 전체를 보려면 1 아래로 물러날 수 있어야 한다.
-    // 하한은 "계 전체보다 조금 더 물러난 곳". 상수로 박으면 데이터가 늘 때
-    // 전체를 못 보거나(너무 높으면) 텅 빈 검은 화면까지 나간다(너무 낮으면).
-    const zoomMin = () => Math.min(1, fitZoom * 0.85);
-    const ZOOM_MAX = 32;
+     *  아래로는 우주 전체보다 조금만 더 — 그 너머는 아무것도 없는 검은 화면이다.
+     *  위로는 항성계가 다 드러나는 배율(R²)에서 조금 더. 층이 셋이라 폭이
+     *  R² = 900 배다. 상수로 박으면 LAYER_RATIO 를 고칠 때마다 여기도 같이
+     *  고쳐야 하고, 빼먹으면 가장 아래 층에 영영 못 닿는다. */
+    const zoomMin = () => fitZoom * 0.85;
+    const zoomMax = () => fitZoom * starLayer * 1.6;
 
     function onWheel(e: WheelEvent) {
       // 페이지가 같이 스크롤되면 지도 위에서 휠을 굴릴 수가 없다.
@@ -2453,11 +2613,18 @@ export function OrbitalMap({
       // 않으면 한 칸에 화면이 통째로 튄다.
       const unitPx = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
       const dy = e.deltaY * unitPx * (e.ctrlKey ? 3 : 1);
-      const next = Math.min(ZOOM_MAX, Math.max(zoomMin(), zoomTarget * Math.exp(-dy * 0.0016)));
+      // 한 칸에 얼마나 파고드나. 층이 셋이 되면서 오갈 폭이 900배가 됐다 —
+      // 예전 계수(0.0016, 한 칸 1.21배)로는 바닥까지 서른다섯 칸이라 손목이
+      // 먼저 지친다. 한 칸 1.45배면 열아홉 칸이고, 한 층 안에서의 미세 조정도
+      // 아직 할 만하다.
+      const next = Math.min(
+        zoomMax(),
+        Math.max(zoomMin(), zoomTarget * Math.exp(-dy * 0.0031)),
+      );
       if (next === zoomTarget) return;
 
       // 경험이 안 보일 만큼 물러나면 붙잡아 둔 것을 놓는다 — 계가 다시 돈다.
-      if (next < SAT_REVEAL_FROM) lockedId = null;
+      if (next < fitZoom * starLayer * REVEAL_ONSET) lockedId = null;
 
       if (next <= fitZoom + 1e-6) {
         // 계 전체로 물러나면 가운데로도 같이 돌아온다. 배율 1 은 "계 전체"
