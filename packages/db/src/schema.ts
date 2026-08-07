@@ -161,9 +161,11 @@ export const experiences = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    // UNIQUE 가 아니다 — 한 세션에서 경험이 여럿 나올 수 있다(대상이 둘 이상인
+    // 세션). 예전에는 이 UNIQUE 가 "세션당 하나"와 **중복 처리 방어**를 겸했는데,
+    // 방어는 sessions.processed_at 조건부 선점으로 옮겼다(experience-engine).
     sessionId: uuid('session_id')
       .notNull()
-      .unique()
       .references(() => sessions.id, { onDelete: 'cascade' }),
     threadId: uuid('thread_id').references(() => threads.id), // 나중에 부착. 유일한 UPDATE 대상
 
@@ -176,10 +178,16 @@ export const experiences = pgTable(
     isFirstTime: boolean('is_first_time').notNull().default(false), // 신규 스킬 포함 여부
     memoryScore: integer('memory_score').notNull().default(0), // Memory Engine 점수
 
+    /** 이 경험이 나온 compressed_log.segments 인덱스. 빈 배열이면 세션 전체. */
+    segmentIds: integer('segment_ids').array().notNull().default([]),
+    /** 이 경험에 귀속된 분. 나눴으면 그 몫만. NULL 이면 세션 길이를 쓴다. */
+    durationMin: integer('duration_min'),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index('idx_exp_user_time').on(t.userId, t.occurredAt.desc()),
+    index('idx_exp_session').on(t.sessionId),
     index('idx_exp_thread').on(t.threadId).where(sql`${t.threadId} is not null`),
     index('idx_exp_unthreaded').on(t.userId, t.occurredAt).where(sql`${t.threadId} is null`),
     check('experiences_outcome_check', sql`${t.outcome} in ('success','partial','stuck','explore')`),

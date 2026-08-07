@@ -121,7 +121,8 @@ via 가 있으면 그 구간에 딸린 **1분도 안 머물고 스쳐간 곳**�
 구간을 차지할 만큼은 아니지만 무엇을 거쳤는지는 알려준다 — 잠깐 열어본 문서·대시보드 같은 것.
 
 earlier 가 있으면 그건 **이 세션의 앞부분**이고, 길어서 상세를 다 싣지 못해 합계만 남긴
-것이다(무엇을 몇 분 했는지, 원래 구간이 몇 개였는지). segments 는 그 뒤의 최근 구간들이다.
+것이다. top 의 각 항목은 "무엇을 몇 초" 이고 **i 는 segments 에서 이어지는 구간 번호**라,
+segment_ids 에 그대로 쓸 수 있다. segments 는 그 뒤의 최근 구간들이다.
 **earlier 가 있으면 세션은 segments 에 보이는 것보다 훨씬 길다.** 요약할 때 앞부분을 빼고
 "마지막에 한 일"만 말하지 마라 — earlier 의 시간이 segments 보다 클 수도 있다.
 
@@ -179,6 +180,9 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
   다시 고른다. 도메인이 아니라 행위를 보라. 같은 github.com 이라도 코드를 고쳤으면
   dev 이고 남의 코드를 읽으며 배우기만 했으면 study 다.
     dev           : 코드를 쓰거나 고치거나 돌렸다. 배포·설정·디버깅 포함.
+                    배포 콘솔·CI 대시보드·DB 콘솔에서 빌드를 돌리거나 롤백을
+                    실행한 것도 dev 다 — 도구가 코드 편집기가 아니어도 하는 일이
+                    소프트웨어를 굴리는 것이면 dev 다(productivity 가 아니다).
     study         : 배우려고 읽었다. 강의·튜토리얼·개념 학습. 만들지는 않았다.
     docs          : 레퍼런스를 찾아봤다. API 문서, 매뉴얼, 스펙 확인.
     ai            : AI 도구 자체를 쓰거나 다뤘다. 대화, 프롬프트, 모델 설정.
@@ -252,7 +256,22 @@ record_experience 툴을 반드시 한 번 호출해서 다음을 채운다.
   시작한 게 분명할 때만** 붙인다 — 도구나 사이트가 같다는 것만으로는 부족하고,
   그때 하다 만 것("마지막:" 줄)의 다음 단계여야 한다.
 
-  작업이 끝났는지는 판단하지 않는다. 그건 사람이 직접 표시한다.`;
+  작업이 끝났는지는 판단하지 않는다. 그건 사람이 직접 표시한다.
+- segment_ids: 위 summary 가 어느 구간들에서 나왔는지, 구간 번호(i)를 적는다.
+  세션 전체가 하나의 일이었으면 빈 배열로 둔다.
+- also: 같은 세션에 **뚜렷이 다른 작업**이 더 있었으면 그것만큼 더 적는다.
+
+## 한 세션에 일이 둘일 때
+
+세션은 분야가 바뀔 때 끊긴 관측 단위일 뿐이라, 그 안에 서로 다른 작업이 섞일 수 있다.
+**대상이 다른지는 도메인이 아니라 제목으로 본다** — 같은 localhost 라도 제목이
+"Project NA" 와 "SOLDIER : A DAY" 면 다른 일이고, 반대로 저장소·배포·로컬·DB 콘솔은
+도메인이 달라도 한 프로젝트의 다른 표면이라 **같은 일**이다.
+
+**기본은 나누지 않는 것이다.** 애매하면 하나로 두고 부수적인 것은 detail 에 한 줄로
+적는다. 나눌 때는 구간을 배타적으로 배정하고(한 구간은 한 경험에만), 어느 쪽인지
+모르는 구간은 **아무 데도 넣지 않는다.** 검색은 대개 수단이라 앞뒤 대상 구간에 붙인다.
+earlier 의 항목에도 번호(i)가 있어 배정할 수 있다.`;
 
 // strict: true 로 스키마 위반 자체를 막는다. 그래도 최종 검증은 항상
 // experienceOutputSchema.safeParse 로 한다 (weight 범위 등 strict 가 못 잡는 제약도 있다).
@@ -348,7 +367,67 @@ export const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
         required: ['action', 'existing_thread_id', 'title'],
         additionalProperties: false,
       },
+      segment_ids: {
+        type: 'array',
+        description:
+          '이 경험이 나온 compressed_log.segments 의 번호(i). 세션 전체가 하나의 일이면 빈 배열.',
+        items: { type: 'integer' },
+      },
+      also: {
+        type: 'array',
+        description:
+          '같은 세션에 **뚜렷이 다른 작업**이 더 있었으면 그것들. 대개 빈 배열이다.',
+        items: {
+          type: 'object',
+          properties: {
+            summary: { type: 'string', description: '그 일을 한 문장으로. "~했다"체.' },
+            detail: { type: 'string', description: '2~3문장. 없어도 된다.' },
+            category: { type: 'string', enum: [...EXPERIENCE_CATEGORIES] },
+            outcome: { type: 'string', enum: [...EXPERIENCE_OUTCOMES] },
+            is_first_time: { type: 'boolean' },
+            skills: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  weight: { type: 'integer' },
+                  domain: { type: 'string', enum: ['programming', 'art', 'life'] },
+                },
+                required: ['name', 'weight', 'domain'],
+                additionalProperties: false,
+              },
+            },
+            thread: {
+              type: 'object',
+              properties: {
+                action: { type: 'string', enum: ['attach', 'new'] },
+                existing_thread_id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+                title: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+              },
+              required: ['action', 'existing_thread_id', 'title'],
+              additionalProperties: false,
+            },
+            segment_ids: {
+              type: 'array',
+              description: '이 일이 벌어진 구간 번호. 반드시 채운다 — 시간을 여기서 계산한다.',
+              items: { type: 'integer' },
+            },
+          },
+          required: [
+            'summary', 'category', 'outcome', 'is_first_time', 'skills', 'thread', 'segment_ids',
+          ],
+          additionalProperties: false,
+        },
+      },
     },
+    // segment_ids 와 also 는 **required 가 아니다.**
+    //
+    // 둘을 required 로 뒀을 때 골든셋이 15/17 → 13/17 로 내려갔다. 실패한 것이
+    // 분할과 무관한 항목들(success·category 재판정·잠긴 갈래 부활)이라, 매
+    // 호출에서 두 필드를 반드시 채우게 만든 것이 다른 판정을 밀어낸 것으로 본다.
+    // 나누지 않는 세션에서는 이 둘이 아예 없는 게 맞기도 하다 — 기본은 나누지
+    // 않는 것이니 "빈 값을 채우는 일"조차 없어야 한다.
     required: ['summary', 'category', 'outcome', 'is_first_time', 'skills', 'dialogues', 'thread'],
     additionalProperties: false,
   },
@@ -797,6 +876,205 @@ export function buildUserMessage(
 // 메인 파이프라인
 // ------------------------------------------------------------
 
+// ------------------------------------------------------------
+// 한 세션이 여러 경험으로 나뉠 때
+//
+// 모델은 **어느 구간이 어느 일이었나**만 배정하고, 시간과 문턱은 여기서 잰다.
+// 모델에게 분 단위 합산을 시키면 틀리고, 틀린 채로 저장되면 되돌릴 수 없다.
+// ------------------------------------------------------------
+
+/** 나눌 값어치가 있는 최소 시간. 전송 필터의 "10분 미만은 경험 하나로 부를
+ *  만한 길이가 아니다"와 **같은 기준**이다 — 같은 말을 두 층에서 쓴다.
+ *  다만 성격이 다르다: 저쪽은 버리는 문턱이고 여기는 나누는 문턱이라,
+ *  못 넘으면 버리지 않고 주된 경험 안에 서술로 남는다. */
+const MIN_SPLIT_SEC = 10 * 60;
+
+/** 한 세션에서 만들 수 있는 경험 수. 넘치면 오래 머문 것부터 남긴다.
+ *  세션 하나가 정말로 네 가지 일이었다면 그건 세션 분할 규칙의 문제지
+ *  경험 분할로 풀 문제가 아니다. */
+const MAX_ITEMS_PER_SESSION = 3;
+
+interface LogSegment {
+  start?: string;
+  end?: string;
+  /** 귀속 체류 시간(초). 옛 세션에는 없다. */
+  sec?: number;
+}
+
+/**
+ * 배정 가능한 구간 목록.
+ *
+ * 앞부분 요약(earlier)의 항목들도 **번호가 이어지므로 함께 담는다.** 상세는
+ * 없지만 "무엇을 몇 분" 은 알고 있어서 시간 배분에 쓸 수 있다 — 이게 없으면
+ * 긴 세션의 앞부분에서 오래 한 일은 영영 따로 떼어낼 수 없다.
+ */
+export function segmentsOf(log: unknown): LogSegment[] {
+  const l = log as {
+    segments?: LogSegment[];
+    earlier?: { start?: string; top?: { i: number; sec: number }[] };
+  } | null;
+  const segs = Array.isArray(l?.segments) ? [...l.segments] : [];
+  const top = l?.earlier?.top;
+  if (Array.isArray(top)) {
+    for (const p of top) {
+      if (typeof p?.i !== 'number' || typeof p?.sec !== 'number') continue;
+      // 앞부분은 시각을 하나로 본다 — 어차피 순서를 잃은 합계다.
+      segs[p.i] = { start: l?.earlier?.start, end: l?.earlier?.start, sec: p.sec };
+    }
+  }
+  return segs;
+}
+
+/** 구간의 체류 시간. sec 이 없는 옛 세션은 시각 차이로 어림잡는다 —
+ *  그 값은 실제보다 작지만(관측이 하나뿐인 구간은 0), 비율로만 쓰므로
+ *  없는 것보다 낫다. */
+function secOf(seg: LogSegment | undefined): number {
+  if (!seg) return 0;
+  if (typeof seg.sec === 'number' && seg.sec >= 0) return seg.sec;
+  if (!seg.start || !seg.end) return 0;
+  const ms = new Date(seg.end).getTime() - new Date(seg.start).getTime();
+  return Number.isFinite(ms) && ms > 0 ? Math.round(ms / 1000) : 0;
+}
+
+/** 저장 직전 형태로 정리된 경험 하나. */
+export interface PlannedItem {
+  summary: string;
+  detail?: string;
+  category: ExperienceCategory;
+  outcome: ExperienceOutput['outcome'];
+  is_first_time: boolean;
+  skills: ExperienceOutput['skills'];
+  thread: ExperienceOutput['thread'];
+  /** 배정된 구간 번호. 안 나뉘었으면 빈 배열(= 세션 전체). */
+  segmentIds: number[];
+  occurredAt: Date;
+  durationMin: number;
+}
+
+/**
+ * 모델 출력 → 저장할 경험들.
+ *
+ * 나누지 않는 쪽이 기본이다. 아래 중 하나라도 걸리면 **통째로 안 나눈다** —
+ * 나누다 어긋나느니 지금까지와 같은 결과가 낫다.
+ *   · 구간 번호가 범위를 벗어나거나 두 경험에 겹쳐 배정됐다
+ *   · 갈라진 것에 배정이 하나도 없다(시간을 잴 수 없다)
+ *   · 구간 시간의 총합이 0 이다(옛 세션이라 잴 것이 없다)
+ *
+ * 문턱(10분)을 못 넘긴 것은 **버리지 않고** 주된 경험에 흡수한다. 요약은
+ * detail 뒤에 붙이고 스킬과 구간도 합친다 — 지금도 detail 에 그렇게 적히고
+ * 있으므로, 나누기 시작했다고 그 정보가 사라지면 퇴보다.
+ */
+export function planItems(
+  output: ExperienceOutput,
+  segList: LogSegment[],
+  sessionDurationMin: number,
+): PlannedItem[] {
+  const head = {
+    summary: output.summary,
+    detail: output.detail,
+    category: output.category,
+    outcome: output.outcome,
+    is_first_time: output.is_first_time,
+    skills: [...output.skills],
+    thread: output.thread,
+    ids: [...(output.segment_ids ?? [])],
+  };
+  const rest = (output.also ?? []).map((a) => ({
+    summary: a.summary,
+    detail: a.detail,
+    category: a.category,
+    outcome: a.outcome,
+    is_first_time: a.is_first_time,
+    skills: [...a.skills],
+    thread: a.thread,
+    ids: [...(a.segment_ids ?? [])],
+  }));
+
+  const totalSec = segList.reduce((acc, s) => acc + secOf(s), 0);
+
+  const seen = new Set<number>();
+  const assignable =
+    rest.length > 0 &&
+    totalSec > 0 &&
+    rest.every((r) => r.ids.length > 0) &&
+    [head, ...rest].every((it) =>
+      it.ids.every((i) => {
+        if (!Number.isInteger(i) || i < 0 || i >= segList.length || seen.has(i)) return false;
+        seen.add(i);
+        return true;
+      }),
+    );
+
+  const single = (): PlannedItem[] => {
+    // 나누지 않으면 구간 배정도 남기지 않는다 — 세션 전체라는 뜻이다.
+    const merged = [head, ...rest];
+    const detail = merged
+      .map((m) => m.detail ?? (m === head ? undefined : m.summary))
+      .filter(Boolean)
+      .join(' ');
+    return [
+      {
+        summary: head.summary,
+        detail: detail || undefined,
+        category: head.category,
+        outcome: head.outcome,
+        is_first_time: head.is_first_time,
+        skills: merged.flatMap((m) => m.skills),
+        thread: head.thread,
+        segmentIds: [],
+        occurredAt: new Date(NaN), // 호출부가 세션 시작으로 채운다
+        durationMin: sessionDurationMin,
+      },
+    ];
+  };
+
+  if (!assignable) return single();
+
+  const secOfIds = (ids: number[]) => ids.reduce((acc, i) => acc + secOf(segList[i]), 0);
+
+  // 문턱을 못 넘긴 갈래는 주된 경험으로 되돌린다. 오래 머문 것부터 보고,
+  // 개수 상한을 넘긴 것도 같은 자리로 돌아간다 — 버리지 않는다.
+  const kept: typeof rest = [];
+  for (const r of [...rest].sort((a, b) => secOfIds(b.ids) - secOfIds(a.ids))) {
+    if (secOfIds(r.ids) >= MIN_SPLIT_SEC && kept.length < MAX_ITEMS_PER_SESSION - 1) {
+      kept.push(r);
+      continue;
+    }
+    head.detail = [head.detail, r.summary].filter(Boolean).join(' ');
+    head.skills.push(...r.skills);
+    head.ids.push(...r.ids);
+  }
+  if (kept.length === 0) return single();
+
+  const toItem = (it: (typeof head) | (typeof rest)[number]): PlannedItem => {
+    const ids = [...it.ids].sort((a, b) => a - b);
+    const starts = ids
+      .map((i) => segList[i].start)
+      .filter((v): v is string => typeof v === 'string')
+      .map((v) => new Date(v).getTime())
+      .filter((n) => Number.isFinite(n));
+    return {
+      summary: it.summary,
+      detail: it.detail,
+      category: it.category,
+      outcome: it.outcome,
+      is_first_time: it.is_first_time,
+      skills: it.skills,
+      thread: it.thread,
+      segmentIds: ids,
+      occurredAt: starts.length > 0 ? new Date(Math.min(...starts)) : new Date(NaN),
+      // 세션 길이를 구간 시간의 비율로 나눈다. 배정 안 된 구간의 몫은 어느
+      // 경험에도 안 간다 — 세션은 관측이고 경험은 해석이라, 해석이 관측
+      // 전부를 덮을 필요가 없다. "197분 중 설명되는 건 27분"이 사실 그대로다.
+      durationMin: Math.max(1, Math.round((sessionDurationMin * secOfIds(ids)) / totalSec)),
+    };
+  };
+
+  // 시간순으로 둔다. 주된 경험이 뒤일 수도 있지만, 점수 규칙(공백·돌파)은
+  // 배열 첫 항목을 "주된 것"으로 보므로 head 를 앞에 유지한다.
+  return [toItem(head), ...kept.map(toItem)];
+}
+
 /** 동시 처리로 이 세션의 경험이 이미 만들어졌을 때. 트랜잭션을 실제로 롤백시키려고
  *  던지는 전용 오류 — 바깥에서 이것만은 조용히 넘긴다(재처리 대상으로 남길 필요가 없다). */
 class SessionAlreadyProcessedError extends Error {
@@ -1020,226 +1298,331 @@ export async function processSession(sessionId: string, userId: string): Promise
     }
 
     const output = parsed.data;
-    // 스키마 상한을 넉넉히 푼 만큼 여기서 자른다. 개수가 많다고 경험 전체를
-    // 버리는 것보다, 합치고 상위만 남기는 편이 손실이 적다.
-    const dedupedSkills = dedupeSkills(output.skills, output.category)
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, MAX_SKILLS_PER_EXPERIENCE);
-    // 어느 스킬이 새것인지까지 남긴다. some() 으로 불리언만 뽑으면 규칙은
-    // "처음이다"를 아는데 화면은 "무엇이 처음인지"를 모르는 상태가 된다 —
-    // /memories 에 new_skill 태그와 요약문만 뜨고 정작 무슨 스킬인지가 없었다.
-    // 비중 순이라 [0] 이 그 세션의 주된 신규 스킬이다.
-    const newSkillNames = dedupedSkills
-      .filter((s) => !existingSkillNames.has(s.name))
-      .map((s) => s.name);
-    const hasNewSkill = newSkillNames.length > 0;
-    const primarySkillName = dedupedSkills.length > 0 ? [...dedupedSkills].sort((a, b) => b.weight - a.weight)[0].name : null;
 
-    // thread 부착 판정 — LLM 환각 방어: 목록에 없는 existing_thread_id 면 new 로 강등.
-    // 이번에 **실제로 보낸** 목록이 곧 붙일 수 있는 대상이다. 살아있는 것과
-    // 후보로 준 잠긴 것 둘 다 허용하고, 목록에 없는 id 를 지어내면 여전히
-    // 강등한다(그 방어는 그대로 둔다).
+    // ── 이 세션에서 나온 일들 ──
+    //
+    // 최상위가 주된 경험이고, also 는 갈라져 나온 것이다(대개 비어 있다).
+    // 나누는 판단은 모델이 하고, **시간과 문턱은 코드가** 잰다 — 모델은 분 단위
+    // 합산을 못 믿는다. 배정이 어긋나면 나누지 않고 주된 것 하나로 돌아간다.
+    const segList = segmentsOf(session.compressedLog);
+    const items: PlannedItem[] = planItems(output, segList, session.durationMin).map((it) => ({
+      ...it,
+      // 구간에서 시각을 못 얻은 경우(안 나뉘었거나 옛 세션) 세션 시작을 쓴다.
+      occurredAt: Number.isNaN(it.occurredAt.getTime()) ? session.startedAt : it.occurredAt,
+    }));
+
+    // 갈래 후보 — 이번에 **실제로 보낸** 목록이 곧 붙일 수 있는 대상이다.
+    // 살아있는 것과 후보로 준 잠긴 것 둘 다 허용하고, 목록에 없는 id 를 지어내면
+    // new 로 강등한다(LLM 환각 방어).
     const offeredThreadsById = new Map<string, { id: string; title: string }>([
       ...activeThreadRows.map((t) => [t.id, t] as const),
       ...dormantThreadRows.map((t) => [t.id, t] as const),
     ]);
-    let threadAction: 'attach' | 'new' = output.thread.action;
-    let attachTargetId = output.thread.existing_thread_id;
-    // 강등 여부를 기억해둔다. completed 플래그를 그대로 살리면 안 되기 때문이다.
-    let threadDemoted = false;
-    if (threadAction === 'attach' && (!attachTargetId || !offeredThreadsById.has(attachTargetId))) {
-      threadAction = 'new';
-      attachTargetId = null;
-      threadDemoted = true;
-    }
-
-    const threadId = threadAction === 'new' ? randomUUID() : attachTargetId!;
-    const threadTitle =
-      threadAction === 'new'
-        ? output.thread.title?.trim() || clampSentence(output.summary, MAX_THREAD_TITLE_LEN)
-        : (offeredThreadsById.get(threadId)?.title ?? clampSentence(output.summary, MAX_THREAD_TITLE_LEN));
-
-    // 6. Memory Engine 점수 (순수 함수, LLM 재호출 없음)
-    const daysSinceLastExperience =
-      recentExperienceRows.length > 0
-        ? Math.floor((session.startedAt.getTime() - recentExperienceRows[0].occurredAt.getTime()) / DAY_MS)
-        : null;
 
     const recentExperienceSummaries: RecentExperienceSummary[] = recentExperienceRows.map((e) => ({
       category: e.category,
       primarySkillName: primarySkillByExperienceId.get(e.id) ?? null,
     }));
-
-    // 막혔던 것을 뚫었는가 — 직전 경험이 stuck 인데 이번이 success.
-    const brokeThrough =
-      recentExperienceRows[0]?.outcome === 'stuck' && output.outcome === 'success';
-
-    // 오래 묵혀둔 스킬이 돌아왔는가. existingSkillRows 에 이미 lastUsedAt 이
-    // 실려 있어 추가 쿼리가 필요 없다.
     const lastUsedByName = new Map(existingSkillRows.map((r) => [r.name, r.lastUsedAt]));
-    const dormantSkillNames = dedupedSkills
-      .filter((sk) => {
+
+    /** 이 세션 안에서 이미 "처음"으로 쳐준 스킬. 같은 스킬이 두 경험에 걸쳐
+     *  나와도 신규는 한 번이다 — 안 그러면 한 번 배운 것으로 +50 을 두 번 받는다. */
+    const claimedNewSkills = new Set<string>();
+
+    /** 저장 직전까지 계산이 끝난 경험 하나. */
+    interface Prepared {
+      item: PlannedItem;
+      skills: { name: string; weight: number; domain: SkillDomain }[];
+      isFirstTime: boolean;
+      score: ReturnType<typeof calculateMemoryScore>;
+      thread: { id: string; title: string; action: 'attach' | 'new' };
+    }
+
+    const prepared: Prepared[] = items.map((item, index) => {
+      // 스키마 상한을 넉넉히 푼 만큼 여기서 자른다. 개수가 많다고 경험 전체를
+      // 버리는 것보다, 합치고 상위만 남기는 편이 손실이 적다.
+      const skills = dedupeSkills(item.skills, item.category)
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, MAX_SKILLS_PER_EXPERIENCE);
+
+      const newSkillNames = skills
+        .filter((s) => !existingSkillNames.has(s.name) && !claimedNewSkills.has(s.name))
+        .map((s) => s.name);
+      for (const n of newSkillNames) claimedNewSkills.add(n);
+      const hasNewSkill = newSkillNames.length > 0;
+      const primarySkillName = skills.length > 0 ? skills[0].name : null;
+
+      /**
+       * "이번에 처음 다뤘나" — **규칙이 먼저고 모델이 보탠다.**
+       *
+       * 프롬프트가 이 값의 기준을 "보유 스킬 목록에 없던 것을 다뤘는가"로
+       * 정의했는데, 그건 추론이 아니라 **비교 연산**이다. 그런데 모델에게
+       * 물어보니 실측 5/5 로 어긋났다 — 심지어 보유 목록이 **텅 빈 첫 경험**
+       * 에서도 false 를 냈다. 규칙대로면 무조건 true 여야 하는 자리다.
+       *
+       * 그 결과 이 컬럼에 매달린 것들이 전부 죽어 있었다 — 기억 점수 +40 이
+       * 안 붙고, 감정 '흥분'이 발동하지 않고, 성격의 개척형↔숙련형 축이 늘
+       * 숙련형 극단에 고정된다(사흘에 스킬 8개가 는 사용자가 "숙련형"으로 찍혔다).
+       *
+       * 프롬프트를 또 고치는 건 이미 한 번 실패한 방법이라, 확실히 아는 부분은
+       * 규칙이 채우고 모델은 규칙이 못 보는 것(주제·방식·환경)만 보탠다.
+       */
+      const isFirstTime = hasNewSkill || item.is_first_time;
+
+      const dormantSkillReturned = skills.some((sk) => {
         const last = lastUsedByName.get(sk.name);
         if (!last) return false; // 신규 스킬은 여기 해당 없음(그건 hasNewSkill 이 잡는다)
-        return session.startedAt.getTime() - last.getTime() >= DORMANT_SKILL_DAYS * DAY_MS;
-      })
-      .map((sk) => sk.name);
-    const dormantSkillReturned = dormantSkillNames.length > 0;
+        return item.occurredAt.getTime() - last.getTime() >= DORMANT_SKILL_DAYS * DAY_MS;
+      });
 
-    /**
-     * "이번에 처음 다뤘나" — **규칙이 먼저고 모델이 보탠다.**
-     *
-     * 프롬프트가 이 값의 기준을 "보유 스킬 목록에 없던 것을 다뤘는가"로
-     * 정의했는데, 그건 추론이 아니라 **비교 연산**이다. 그런데 모델에게
-     * 물어보니 실측 5/5 로 어긋났다 — 심지어 보유 목록이 **텅 빈 첫 경험**
-     * 에서도 false 를 냈다. 규칙대로면 무조건 true 여야 하는 자리다.
-     *
-     * 모델은 대신 "이 사람에게 이 행위가 생애 처음인가"를 판단하고 있었다.
-     * 프롬프트의 "…없던 것을 이번에 **처음 시도했으면**" 이라는 표현과
-     * "도구뿐 아니라 주제·방식·환경도 대상이다" 라는 완화 문장이 기계적
-     * 기준을 주관적 판단으로 바꿔놓은 탓이다. v3 에서 인색함을 풀려고 넣은
-     * 문장이 오히려 본래 기준을 잡아먹었다(v2 6건 연속 false → v3 14건 연속 false).
-     *
-     * 그 결과 이 컬럼에 매달린 것들이 전부 죽어 있었다 —
-     *   기억 점수 +40 이 안 붙어 신규 스킬만으론 문턱(60)을 못 넘고,
-     *   감정 '흥분'(emotion.ts)이 발동하지 않고,
-     *   성격의 개척형↔숙련형 축(personality.ts)이 항상 숙련형 극단에 고정된다.
-     *   사흘에 스킬 8개가 새로 생긴 사용자가 "숙련형"으로 판정됐다.
-     *
-     * 프롬프트를 또 고치는 건 이미 한 번 실패한 방법이다. 확실히 아는 부분은
-     * 규칙이 채우고, 모델은 **규칙이 못 보는 것**(주제·방식·환경)만 보탠다.
-     * 그때 비로소 "도구뿐 아니라" 문장이 제 역할을 한다.
-     */
-    const isFirstTime = hasNewSkill || output.is_first_time;
+      // 아래 둘은 **주된 경험에만** 준다.
+      //
+      // 직전 경험은 세션 전체에 하나뿐인데, 갈라진 것들에 똑같이 주면 한 번의
+      // 공백·돌파로 +30·+35 를 두 번 받는다. 시간순으로도 두 번째 경험의 "직전"은
+      // 첫 번째 경험이라 공백이 0 이다.
+      const isPrimary = index === 0;
+      const daysSinceLastExperience =
+        isPrimary && recentExperienceRows.length > 0
+          ? Math.floor((session.startedAt.getTime() - recentExperienceRows[0].occurredAt.getTime()) / DAY_MS)
+          : null;
+      const brokeThrough =
+        isPrimary && recentExperienceRows[0]?.outcome === 'stuck' && item.outcome === 'success';
 
-    const memoryScoreResult = calculateMemoryScore({
-      hasNewSkill,
-      isFirstTime,
-      brokeThrough,
-      dormantSkillReturned,
-      daysSinceLastExperience,
-      durationMin: session.durationMin,
-      recentSessionDurations: recentSessionRows.map((r) => r.durationMin),
-      category: output.category,
-      primarySkillName,
-      recentExperiences: recentExperienceSummaries,
+      const score = calculateMemoryScore({
+        hasNewSkill,
+        isFirstTime,
+        brokeThrough,
+        dormantSkillReturned,
+        daysSinceLastExperience,
+        // 나눴으면 제 몫만. 197분 세션을 둘로 쪼개고 각자에게 197분을 주면
+        // '평소보다 긴 세션'(+20)을 둘 다 받는다.
+        durationMin: item.durationMin,
+        recentSessionDurations: recentSessionRows.map((r) => r.durationMin),
+        category: item.category,
+        primarySkillName,
+        recentExperiences: recentExperienceSummaries,
+      });
+
+      // 갈래 판정 — 경험마다 따로 한다. 나뉘었다는 건 대상이 다르다는 뜻이라
+      // 같은 갈래에 붙으면 애초에 나눌 이유가 없었던 것이다.
+      let action: 'attach' | 'new' = item.thread.action;
+      let targetId = item.thread.existing_thread_id;
+      if (action === 'attach' && (!targetId || !offeredThreadsById.has(targetId))) {
+        action = 'new';
+        targetId = null;
+      }
+      const threadId = action === 'new' ? randomUUID() : targetId!;
+      const threadTitle =
+        action === 'new'
+          ? item.thread.title?.trim() || clampSentence(item.summary, MAX_THREAD_TITLE_LEN)
+          : (offeredThreadsById.get(threadId)?.title ?? clampSentence(item.summary, MAX_THREAD_TITLE_LEN));
+
+      return { item, skills, isFirstTime, score, thread: { id: threadId, title: threadTitle, action } };
     });
 
     // 5. 저장 (트랜잭션)
     const now = new Date();
 
     await db.transaction(async (tx) => {
-      // action='new' 인 thread 는 experiences.thread_id FK 때문에 experience insert 보다
-      // 먼저 만들어야 한다(참조 대상이 존재해야 FK 를 통과한다). 'attach' 는 기존 thread 를
-      // 그대로 참조하므로 여기서 할 일이 없고, 카운트 갱신은 insertedExperience 확인 후로 미룬다
-      // — 그래야 동시 처리로 experience insert 가 취소될 때 기존 thread 카운트가 잘못 증가하지 않는다.
-      if (threadAction === 'new') {
-        await tx.insert(threads).values({
-          id: threadId,
-          userId,
-          title: threadTitle,
-          category: output.category,
-          status: 'active',
-          startedAt: session.startedAt,
-          lastActivityAt: session.startedAt,
-          experienceCount: 1,
-        });
-      }
-
-      const [insertedExperience] = await tx
-        .insert(experiences)
-        .values({
-          userId,
-          sessionId,
-          threadId, // insert 시점에 부착 — 이렇게 하면 "유일한 UPDATE 대상"이던 thread_id 에 대한 UPDATE 자체가 없어진다.
-          occurredAt: session.startedAt,
-          // 자르지 않는다 — 잘라 저장하면 상세에서 되살릴 수 없다.
-          summary: output.summary,
-          detail: output.detail ?? null,
-          category: output.category,
-          outcome: output.outcome,
-          isFirstTime,
-          memoryScore: memoryScoreResult.score,
-        })
-        .onConflictDoNothing({ target: experiences.sessionId })
-        .returning({ id: experiences.id });
-
-      // experiences.session_id 는 UNIQUE — 동시 처리로 이미 만들어졌다.
+      // 처리 권리를 **먼저 선점한다.**
       //
+      // 예전에는 experiences.session_id 의 UNIQUE 가 이 방어를 겸했다 — 동시
+      // 처리로 두 번째 INSERT 가 막히면 그걸 신호로 롤백했다. 한 세션에서 경험이
+      // 여럿 나올 수 있게 되면서 그 제약을 풀었으니, 방어를 여기로 옮긴다.
+      // 조건부 UPDATE 라 두 번째 실행은 0행을 받고, 잠금이 세션 한 행에 걸린다.
+      const claimed = await tx
+        .update(sessions)
+        .set({ processedAt: now })
+        .where(and(eq(sessions.id, sessionId), isNull(sessions.processedAt)))
+        .returning({ id: sessions.id });
+
       // 여기서 `return` 하면 안 된다. postgres-js 의 client.begin 은 콜백이 정상
       // resolve 하면 COMMIT 한다 — return 은 롤백이 아니라 "건너뛰고 커밋"이다.
-      // 그래서 위에서 만든 thread 행이 고아로 커밋되고, processed_at 도 안 채워지고,
-      // ingest_failures 도 안 남는다. 그 조합이 최악이다: 재처리 스윕은
-      // processed_at IS NULL 로 뽑는데 실패 기록이 없으니 백오프에 영영 안 걸려,
-      // 스윕을 돌릴 때마다 LLM 을 한 번씩 태우고 고아 thread 를 하나씩 더 쌓는다.
-      // 던져서 실제로 롤백시키고, 바깥 catch 가 ingest_failures 에 남기게 한다.
-      if (!insertedExperience) {
-        throw new SessionAlreadyProcessedError(sessionId);
-      }
+      // 던져서 실제로 롤백시키고, 바깥 catch 가 조용히 넘긴다.
+      if (claimed.length === 0) throw new SessionAlreadyProcessedError(sessionId);
 
-      if (dedupedSkills.length > 0) {
-        await tx
-          .insert(experienceSkills)
-          .values(
-            dedupedSkills.map((s) => ({
-              experienceId: insertedExperience.id,
-              skillName: s.name,
-              weight: s.weight,
-              domain: s.domain,
-            })),
-          )
-          .onConflictDoNothing({ target: [experienceSkills.experienceId, experienceSkills.skillName] });
+      let newMemoriesCount = 0;
+      let oldestNewMemoryAt: Date | null = null;
 
-        for (const skill of dedupedSkills) {
+      for (const p of prepared) {
+        const { item, skills, isFirstTime, score, thread } = p;
+
+        // action='new' 인 갈래는 experiences.thread_id FK 때문에 경험보다 먼저
+        // 만들어야 한다(참조 대상이 존재해야 FK 를 통과한다).
+        if (thread.action === 'new') {
+          await tx.insert(threads).values({
+            id: thread.id,
+            userId,
+            title: thread.title,
+            category: item.category,
+            status: 'active',
+            startedAt: item.occurredAt,
+            lastActivityAt: item.occurredAt,
+            experienceCount: 1,
+          });
+        }
+
+        const [insertedExperience] = await tx
+          .insert(experiences)
+          .values({
+            userId,
+            sessionId,
+            threadId: thread.id,
+            occurredAt: item.occurredAt,
+            // 자르지 않는다 — 잘라 저장하면 상세에서 되살릴 수 없다.
+            summary: item.summary,
+            detail: item.detail ?? null,
+            category: item.category,
+            outcome: item.outcome,
+            isFirstTime,
+            memoryScore: score.score,
+            segmentIds: item.segmentIds,
+            durationMin: item.durationMin,
+          })
+          .returning({ id: experiences.id });
+
+        if (skills.length > 0) {
           await tx
-            .insert(userSkills)
-            .values({
-              userId,
-              skillName: skill.name,
-              domain: skill.domain,
-              points: skill.weight,
-              useCount: 1,
-              // "사용자가 실제로 쓴 시각" 기준 — experiences.occurred_at 과 마찬가지로
-              // session.startedAt 을 쓴다(서버가 처리한 시각 `now` 가 아니다).
-              firstUsedAt: session.startedAt,
-              lastUsedAt: session.startedAt,
+            .insert(experienceSkills)
+            .values(
+              skills.map((s) => ({
+                experienceId: insertedExperience.id,
+                skillName: s.name,
+                weight: s.weight,
+                domain: s.domain,
+              })),
+            )
+            .onConflictDoNothing({ target: [experienceSkills.experienceId, experienceSkills.skillName] });
+
+          for (const skill of skills) {
+            await tx
+              .insert(userSkills)
+              .values({
+                userId,
+                skillName: skill.name,
+                domain: skill.domain,
+                points: skill.weight,
+                useCount: 1,
+                // "사용자가 실제로 쓴 시각" 기준 — 서버가 처리한 시각이 아니다.
+                firstUsedAt: item.occurredAt,
+                lastUsedAt: item.occurredAt,
+              })
+              .onConflictDoUpdate({
+                target: [userSkills.userId, userSkills.skillName],
+                set: {
+                  // domain 은 그 스킬이 쓰인 **모든 경험의 최빈값**으로 다시 계산한다.
+                  // 처음 만들어질 때의 값으로 고정하면 나중에 백 번 다르게 써도
+                  // 안 바뀌고, 마지막 세션 값으로 덮으면 판단이 흔들릴 때마다
+                  // 값이 왔다갔다 한다. 최빈값은 순서와 무관해서 재구축해도 같다.
+                  domain: sql`coalesce((
+                    select es.domain from ${experienceSkills} es
+                    join ${experiences} e on e.id = es.experience_id
+                    where es.skill_name = ${skill.name}
+                      and e.user_id = ${userId}
+                      and es.domain is not null
+                    group by es.domain
+                    order by count(*) desc, es.domain asc
+                    limit 1
+                  ), ${userSkills.domain})`,
+                  points: sql`${userSkills.points} + ${skill.weight}`,
+                  useCount: sql`${userSkills.useCount} + 1`,
+                  // GREATEST 로 역행을 막는다 — 세션은 며칠 늦게 도착할 수 있어서
+                  // (오프라인 버퍼링) 무조건 덮어쓰면 이미 8/3 으로 가 있던
+                  // lastUsedAt 이 8/1 로 되돌아간다. 이 값은 프롬프트 컨텍스트와
+                  // 감정 판정('오래 안 쓴 스킬 재등장 → 그리움')에 그대로 쓰인다.
+                  lastUsedAt: sql`GREATEST(${userSkills.lastUsedAt}, ${item.occurredAt.toISOString()}::timestamptz)`,
+                },
+              });
+          }
+        }
+
+        // 갈래 부착 — 'new' 는 위에서 이미 만들었으니 'attach' 만 갱신한다.
+        let attachedCount: number | null = null;
+        if (thread.action === 'attach') {
+          const [updated] = await tx
+            .update(threads)
+            .set({
+              // GREATEST 로 역행 방지 — 위 userSkills 와 같은 이유다. 무조건
+              // 덮어쓰면 어제까지 활동하던 갈래가 두 달 전으로 되돌아가고,
+              // 그러면 오늘 밤 배치가 살아있는 작업을 abandoned 로 넘긴다.
+              lastActivityAt: sql`GREATEST(${threads.lastActivityAt}, ${item.occurredAt.toISOString()}::timestamptz)`,
+              experienceCount: sql`${threads.experienceCount} + 1`,
+              // 잠긴 갈래에 붙었으면 되살아난다. abandoned 는 무덤이 아니라
+              // 잠금이다. completed 는 안 건드린다 — 사람이 선언한 값이라
+              // 모델이 뒤집으면 declared 위계가 거꾸로 선다.
+              status: sql`case when ${threads.status} = 'abandoned' then 'active' else ${threads.status} end`,
+              // 분야를 다시 센다 — 갈래의 category 는 "연 첫 경험의 판정"이 아니라
+              // "지금까지 무엇을 한 작업인가"여야 한다. 동률이면 이름순(결정적).
+              category: sql`coalesce((
+                select e.category from ${experiences} e
+                where e.thread_id = ${thread.id}
+                group by e.category
+                order by count(*) desc, e.category asc
+                limit 1
+              ), ${threads.category})`,
             })
-            .onConflictDoUpdate({
-              target: [userSkills.userId, userSkills.skillName],
-              set: {
-                // domain 은 그 스킬이 쓰인 **모든 경험의 최빈값**으로 다시 계산한다.
-                // 예전에는 set 절에 아예 없어서 처음 만들어질 때의 값이 영구히
-                // 고정됐다 — 그 스킬을 나중에 백 번 다르게 써도 안 바뀌었다.
-                // 그렇다고 마지막 세션 값으로 덮어쓰면 세션마다 판단이 흔들릴 때
-                // 값이 왔다갔다 한다. 최빈값은 **순서와 무관**해서 재구축해도
-                // 같은 값이 나오고, 경험이 쌓일수록 흔들림이 줄어든다.
-                // 방금 넣은 행까지 포함되도록 experience_skills insert 뒤에 돈다.
-                domain: sql`coalesce((
-                  select es.domain from ${experienceSkills} es
-                  join ${experiences} e on e.id = es.experience_id
-                  where es.skill_name = ${skill.name}
-                    and e.user_id = ${userId}
-                    and es.domain is not null
-                  group by es.domain
-                  order by count(*) desc, es.domain asc
-                  limit 1
-                ), ${userSkills.domain})`,
-                points: sql`${userSkills.points} + ${skill.weight}`,
-                useCount: sql`${userSkills.useCount} + 1`,
-                // GREATEST 로 역행을 막는다 — 세션은 며칠 늦게 도착할 수 있어서
-                // (예: 8/1 세션이 8/4 에 뒤늦게 도착) startedAt 을 무조건 덮어쓰면
-                // 이미 8/3 으로 가 있던 lastUsedAt 이 8/1 로 되돌아간다.
-                // 이 값은 프롬프트 컨텍스트("마지막 사용: ...")와 감정 판정
-                // ("오래 안 쓴 스킬 재등장 → 그리움")에 그대로 쓰이므로 정확해야 한다.
-                // (sql 템플릿에 Date 객체를 그대로 넣으면 컬럼 직렬화를 안 거쳐서
-                // Date.toString() 형태로 바인딩되는 문제가 있어 ISO 문자열 + 명시적
-                // 캐스트로 넘긴다.)
-                lastUsedAt: sql`GREATEST(${userSkills.lastUsedAt}, ${session.startedAt.toISOString()}::timestamptz)`,
-              },
-            });
+            .where(eq(threads.id, thread.id))
+            .returning({ n: threads.experienceCount });
+          attachedCount = updated?.n ?? null;
+        }
+
+        // 완결 분기는 여기 없다. thread_complete 기억은 사람이 /threads 에서
+        // 직접 표시할 때만 생긴다(app/actions.ts 의 completeThread).
+        //
+        // 오래 붙들고 있는 일은 그 자체로 남을 만하다 — 매 세션은 특별할 게
+        // 없는데 몇 달째 이어지는 갈래는 기억이 하나도 안 생기던 구멍을 메운다.
+        // 문턱 6은 6개월치 분포의 상위 21%(평균 3.5건)이고, === 6 이라 자연히
+        // 한 번만 발동한다.
+        if (attachedCount === DEEPENED_THREAD_EXPERIENCES) {
+          const r = await upsertThreadMemory(tx, {
+            userId,
+            threadId: thread.id,
+            experienceId: insertedExperience.id,
+            occurredAt: item.occurredAt,
+            title: thread.title,
+            body: item.detail ?? item.summary,
+            trigger: 'deepened',
+            threadExperienceCount: attachedCount,
+          });
+          if (r === 'created') newMemoriesCount += 1;
+        }
+
+        if (score.score >= MEMORY_SCORE_THRESHOLD) {
+          const bd = score.breakdown;
+          // 어느 규칙이 이 기억을 만들었는지가 곧 trigger 다. 위에서부터 먼저 맞는 것.
+          const trigger = bd.hasNewSkill || bd.isFirstTime
+            ? 'new_skill'
+            : bd.brokeThrough
+              ? 'breakthrough'
+              : bd.dormantSkillReturned
+                ? 'revival'
+                : 'comeback';
+
+          const r = await upsertThreadMemory(tx, {
+            userId,
+            threadId: thread.id,
+            experienceId: insertedExperience.id,
+            occurredAt: item.occurredAt,
+            // 제목은 요약만(자르지 않는다). 근거(무슨 스킬이 처음이었나)는 화면이
+            // 칩으로 따로 보여준다 — user_skills.first_used_at 이 그 경험 시각과
+            // 같으면 그때 처음 쓴 스킬이라, 추가 저장 없이 정확히 가려낼 수 있다.
+            title: item.summary,
+            body: item.detail ?? item.summary,
+            trigger,
+            // 'new' 로 만든 갈래면 이번이 첫 경험이다.
+            threadExperienceCount: attachedCount ?? 1,
+          });
+          if (r === 'created') newMemoriesCount += 1;
+        }
+
+        if (newMemoriesCount > 0 && (!oldestNewMemoryAt || item.occurredAt < oldestNewMemoryAt)) {
+          oldestNewMemoryAt = item.occurredAt;
         }
       }
 
+      // ── 여기부터는 세션에 한 번 ──
+
+      // 대사는 슬롯당 하나라 경험 단위가 아니다. 세션이 몇 개로 나뉘든 4개다.
       for (const d of output.dialogues) {
         // DB CHECK(char_length <= 80) 이 막기 전에 서버에서 먼저 절단한다.
         // 문장 경계에서 자른다 — 한복판에서 끊으면 화면에 그대로 드러난다.
@@ -1251,122 +1634,6 @@ export async function processSession(sessionId: string, userId: string): Promise
             target: [dialogues.userId, dialogues.slot],
             set: { text, sourceSessionId: sessionId, generatedAt: now },
           });
-      }
-
-      // thread 부착 — action='new' 는 위에서 이미 만들었으니, 'attach' 인 경우만
-      // 활동시각·경험수를 갱신한다.
-      let attachedCount: number | null = null;
-      if (threadAction === 'attach') {
-        const [updated] = await tx
-          .update(threads)
-          .set({
-            // GREATEST 로 역행을 막는다 — 바로 위 userSkills upsert 와 같은 이유다.
-            // 세션은 며칠 늦게 도착할 수 있는데(오프라인 버퍼링), 무조건 덮어쓰면
-            // 어제까지 활동하던 thread 의 last_activity_at 이 두 달 전으로
-            // 되돌아간다. 그러면 (a) 오늘 밤 배치가 살아있는 작업을 abandoned 로
-            // 전이시키고 — 되돌리는 코드 경로가 없다 — (b) 활성 목록(최근순 5개)
-            // 에서 밀려나 이후 경험이 붙을 수 없게 되며 (c) 성격의 완결형 축이
-            // 오염된다.
-            lastActivityAt: sql`GREATEST(${threads.lastActivityAt}, ${session.startedAt.toISOString()}::timestamptz)`,
-            experienceCount: sql`${threads.experienceCount} + 1`,
-            // 잠긴 갈래에 붙었으면 되살아난다. abandoned 는 무덤이 아니라
-            // 잠금이다 — 30일 안 건드렸다는 뜻일 뿐이고, 사람 기억에서 3년 뒤에
-            // 이어지는 일은 흔하다. completed 는 안 건드린다: 그건 사람이
-            // 선언한 값이라 모델이 뒤집으면 declared 위계가 거꾸로 선다.
-            status: sql`case when ${threads.status} = 'abandoned' then 'active' else ${threads.status} end`,
-            // 분야를 다시 센다 — 갈래의 category 는 "연 첫 경험의 판정"이 아니라
-            // "지금까지 무엇을 한 작업인가"여야 한다.
-            //
-            // attach 판정 기준은 카테고리가 아니라 **대상**이다(프롬프트: "분야가
-            // 같다는 것은 attach 의 근거가 아니다"). 그래서 한 갈래 안에 여러
-            // 분야가 섞이는 게 정상이고, 첫 판정으로 고정하면 어긋난다 —
-            // 문서만 읽으며 시작한 개발 작업이 영원히 docs 로 남는다.
-            //
-            // 이 값은 프롬프트의 활성 갈래 목록에도 그대로 실린다. 화면에서만
-            // 고치면 모델은 계속 옛 값을 본다.
-            //
-            // 방금 INSERT 한 경험이 같은 트랜잭션 안에 있으므로 이번 것까지 세어진다.
-            // 동률이면 이름순 — 매번 같은 값이 나와야 색이 흔들리지 않는다.
-            category: sql`coalesce((
-              select e.category from ${experiences} e
-              where e.thread_id = ${threadId}
-              group by e.category
-              order by count(*) desc, e.category asc
-              limit 1
-            ), ${threads.category})`,
-          })
-          .where(eq(threads.id, threadId)).returning({ n: threads.experienceCount });
-        attachedCount = updated?.n ?? null;
-      }
-
-      // thread 완결 → status 전이 + 기억 생성. 점수 임계를 넘으면 그것도 기억이
-      // 되는데, **둘이 동시에 터지면 기억을 둘 만들지 않고 하나에 합친다** —
-      // 아래 두 블록의 insert 는 title 을 빼면 전부 같은 값이었다(같은 경험·갈래·
-      // body·중요도). 지도에서 크기·반경·위성이 전부 같은 쌍둥이 둘이 된다.
-      let newMemoriesCount = 0;
-
-      // 어느 규칙이 이 기억을 만들었는지가 곧 trigger 이고, 그 근거(무슨 스킬이
-      // 처음이었나)는 저장하지 않는다 — user_skills.first_used_at 이 그 경험
-      // 시각과 같으면 그때 처음 쓴 스킬이라, 화면이 읽을 때 정확히 가려낸다.
-      const bd = memoryScoreResult.breakdown;
-
-      // 완결 분기는 여기 없다. thread_complete 기억은 사람이 /threads 에서
-      // 직접 표시할 때만 생긴다(app/actions.ts 의 completeThread) —
-      // 모델이 못 내는 값이라 물어보지도 않는다(shared/experience.ts 참고).
-      // 오래 붙들고 있는 일은 그 자체로 남을 만하다.
-      //
-      // 지금 규칙은 경험 하나의 점수만 본다. 그래서 매 세션은 특별할 게 없는데
-      // 몇 달째 이어지는 갈래는 기억이 하나도 안 생긴다 — 6개월치로 재보니
-      // 6건 이상 갈래 27개 중 6개가 그랬다. 반대로 점수 높은 경험이 몰린
-      // 갈래에는 기억이 여럿 붙는다(실데이터: 경험 9건에 기억 3개).
-      //
-      // 문턱은 6건. 6개월치 분포에서 상위 21% 다(평균 3.5건). 3~4건은 이틀만
-      // 이어져도 닿아 기억이 흔해지고, 8건 이상은 11% 라 너무 드물다.
-      //
-      // === 6 이라 자연히 한 번만 발동한다. 재구축해도 같은 순서로 6을 지나므로
-      // 결과가 같다. 여기서 만들고 아래 점수 규칙도 따로 돌 수 있는데, 그건
-      // 근거가 서로 달라서(오래 이어짐 vs 이번 경험이 셌음) 둘 다 맞다.
-      if (attachedCount === DEEPENED_THREAD_EXPERIENCES) {
-        const r = await upsertThreadMemory(tx, {
-          userId,
-          threadId,
-          experienceId: insertedExperience.id,
-          occurredAt: session.startedAt,
-          title: threadTitle,
-          body: output.detail ?? output.summary,
-          trigger: 'deepened',
-          threadExperienceCount: attachedCount,
-        });
-        if (r === 'created') newMemoriesCount += 1;
-      }
-
-      if (memoryScoreResult.score >= MEMORY_SCORE_THRESHOLD) {
-        // 어느 규칙이 이 기억을 만들었는지가 곧 trigger 다. 위에서부터 먼저 맞는 것.
-        const trigger = bd.hasNewSkill || bd.isFirstTime
-          ? 'new_skill'
-          : bd.brokeThrough
-            ? 'breakthrough'
-            : bd.dormantSkillReturned
-              ? 'revival'
-              : 'comeback';
-
-        // 제목은 요약만(자르지 않는다). 근거(무슨 스킬이 처음이었나)는 화면이
-        // 칩으로 따로 보여준다 — user_skills.first_used_at 이 그 경험 시각과
-        // 같으면 그때 처음 쓴 스킬이라, 추가 저장 없이 정확히 가려낼 수 있다.
-        const memoryTitle = output.summary;
-
-        const r = await upsertThreadMemory(tx, {
-          userId,
-          threadId,
-          experienceId: insertedExperience.id,
-          occurredAt: session.startedAt,
-          title: memoryTitle,
-          body: output.detail ?? output.summary,
-          trigger,
-          // 'new' 로 만든 갈래면 이번이 첫 경험이다.
-          threadExperienceCount: attachedCount ?? 1,
-        });
-        if (r === 'created') newMemoriesCount += 1;
       }
 
       const [{ count: skillCount }] = await tx
@@ -1384,7 +1651,7 @@ export async function processSession(sessionId: string, userId: string): Promise
         .where(eq(characters.userId, userId))
         .for('update');
 
-      const newExperienceCount = (characterRow?.experienceCount ?? 0) + 1;
+      const newExperienceCount = (characterRow?.experienceCount ?? 0) + prepared.length;
       const daysSinceSignup = userRow ? Math.floor((now.getTime() - userRow.createdAt.getTime()) / DAY_MS) : 0;
       const newLevel = calculateLevel({
         experienceCount: newExperienceCount,
@@ -1395,10 +1662,10 @@ export async function processSession(sessionId: string, userId: string): Promise
       const newMemoryCount = (characterRow?.memoryCount ?? 0) + newMemoriesCount;
       const existingOldestMemoryAt = characterRow?.oldestMemoryAt ?? null;
       const newOldestMemoryAt =
-        newMemoriesCount > 0
-          ? existingOldestMemoryAt && existingOldestMemoryAt < session.startedAt
+        oldestNewMemoryAt !== null
+          ? existingOldestMemoryAt && existingOldestMemoryAt < oldestNewMemoryAt
             ? existingOldestMemoryAt
-            : session.startedAt
+            : oldestNewMemoryAt
           : existingOldestMemoryAt;
 
       await tx
@@ -1412,8 +1679,6 @@ export async function processSession(sessionId: string, userId: string): Promise
           lastComputedAt: now,
         })
         .where(eq(characters.userId, userId));
-
-      await tx.update(sessions).set({ processedAt: now }).where(eq(sessions.id, sessionId));
     });
   } catch (err) {
     console.error('[processSession] failed', sessionId, err);

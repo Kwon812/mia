@@ -9,6 +9,14 @@ import Anthropic from '@anthropic-ai/sdk';
 import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V7, buildUserMessage } from '../src/lib/experience-engine';
 
 const RUNS = Number(process.argv[2] ?? 3);
+/** 두 번째 인자로 케이스 이름 일부를 주면 그것만 돌린다 — 한 케이스를 파고들 때
+ *  전체 68콜을 태울 이유가 없다. */
+const ONLY = process.argv[3] ?? '';
+
+// Haiku 4.5 가격 ($/1M 토큰) — daily-logs.ts 와 같은 값을 쓴다.
+const IN_PRICE = 1.0;
+const OUT_PRICE = 5.0;
+const usage = { inTok: 0, outTok: 0, calls: 0 };
 const env = fs.readFileSync('.env.local', 'utf8');
 process.env.ANTHROPIC_API_KEY ||= env.match(/ANTHROPIC_API_KEY="?([^"\n]+)"?/)![1];
 const client = new Anthropic();
@@ -303,6 +311,9 @@ async function run(c: Case) {
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content }],
   });
+  usage.calls += 1;
+  usage.inTok += res.usage?.input_tokens ?? 0;
+  usage.outTok += res.usage?.output_tokens ?? 0;
   const tu: any = res.content.find((b: any) => b.type === 'tool_use');
   return tu?.input ?? {};
 }
@@ -359,7 +370,7 @@ async function run(c: Case) {
 }
 
 const summary: any[] = [];
-for (const c of CASES) {
+for (const c of CASES.filter((c) => !ONLY || c.name.includes(ONLY))) {
   const outs = [];
   for (let i = 0; i < RUNS; i++) outs.push(await run(c));
 
@@ -386,4 +397,19 @@ for (const c of CASES) {
 console.log('');
 console.table(summary);
 const fail = summary.filter((r) => r.판정 === 'FAIL');
-console.log(`\n${summary.length - fail.length}/${summary.length} 통과 · 호출 ${CASES.length * RUNS}회`);
+const cost = (usage.inTok / 1e6) * IN_PRICE + (usage.outTok / 1e6) * OUT_PRICE;
+console.log(`\n${summary.length - fail.length}/${summary.length} 통과 · 호출 ${usage.calls}회`);
+console.log(
+  `토큰 입력 ${usage.inTok.toLocaleString()} · 출력 ${usage.outTok.toLocaleString()} · ` +
+  `비용 $${cost.toFixed(3)} (약 ${Math.round(cost * 1400).toLocaleString()}원)`,
+);
+// 판정 분포도 함께 본다 — 통과율만 보면 안 된다는 게 이 골든셋의 교훈이다.
+// 1회차 15/16 이 '잘 된다'처럼 보였지만 실사용이었다면 거의 모든 세션이
+// success 로 찍히는 상태였다(같은 통과율의 4회차와 분포가 완전히 달랐다).
+const dist = (key: string) => {
+  const m = new Map<string, number>();
+  for (const r of summary) m.set(String(r[key] ?? '-'), (m.get(String(r[key] ?? '-')) ?? 0) + 1);
+  return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' · ');
+};
+console.log(`분포 outcome: ${dist('outcome')}`);
+console.log(`분포 category: ${dist('category')}`);
