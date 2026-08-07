@@ -287,6 +287,109 @@ describe('buildCompressedLog — 상한·중복 제거', () => {
     expect(log.segments.at(-1)?.domain).toBe('site24.com');
   });
 
+  it('구간마다 귀속 체류 시간(sec)을 남긴다 — start~end 로는 못 재는 값', () => {
+    // 네이버 이벤트는 하나뿐이라 span 은 0 분이지만, 다음 활동까지 2분이 비어
+    // 있으므로 그 2분은 네이버 몫이다. 실데이터에서 구간의 72% 가 이 모양이다.
+    const events = [
+      normalizeEvent(raw({ at: 0, domain: 'localhost', payload: { scrolls: 3 } })),
+      normalizeEvent(raw({ at: 6 * MIN, domain: 'localhost', payload: { scrolls: 3 } })),
+      normalizeEvent(raw({ at: 7 * MIN, domain: 'www.naver.com', payload: { scrolls: 3 } })),
+      normalizeEvent(raw({ at: 9 * MIN, domain: 'localhost', payload: { scrolls: 3 } })),
+      normalizeEvent(raw({ at: 16 * MIN, domain: 'localhost', payload: { scrolls: 3 } })),
+    ];
+    const log = buildCompressedLog(draftWithEvents(events));
+    const first = log.segments[0];
+    expect(first.domain).toBe('localhost');
+    expect(first.sec).toBe(7 * 60); // 0~6분 + 6~7분(다음 활동까지)
+
+    // 네이버 구간의 span 은 0 분이다(이벤트가 하나뿐). 그런데 실제로는 2분을
+    // 머물렀고, sec 이 그걸 잡는다 — start~end 만 보면 없는 시간이 된다.
+    const naver = log.segments[1];
+    expect(naver.domain).toBe('www.naver.com');
+    expect(naver.start).toBe(naver.end);
+    expect(naver.sec).toBe(2 * 60);
+  });
+
+  it('1분 미만 경유는 앞 구간의 곁가지로 접고, 시간은 그 구간에 더한다', () => {
+    const events = [
+      normalizeEvent(raw({ at: 0, domain: 'localhost', payload: { scrolls: 3, title: 'Project NA' } })),
+      normalizeEvent(raw({ at: 5 * MIN, domain: 'localhost', payload: { scrolls: 3, title: 'Project NA' } })),
+      // 30초만 스친 곳 — 칸은 안 주되 무엇이었는지는 남는다.
+      normalizeEvent(raw({ at: 6 * MIN, domain: 'supabase.com', payload: { scrolls: 1, title: 'characters | Table Editor' } })),
+      normalizeEvent(raw({ at: 6 * MIN + 30_000, domain: 'localhost', payload: { scrolls: 3, title: 'Project NA' } })),
+      normalizeEvent(raw({ at: 12 * MIN, domain: 'localhost', payload: { scrolls: 3, title: 'Project NA' } })),
+    ];
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.segments).toHaveLength(1);
+    expect(log.segments[0].via).toEqual(['supabase.com · characters | Table Editor']);
+    // 접힌 30초도 사라지지 않는다.
+    expect(log.segments[0].sec).toBe(12 * 60);
+  });
+
+  it('같은 곳이라도 제목이 다르면 잇지 않는다 — 대상이 다르다', () => {
+    // localhost 는 프로젝트마다 같은 도메인이라, 이으면 서로 다른 두 작업이
+    // 압축 단계에서 한 덩어리가 된다.
+    const events = [
+      normalizeEvent(raw({ at: 0, domain: 'localhost', payload: { scrolls: 3, title: 'Project NA' } })),
+      normalizeEvent(raw({ at: 6 * MIN, domain: 'localhost', payload: { scrolls: 3, title: 'Project NA' } })),
+      normalizeEvent(raw({ at: 7 * MIN, domain: 'www.naver.com', payload: { clicks: 1 } })),
+      normalizeEvent(raw({ at: 7 * MIN + 20_000, domain: 'localhost', payload: { scrolls: 3, title: 'SOLDIER : A DAY' } })),
+      normalizeEvent(raw({ at: 14 * MIN, domain: 'localhost', payload: { scrolls: 3, title: 'SOLDIER : A DAY' } })),
+    ];
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.segments.map((s) => s.title)).toEqual(['Project NA', 'SOLDIER : A DAY']);
+  });
+
+  it('마지막 구간은 짧아도 접지 않는다 — 무엇을 하다 끝났나가 outcome 의 근거다', () => {
+    const events = [
+      normalizeEvent(raw({ at: 0, domain: 'github.com', payload: { scrolls: 3 } })),
+      normalizeEvent(raw({ at: 10 * MIN, domain: 'github.com', payload: { scrolls: 3 } })),
+      // 마지막 이벤트는 다음 신호가 없어 dwell 이 구조적으로 0 이다.
+      normalizeEvent(raw({ at: 11 * MIN, domain: 'vercel.com', payload: { scrolls: 3 } })),
+    ];
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.segments.map((s) => s.domain)).toEqual(['github.com', 'vercel.com']);
+    expect(log.segments.at(-1)?.sec).toBe(0);
+  });
+
+  it('세션 첫머리의 경유는 버리지 않고 다음 실질 구간에 붙인다', () => {
+    const events = [
+      normalizeEvent(raw({ at: 0, domain: 'newtab', payload: { clicks: 1 } })),
+      normalizeEvent(raw({ at: 20_000, domain: 'github.com', payload: { scrolls: 3 } })),
+      normalizeEvent(raw({ at: 10 * MIN, domain: 'github.com', payload: { scrolls: 3 } })),
+    ];
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.segments).toHaveLength(1);
+    expect(log.segments[0].domain).toBe('github.com');
+    expect(log.segments[0].via).toEqual(['newtab']);
+  });
+
+  it('상한을 넘겨 잘리는 앞부분은 버리지 않고 earlier 합계로 남는다', () => {
+    // 접고도 넘치는 건 긴 세션뿐이다(실측: 4시간짜리가 접은 뒤 22~61구간).
+    // 그때 앞부분을 그냥 버리면 모델이 세션 끝자락만 보고 판정하게 된다.
+    const events = Array.from({ length: 25 }, (_, i) => [
+      normalizeEvent(raw({ at: i * 10 * MIN, domain: `site${i}.com`, payload: { scrolls: 3, title: `T${i}` } })),
+      normalizeEvent(raw({ at: i * 10 * MIN + 5 * MIN, domain: `site${i}.com`, payload: { scrolls: 3, title: `T${i}` } })),
+    ]).flat();
+
+    const log = buildCompressedLog(draftWithEvents(events));
+    expect(log.segments).toHaveLength(20);
+    expect(log.segments[0].domain).toBe('site5.com');
+
+    const earlier = log.earlier!;
+    expect(earlier.segments).toBe(5); // site0~site4
+    expect(earlier.sec).toBeGreaterThan(0);
+    expect(earlier.top[0]).toMatch(/^site0\.com · T0 \d+분$/);
+  });
+
+  it('상한을 안 넘으면 earlier 자체가 없다', () => {
+    const events = [
+      normalizeEvent(raw({ at: 0, domain: 'github.com', payload: { scrolls: 3 } })),
+      normalizeEvent(raw({ at: 10 * MIN, domain: 'github.com', payload: { scrolls: 3 } })),
+    ];
+    expect(buildCompressedLog(draftWithEvents(events)).earlier).toBeUndefined();
+  });
+
   it('queries 는 세션 전체에서 중복 제거되고 MAX_QUERIES(15) 개로 상한이 걸린다', () => {
     const events = Array.from({ length: 20 }, (_, i) =>
       normalizeEvent(raw({ at: i * MIN, domain: 'google.com', payload: { query: `q${i % 10}` } })),

@@ -6,7 +6,7 @@
 // temperature 0 이어도 실행마다 답이 갈리므로 여러 번 돌려 안정성도 함께 본다.
 import fs from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
-import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V6, buildUserMessage } from '../src/lib/experience-engine';
+import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V7, buildUserMessage } from '../src/lib/experience-engine';
 
 const RUNS = Number(process.argv[2] ?? 3);
 const env = fs.readFileSync('.env.local', 'utf8');
@@ -16,8 +16,10 @@ const client = new Anthropic();
 // KST 오프셋 표기 — 실제 압축 로그와 같은 형식이어야 평가가 유효하다.
 const T = (h: number, m = 0) =>
   new Date(Date.UTC(2026, 7, 5, h, m)).toISOString().replace('Z', '+09:00');
+// sec 은 실제 압축기가 싣는 귀속 체류 시간이다. 픽스처에도 넣어야 프롬프트가
+// 보는 것이 프로덕션과 같아진다 — 없으면 모델이 시각으로 어림잡는 옛 경로를 탄다.
 const seg = (domain: string, category: string, title: string, h: number, m: number, dur: number, extra: object = {}) =>
-  ({ domain, category, title, start: T(h, m), end: T(h, m + dur), ...extra });
+  ({ domain, category, title, start: T(h, m), end: T(h, m + dur), sec: dur * 60, ...extra });
 
 const THREAD_A = { id: '11111111-1111-4111-8111-111111111111', title: '프로젝트 A 배포 파이프라인', category: 'dev', experienceCount: 4, lastSummary: 'GitHub Actions 워크플로에 빌드 캐시를 붙였다' };
 /** 잠긴 갈래 픽스처. 제목이 비슷한 이웃을 하나 더 둔다 — 실제로 후보에 오르는
@@ -297,7 +299,7 @@ async function run(c: Case) {
   );
   const res = await client.messages.create({
     model: MODEL, max_tokens: 1024, temperature: 0,
-    system: SYSTEM_PROMPT_V6 + EXTRA_RULE, tools: [RECORD_EXPERIENCE_TOOL],
+    system: SYSTEM_PROMPT_V7 + EXTRA_RULE, tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content }],
   });

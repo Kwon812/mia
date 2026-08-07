@@ -38,6 +38,26 @@ function kstIso(epochMs: number): string {
 // 늘어나므로 상수로 상한을 두고 관리한다.
 export const MAX_TITLE_LEN = 200; // title/path 절단 길이 (content.ts 의 MAX_TEXT_LEN 과 동일)
 export const MAX_SEGMENTS = 20; // compressed_log.segments 최대 개수 — 넘으면 최신 구간만 남긴다
+
+/**
+ * 이만큼도 안 머문 구간은 별도 칸을 차지하지 않고 앞 구간의 곁가지(via)로 접는다.
+ *
+ * 상한 20칸이 **경유지로 다 차서** 정작 오래 머문 시간이 잘려나가고 있었다.
+ * 실측(18세션 321구간): 구간의 72% 가 1분 미만이고, 14세션이 상한에 걸려
+ * 잘렸다 — 241분짜리 세션에서 모델이 본 게 마지막 7분뿐인 경우까지 있었다.
+ * 그 상태로는 "검색 → 문서 → 적용" 같은 흐름이 통째로 안 보여서 outcome 판정
+ * 자체가 끝자락 추측이 된다(success 가 역대 0건인 것과 무관하지 않다).
+ *
+ * 접어도 정보를 잃지 않는다 — 도메인과 제목은 via 에 그대로 남긴다.
+ * 잃는 건 1분도 안 머문 곳의 **개별 시각**뿐이고, 그건 판정에 쓸모가 없다.
+ */
+const FOLD_UNDER_SEC = 60;
+
+/** 한 구간에 매달 수 있는 곁가지 수. 토큰 상한이라 넘치면 앞의 것부터 남긴다. */
+const MAX_VIA = 6;
+
+/** earlier(잘려나간 앞부분 요약)에 남길 항목 수. */
+const MAX_EARLIER_TOP = 8;
 const MAX_SEGMENT_PATHS = 3; // 구간별 path 예시 최대 개수
 export const MAX_QUERIES = 15; // 세션 전체 검색 쿼리 최대 개수 (중복 제거 후)
 
@@ -243,10 +263,50 @@ interface CompressedSegment {
   category: string;
   start: string;
   end: string;
+  /**
+   * 이 구간에 귀속된 체류 시간(초).
+   *
+   * start~end 로는 알 수 없다. 그건 "구간 안 첫 이벤트 ~ 마지막 이벤트"라서,
+   * 이벤트가 하나뿐이면 0 이 된다 — 실제로 2분을 머물렀어도 0 분으로 보인다.
+   * 실측 세션에서 구간 span 합이 31분인데 세션 길이는 197분이었다.
+   * domains 맵과 **같은 규칙**으로 잰다: 다음 활동까지의 간격을 앞 이벤트의
+   * 구간에 주고, 한 번에 최대 MAX_DOMAIN_GAP_MS.
+   */
+  sec: number;
   /** 이 구간에서 관측된 title 대표값 — 가장 많이 등장한 것, 동률이면 더 나중에 등장한 것. */
   title?: string;
   /** 이 구간에서 관측된 path 예시(등장 순서, 중복 제거, 최대 MAX_SEGMENT_PATHS 개). */
   paths?: string[];
+  /**
+   * 이 구간에 접힌 짧은 경유들 — `"도메인 · 제목"` 꼴.
+   *
+   * 1분도 안 머문 곳이 구간 한 칸을 차지하면 상한이 경유지로 차버린다.
+   * 칸은 안 주되 **무엇을 스쳤는지는 남긴다** — 1분 미만이어도 뜻이 있는 게
+   * 있다(`supabase.com · characters | Table Editor | mia`).
+   */
+  via?: string[];
+}
+
+/**
+ * 상한을 넘겨 잘려나간 **앞부분의 요약**.
+ *
+ * 예전에는 그냥 버렸다. 그래서 4시간 세션에서 모델이 본 게 마지막 몇 분뿐인
+ * 경우가 생겼고(실측: 241분 중 234분이 안 보임), 그 상태의 판정은 세션 전체가
+ * 아니라 끝자락에 대한 판정이 된다.
+ *
+ * 상세(순서·시각·경로)는 최근 구간에만 있으면 된다. 앞부분은
+ * **무엇을 얼마나 했는지**만 있어도 "이 세션이 통째로 무엇이었나"가 서고,
+ * 그게 몇 줄이면 되므로 토큰도 거의 안 든다.
+ */
+interface CompressedEarlier {
+  start: string;
+  end: string;
+  /** 앞부분 전체의 귀속 체류 시간(초). */
+  sec: number;
+  /** 접히기 전 구간 수 — 얼마나 잘게 오갔는지가 그 자체로 신호다. */
+  segments: number;
+  /** `"도메인 · 제목 42분"` 꼴, 오래 머문 순. */
+  top: string[];
 }
 
 /** buildCompressedLog 내부 누적용 — 아직 CompressedSegment 로 확정되기 전 상태. */
@@ -258,6 +318,10 @@ interface RawSegment {
   titleCounts: Map<string, number>;
   titleLastAt: Map<string, number>;
   paths: string[];
+  /** 귀속 체류 시간(ms). assignDwell 이 두 번째 패스에서 채운다. */
+  dwellMs: number;
+  /** 이 구간에 접힌 짧은 경유들. foldWaypoints 가 채운다. */
+  via: string[];
 }
 
 function newRawSegment(e: ActivityEvent): RawSegment {
@@ -269,6 +333,8 @@ function newRawSegment(e: ActivityEvent): RawSegment {
     titleCounts: new Map(),
     titleLastAt: new Map(),
     paths: [],
+    dwellMs: 0,
+    via: [],
   };
 }
 
@@ -283,10 +349,140 @@ function absorbEvent(seg: RawSegment, e: ActivityEvent): void {
   }
 }
 
-/** close() 내부에서 쓰지만, 상한·중복제거 로직을 직접 검증하기 위해 export 한다. */
+/**
+ * 구간마다 귀속 체류 시간을 채운다 — domains 맵과 **같은 규칙**이라야 한다.
+ * 갈리면 "도메인별 합"과 "구간별 합"이 서로 다른 말을 하게 된다.
+ *
+ * 점수가 붙는 이벤트만 시간에 참여하고(켜놓고 아무것도 안 한 시간은 안 센다),
+ * 그 이벤트부터 다음 활동까지의 간격을 **앞 이벤트가 속한 구간**에 준다.
+ * 구간과 이벤트가 둘 다 시간순이라 포인터 하나로 한 번만 훑는다.
+ */
+function assignDwell(segs: RawSegment[], events: readonly ActivityEvent[]): void {
+  if (segs.length === 0) return;
+  const attended = events.filter((e) => eventScore(e) > 0);
+  let si = 0;
+  for (let i = 0; i < attended.length; i++) {
+    const cur = attended[i];
+    const next = attended[i + 1];
+    while (si + 1 < segs.length && segs[si + 1].startAt <= cur.at) si += 1;
+    // 마지막 이벤트는 다음 신호가 없어 길이를 알 수 없으므로 0 (보수적 추정).
+    const gapMs = next ? next.at - cur.at : 0;
+    segs[si].dwellMs += Math.min(gapMs, MAX_DOMAIN_GAP_MS);
+  }
+}
+
+/** 곁가지 한 줄. 도메인만으로는 무엇이었는지 모르니 제목을 함께 남긴다. */
+function viaLabel(seg: RawSegment): string {
+  const title = pickTitle(seg);
+  return title ? `${seg.domain} · ${title}` : seg.domain;
+}
+
+/**
+ * 짧은 경유를 앞 구간의 곁가지로 접는다.
+ *
+ * 앞에 남길 구간이 아직 없으면(세션 첫머리가 전부 경유였으면) 뒤로 미뤄
+ * **다음** 실질 구간에 붙인다 — 버리지 않는다.
+ * 전부 경유뿐인 세션이면 접을 곳이 없으므로 가장 오래 머문 하나는 남긴다.
+ */
+function foldWaypoints(segs: RawSegment[]): RawSegment[] {
+  const kept: RawSegment[] = [];
+  let pending: string[] = [];
+
+  for (const [i, seg] of segs.entries()) {
+    // 마지막 구간은 길이와 무관하게 남긴다.
+    //
+    // 마지막 이벤트에는 "다음 활동까지의 간격"이 없어 dwell 이 구조적으로 0 이다
+    // — 실제로 얼마나 머물렀든 접기 기준에 걸린다. 그런데 그 구간이 곧
+    // "무엇을 하다 끝났나"라서, outcome 판정이 가장 크게 기대는 자리다
+    // (프롬프트: "마지막 구간이 그 주제라도 그게 적용·확인이면 success").
+    const isLast = i === segs.length - 1;
+    if (isLast || seg.dwellMs >= FOLD_UNDER_SEC * 1000) {
+      if (pending.length > 0) {
+        seg.via.unshift(...pending);
+        pending = [];
+      }
+      // 경유를 접고 나면 그 양옆이 같은 곳인 경우가 흔하다(작업 → 잠깐 검색 →
+      // 다시 작업). 둘로 남기면 접은 효과가 반감되고, 무엇보다 "떠났다 돌아온
+      // 것"처럼 읽힌다 — 실제로는 이어서 한 일이다. 그래서 잇는다.
+      //
+      // **제목이 같을 때만** 잇는다. 같은 localhost 라도 제목이 다르면 다른
+      // 대상이고(Project NA ↔ SOLDIER : A DAY), 그걸 이으면 경험을 대상별로
+      // 나누는 판단 근거가 압축 단계에서 먼저 뭉개진다.
+      const prev = kept[kept.length - 1];
+      if (prev && prev.domain === seg.domain && pickTitle(prev) === pickTitle(seg)) {
+        prev.endAt = seg.endAt;
+        prev.dwellMs += seg.dwellMs;
+        for (const [t, c] of seg.titleCounts) {
+          prev.titleCounts.set(t, (prev.titleCounts.get(t) ?? 0) + c);
+          prev.titleLastAt.set(t, Math.max(prev.titleLastAt.get(t) ?? 0, seg.titleLastAt.get(t)!));
+        }
+        for (const p of seg.paths) {
+          if (prev.paths.length < MAX_SEGMENT_PATHS && !prev.paths.includes(p)) prev.paths.push(p);
+        }
+        for (const v of seg.via) if (!prev.via.includes(v)) prev.via.push(v);
+        continue;
+      }
+      kept.push(seg);
+      continue;
+    }
+    const label = viaLabel(seg);
+    const host = kept[kept.length - 1];
+    // 접힌 시간도 잃지 않는다 — 붙는 구간의 체류에 더한다.
+    if (host) host.dwellMs += seg.dwellMs;
+    const list = host ? host.via : pending;
+    if (!list.includes(label)) list.push(label);
+    if (host) host.via = host.via.slice(0, MAX_VIA);
+  }
+
+  if (kept.length === 0) {
+    if (segs.length === 0) return [];
+    const longest = segs.reduce((a, b) => (b.dwellMs > a.dwellMs ? b : a));
+    longest.via = pending.filter((v) => v !== viaLabel(longest)).slice(0, MAX_VIA);
+    return [longest];
+  }
+
+  // 뒤에 실질 구간이 없어 남은 것은 마지막 구간에 붙인다.
+  if (pending.length > 0) {
+    const last = kept[kept.length - 1];
+    last.via = [...last.via, ...pending].slice(0, MAX_VIA);
+  }
+  for (const seg of kept) seg.via = seg.via.slice(0, MAX_VIA);
+  return kept;
+}
+
+/** 잘려나갈 앞부분을 대상별 합계로 접는다. 순서와 시각은 버리고 시간만 남긴다. */
+function summarizeEarlier(cut: RawSegment[]): CompressedEarlier {
+  const byTarget = new Map<string, number>();
+  for (const seg of cut) {
+    const key = viaLabel(seg);
+    byTarget.set(key, (byTarget.get(key) ?? 0) + seg.dwellMs);
+  }
+  const top = [...byTarget.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_EARLIER_TOP)
+    .map(([label, ms]) => `${label} ${Math.round(ms / 60000)}분`);
+
+  return {
+    start: kstIso(cut[0].startAt),
+    end: kstIso(cut[cut.length - 1].endAt),
+    sec: Math.round(cut.reduce((a, s) => a + s.dwellMs, 0) / 1000),
+    segments: cut.length,
+    top,
+  };
+}
+
+/** close() 내부에서 쓰지만, 상한·중복제거 로직을 직접 검증하기 위해 export 한다.
+ *  maxSegments 는 검증용 주입 지점이다 — 프로덕션은 항상 기본값으로 부른다. */
 export function buildCompressedLog(
   draft: SessionDraft,
-): { segments: CompressedSegment[]; tags: string[]; queries: CompressedQuery[] } {
+  maxSegments: number = MAX_SEGMENTS,
+): {
+  segments: CompressedSegment[];
+  tags: string[];
+  queries: CompressedQuery[];
+  /** 상한을 넘겨 상세를 못 실은 앞부분. 넘치지 않았으면 없다. */
+  earlier?: CompressedEarlier;
+} {
   const rawSegments: RawSegment[] = [];
   let cur: RawSegment | null = null;
 
@@ -301,9 +497,21 @@ export function buildCompressedLog(
   }
   if (cur) rawSegments.push(cur);
 
-  // 토큰 상한 — 구간이 MAX_SEGMENTS 를 넘으면 최신 구간 위주로 남긴다
-  // (LLM 이 요약에 쓰기엔 오래된 구간보다 최근 구간이 더 유용하다는 전제).
-  const trimmed = rawSegments.length > MAX_SEGMENTS ? rawSegments.slice(-MAX_SEGMENTS) : rawSegments;
+  // 시간을 먼저 재고(assignDwell), 그 시간으로 접는다(foldWaypoints).
+  // 순서가 중요하다 — 접고 나면 어느 이벤트가 어느 구간이었는지 알 수 없다.
+  assignDwell(rawSegments, draft.events);
+  const folded = foldWaypoints(rawSegments);
+
+  // 토큰 상한 — 접고도 넘치면 최신 구간만 상세로 남기고, 앞부분은 **버리는 대신
+  // 합계로 접는다.** 접기로 대부분의 세션은 여기까지 안 오지만(실측: 20→4·10·16),
+  // 4시간짜리는 접고도 22~61구간이라 여전히 넘친다.
+  let earlier: CompressedEarlier | undefined;
+  let trimmed = folded;
+  if (folded.length > maxSegments) {
+    const cut = folded.slice(0, folded.length - maxSegments);
+    earlier = summarizeEarlier(cut);
+    trimmed = folded.slice(-maxSegments);
+  }
   const segments = trimmed.map(toSegment);
 
   // 세션 전체 검색 쿼리 — 등장 순서 유지, 중복 제거, 최대 MAX_QUERIES 개.
@@ -333,7 +541,23 @@ export function buildCompressedLog(
     last: kstIso(v.lastAt),
   }));
 
-  return { segments, tags: draft.tags, queries };
+  return earlier ? { segments, tags: draft.tags, queries, earlier } : { segments, tags: draft.tags, queries };
+}
+
+/** 이 구간의 대표 제목 — 가장 많이 등장한 것, 동률이면 더 나중에 등장한 것. */
+function pickTitle(seg: RawSegment): string | undefined {
+  let best: string | undefined;
+  let bestCount = -1;
+  let bestLastAt = -1;
+  for (const [title, count] of seg.titleCounts) {
+    const lastAt = seg.titleLastAt.get(title)!;
+    if (count > bestCount || (count === bestCount && lastAt > bestLastAt)) {
+      best = title;
+      bestCount = count;
+      bestLastAt = lastAt;
+    }
+  }
+  return best;
 }
 
 function toSegment(seg: RawSegment): CompressedSegment {
@@ -342,24 +566,14 @@ function toSegment(seg: RawSegment): CompressedSegment {
     category: seg.category,
     start: kstIso(seg.startAt),
     end: kstIso(seg.endAt),
+    sec: Math.round(seg.dwellMs / 1000),
   };
 
-  if (seg.titleCounts.size > 0) {
-    let bestTitle: string | undefined;
-    let bestCount = -1;
-    let bestLastAt = -1;
-    for (const [title, count] of seg.titleCounts) {
-      const lastAt = seg.titleLastAt.get(title)!;
-      if (count > bestCount || (count === bestCount && lastAt > bestLastAt)) {
-        bestTitle = title;
-        bestCount = count;
-        bestLastAt = lastAt;
-      }
-    }
-    result.title = bestTitle;
-  }
+  const title = pickTitle(seg);
+  if (title) result.title = title;
 
   if (seg.paths.length > 0) result.paths = seg.paths;
+  if (seg.via.length > 0) result.via = seg.via;
 
   return result;
 }

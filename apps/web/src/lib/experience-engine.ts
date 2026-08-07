@@ -66,11 +66,15 @@ export const MODEL = 'claude-haiku-4-5';
 
 export const TOOL_NAME = 'record_experience';
 
-/** SYSTEM_PROMPT_V6 의 버전 번호. llm_outputs 에 남겨 프롬프트 간 비교의
+/** SYSTEM_PROMPT 의 버전 번호. llm_outputs 에 남겨 프롬프트 간 비교의
  *  기준으로 쓴다 — 프롬프트를 고치면 여기도 올린다.
  *  v5: 스킬마다 domain 을 모델이 직접 고른다(예전에는 코드가 세션 category 를 복사).
- *  v6: thread.completed 를 아예 안 묻는다(사람이 표시) + 잠긴 작업 후보를 준다. */
-export const PROMPT_VERSION = 6;
+ *  v6: thread.completed 를 아예 안 묻는다(사람이 표시) + 잠긴 작업 후보를 준다.
+ *  v7: 압축 로그가 구간별 체류 시간(sec)·곁가지(via)·앞부분 요약(earlier)을 싣는다.
+ *      예전에는 상한 20칸이 1분 미만 경유지로 차서 긴 세션의 앞부분이 통째로
+ *      잘려나갔다(실측 14/18 세션, 241분 중 234분이 안 보인 경우까지). 그 상태의
+ *      판정은 세션이 아니라 끝자락에 대한 판정이다. */
+export const PROMPT_VERSION = 7;
 
 /** 프롬프트에 넣는 보유 스킬 목록의 최대 개수. 판정용 집합과는 다르다. */
 const PROMPT_SKILL_LIMIT = 50;
@@ -99,7 +103,7 @@ function kstYmd(date: Date): string {
 // 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
 // (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
 // 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
-export const SYSTEM_PROMPT_V6 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
+export const SYSTEM_PROMPT_V7 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
@@ -107,6 +111,19 @@ export const SYSTEM_PROMPT_V6 = `너는 사용자의 브라우징 세션 하나�
 compressed_log 에는 구간(segments)마다 도메인·카테고리·시각 외에 그 구간에서 관측된
 페이지 제목(title)과 경로 예시(paths)가, 그리고 세션 전체의 검색어(queries)가 들어있다.
 검색 쿼리는 사용자가 무엇을 궁금해했는지, 페이지 제목은 무엇을 읽었는지 알려준다.
+
+구간에 **sec 이 있으면 시간은 그것으로 읽어라. start~end 가 아니다.**
+start~end 는 그 구간의 첫 관측과 마지막 관측 사이일 뿐이라, 관측이 한 번뿐이면 0 이 된다 —
+2분을 머물러도 start 와 end 가 같다. 실제 체류 시간은 sec(초)다. (옛 세션에는 이 값이
+없을 수 있고, 그때는 지금까지처럼 시각으로 어림잡는다.)
+
+via 가 있으면 그 구간에 딸린 **1분도 안 머물고 스쳐간 곳**이다("도메인 · 제목" 꼴). 별도
+구간을 차지할 만큼은 아니지만 무엇을 거쳤는지는 알려준다 — 잠깐 열어본 문서·대시보드 같은 것.
+
+earlier 가 있으면 그건 **이 세션의 앞부분**이고, 길어서 상세를 다 싣지 못해 합계만 남긴
+것이다(무엇을 몇 분 했는지, 원래 구간이 몇 개였는지). segments 는 그 뒤의 최근 구간들이다.
+**earlier 가 있으면 세션은 segments 에 보이는 것보다 훨씬 길다.** 요약할 때 앞부분을 빼고
+"마지막에 한 일"만 말하지 마라 — earlier 의 시간이 segments 보다 클 수도 있다.
 
 **모든 시각은 KST(+09:00) 다.** 새벽·심야 여부를 판단할 때 그대로 읽으면 된다.
 
@@ -933,7 +950,7 @@ export async function processSession(sessionId: string, userId: string): Promise
       // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
       // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
       temperature: 0,
-      system: SYSTEM_PROMPT_V6,
+      system: SYSTEM_PROMPT_V7,
       tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [

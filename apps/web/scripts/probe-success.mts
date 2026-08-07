@@ -14,7 +14,7 @@ import {
   MODEL,
   TOOL_NAME,
   RECORD_EXPERIENCE_TOOL,
-  SYSTEM_PROMPT_V6,
+  SYSTEM_PROMPT_V7,
   buildUserMessage,
 } from '../src/lib/experience-engine';
 
@@ -112,7 +112,7 @@ const out: Record<string, unknown>[] = [];
 for (const c of CASES) {
   const res = await client.messages.create({
     model: MODEL, max_tokens: 1024, temperature: 0,
-    system: SYSTEM_PROMPT_V6,
+    system: SYSTEM_PROMPT_V7,
     tools: [RECORD_EXPERIENCE_TOOL], tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content: buildUserMessage(
       c.sess,

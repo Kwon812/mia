@@ -16,7 +16,7 @@ import {
   MODEL,
   TOOL_NAME,
   RECORD_EXPERIENCE_TOOL,
-  SYSTEM_PROMPT_V6,
+  SYSTEM_PROMPT_V7,
   buildUserMessage,
 } from '../src/lib/experience-engine';
 
@@ -124,7 +124,7 @@ for (const c of CASES) {
     model: MODEL,
     max_tokens: 1024,
     temperature: 0, // 판정이다. 같은 입력이 같은 답을 내야 비교가 성립한다.
-    system: SYSTEM_PROMPT_V6,
+    system: SYSTEM_PROMPT_V7,
     tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [
@@ -187,7 +187,7 @@ for (const title of SCOPES) {
     model: MODEL,
     max_tokens: 1024,
     temperature: 0,
-    system: SYSTEM_PROMPT_V6,
+    system: SYSTEM_PROMPT_V7,
     tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [
