@@ -52,6 +52,8 @@ export type ThreadMemory = {
   triggers: string[];
   /** 기억이 선 시각. 자리는 갈래의 started_at 이 정하므로 표시용이다 */
   occurredAt: number;
+  /** 이 기억을 만든 경험들(memories.experience_ids). 위성에 테두리로 표시된다 */
+  experienceIds: string[];
   /** 그 경험에서 쓴 스킬(비중 내림차순). firstTime 이 이 기억을 남긴 근거다 —
    *  trigger=new_skill 만으로는 "무슨 스킬?"에 답할 수 없다. */
   skills: { name: string; firstTime: boolean }[];
@@ -398,11 +400,20 @@ const radiusOf = (ageDays: number) => 0.16 + Math.sqrt(ageDays) * 0.12;
 //
 // 라디안으로 잰다. 초 단위로 재면 궤도마다 각속도가 달라(케플러) 안쪽 천체는
 // 반 바퀴를 끌고 바깥 천체는 점 하나만 남는다 — 같은 "최근"이 다르게 보인다.
-/** 경험(위성)이 배어 나오기 시작하는 배율과 다 보이는 배율.
- *  기본 배율(1)에서는 별자리만 보인다 — 이 화면이 먼저 답해야 하는 것은
- *  "무엇이 남았나"이지 "그 안에 뭐가 있었나"가 아니다. */
-const SAT_REVEAL_FROM = 1.45;
-const SAT_REVEAL_TO = 3.0;
+/**
+ * 경험(위성)이 배어 나오기 시작하는 배율과 다 보이는 배율.
+ * 계 전체가 보이는 배율에 대한 비율이다(zr).
+ *
+ * 1.45 였다. 그런데 **별끼리를 견주려고 당기는 구간**이 바로 거기다 —
+ * 어느 별이 더 밝고 큰지 보려고 조금 당기면 위성이 벌써 새어 나와서, 견주기
+ * 전에 화면이 궤도선으로 덮였다. 위성은 "그 별 안으로 들어갔을 때" 나와야 한다.
+ *
+ * 늦춘다. 1~2.6 은 순수한 별밭이라 밝기와 크기를 마음껏 견줄 수 있고,
+ * 그 뒤부터 배어 나온다. 누르면 zoomForStar 가 3.8 이상으로 데려가므로
+ * (아래) 클릭 한 번이면 여전히 다 펼쳐진다.
+ */
+const SAT_REVEAL_FROM = 2.6;
+const SAT_REVEAL_TO = 3.8;
 
 /** 위성계 반경이 화면 짧은 변에서 차지하는 몫. 위성이 많을수록 조금 넓힌다 —
  *  열한 개를 두 개와 같은 반경에 밀어 넣으면 궤도가 안 보이고 덩어리가 된다.
@@ -417,8 +428,13 @@ function dominantBody(id: string | null, threads: ThreadBody[]): OrbitBody | nul
 const satFieldF = (n: number) => Math.min(0.115, 0.045 + n * 0.007);
 
 /** 별 하나를 화면에 꽉 채우는 배율. 위성이 적은 별은 더 당겨야 같은 크기로
- *  보인다 — 눌렀을 때 어느 별이든 같은 크기로 열려야 "들어왔다"가 일정하다. */
-const zoomForStar = (n: number) => Math.max(2.4, Math.min(9, 0.3 / satFieldF(n)));
+ *  보인다 — 눌렀을 때 어느 별이든 같은 크기로 열려야 "들어왔다"가 일정하다.
+ *
+ *  하한이 `SAT_REVEAL_TO` 여야 한다. 기하학적으로는 위성이 많은 별일수록 덜
+ *  당겨도 되는데(0.3/satFieldF 가 2.6 까지 내려간다), 그 배율에서는 위성이
+ *  아직 다 안 드러난다 — 눌러서 들어갔는데 안이 반쯤 비어 보이게 된다.
+ *  위성계가 화면보다 조금 커지는 쪽이 낫다. */
+const zoomForStar = (n: number) => Math.max(SAT_REVEAL_TO, Math.min(11, 0.3 / satFieldF(n)));
 
 /** 위성계의 기준 반경(펼친 뒤). 계 화면의 작은 위성계는 이보다 훨씬 작으므로,
  *  위성 크기를 그 비율로 줄인다 — 안 줄이면 반경 60px 짜리 계 안에 반경 10px
@@ -563,7 +579,7 @@ export function OrbitalMap({
    *  계에서는 갈래가, 펼친 뒤에는 경험이 같은 표식을 쓴다 — "이게 방금 그거다"가
    *  층을 건너 읽힌다. TRAIL_SPAN 이 정한 수(3)를 넘는 뒤쪽은 무시된다. */
   latestIds?: readonly string[];
-  /** 갈래를 완결로 표시한다. 갈래 화면에서만 넘어온다. 없으면 버튼이 안 뜬다. */
+  /** 갈래를 완결로 표시한다. 없으면 버튼 자체가 안 뜬다. */
   onComplete?: (threadId: string) => Promise<unknown>;
   /** 지금 화면이 무엇 하나에 대한 것인지. 눌러서 펼쳤거나, 당겨서 그 별의
    *  계 안에 들어와 있으면 그 천체를 넘긴다. 아니면 null.
@@ -674,7 +690,7 @@ export function OrbitalMap({
     // 실제로 남은 것 중 가장 약한 것과 구분이 안 된다.
     const kept = threads.map((t) => t.memory?.importance).filter((n): n is number => n != null);
     const impRatio = spanOf(kept.length > 0 ? kept : [0]);
-    // 이 화면이 기억을 아예 안 읽으면(/threads) "어둡다"가 "안 남았다"가 아니라
+    // 이 화면이 기억을 아예 안 읽으면 "어둡다"가 "안 남았다"가 아니라
     // "모른다"는 뜻이 된다. 그때는 층을 나누지 않고 전부 제 밝기로 띄운다 —
     // 안 그러면 화면 전체가 LUM_DARK 로 깔려 아무것도 안 보인다.
     const anyKept = kept.length > 0;
@@ -2056,7 +2072,7 @@ export function OrbitalMap({
         else if (p.kind === "maxis") {
           const key = found.slice(6);
           // 그리기와 **같은 함수**로 센다. 한때 여기만 memories.trigger 로
-          // 세고 있어서 갈래 화면에서는 늘 0건이었다.
+          // 세고 있어서 갈래만 있는 화면에서는 늘 0건이었다.
           const onAxis = threads.filter((o) => axisKeyOf(o) === key);
           const kept = onAxis.filter((o) => o.memory != null).length;
           setProbe({
@@ -2561,9 +2577,9 @@ export function OrbitalMap({
                 호출 75회 중 completed=true 가 한 번도 없었다.
                 pointer-events-none 인 부모 안이라 이 버튼만 다시 켠다.
 
-                **눌러서 펼친 것이 아니라 당겨서 들어온 것에도 뜬다.** 갈래를
+                **눌러서 펼친 것이 아니라 당겨서 들어온 것에도 뜬다.** 별을
                 누르면 이제 펼치는 게 아니라 확대되기 때문이다 — focus 로만
-                묶어두면 /threads 에서 완결 버튼에 영영 닿을 수 없다.
+                묶어두면 완결 버튼에 영영 닿을 수 없다.
                 스쳐 지나가다 떠도 상관없다. 이 버튼은 또 한 번 눌러야 한다. */}
             {headline.status === "active" && onComplete && (
               <button

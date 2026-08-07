@@ -257,8 +257,7 @@ export async function completeThread(threadId: string): Promise<CorrectResult> {
     }
   });
 
-  revalidatePath("/threads");
-  // 기억이 하나 늘었으니 메인 궤도도 다시 그려야 한다.
+  // 기억이 하나 늘었으니 지도를 다시 그려야 한다. 그 별은 이제 밝아진다.
   revalidatePath("/");
   revalidatePath("/memories");
   return {};

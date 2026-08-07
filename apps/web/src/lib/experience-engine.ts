@@ -1566,7 +1566,7 @@ export async function processSession(sessionId: string, userId: string): Promise
           attachedCount = updated?.n ?? null;
         }
 
-        // 완결 분기는 여기 없다. thread_complete 기억은 사람이 /threads 에서
+        // 완결 분기는 여기 없다. thread_complete 기억은 사람이 지도에서
         // 직접 표시할 때만 생긴다(app/actions.ts 의 completeThread).
         //
         // 오래 붙들고 있는 일은 그 자체로 남을 만하다 — 매 세션은 특별할 게

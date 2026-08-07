@@ -9,13 +9,12 @@ import {
   sessions,
   threads,
 } from "@na/db";
-import { strongestTrigger } from "@na/shared";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { getCurrentDialogueSlot, getKstDayBoundary, kstDaysTogether, DAY_MS } from "@/lib/date";
 import { deriveEmotion, type EmotionExperienceInput, type EmotionSkillInput } from "@/lib/emotion";
 import { effective, loadCorrections } from "@/lib/corrections";
-import { loadSkillsByMemory } from "@/lib/memory-skills";
+import { loadThreadMemories } from "@/lib/thread-memories";
 import { NameForm } from "@/components/name-form";
 import { RECENT_LIMIT } from "@/lib/recent";
 import { MapStage } from "./map-stage";
@@ -25,8 +24,19 @@ import type { Body, ThreadBody } from "@/components/orbital-map";
 // 감정 파생에 넣는 최근 경험 표본 크기 (계획서 06장)
 const EMOTION_SAMPLE_SIZE = 5;
 
-// 지도에 올리는 천체 수 상한. 이보다 많아지면 안쪽이 뭉개져 판독이 안 된다.
-const MAX_BODIES = 220;
+/**
+ * 지도가 읽어오는 경험 수 상한.
+ *
+ * 경험은 천체가 아니라 별 안의 위성이라 이 값이 계의 모양을 정하지는 않는다.
+ * 다만 **상한 밖의 경험은 어느 별에도 안 걸린다** — 당겨 들어가도 위성이 0개인
+ * 별이 된다(판독값에 '경험 0건'으로 뜬다).
+ *
+ * 220 이었다. 갈래 화면(/threads)이 400 을 읽고 있었는데 그 화면을 없애면서
+ * 여기가 유일한 지도가 됐으므로, 더 짧은 쪽에 맞추면 닿던 것이 안 닿는다.
+ * 근본 해결은 상한을 없애고 위성 배치에 필요한 필드만 내려받는 것이다
+ * (HANDOFF「안 끝난 것 2」) — 아직 안 아파서 미뤄뒀다.
+ */
+const MAX_BODIES = 400;
 
 export default async function Home() {
   const user = await getCurrentUser();
@@ -216,11 +226,7 @@ export default async function Home() {
   // 화면에 두 번 뜬다. 조건 없이 전부 올린다: 아직 아무것도 안 남긴 일은
   // 안 보이는 게 아니라 **어두운 별**이다.
   //
-  // thread_id 가 없는 기억은 설 자리가 없다. 지금은 안 생긴다(기억을 만드는
-  // 두 자리 모두 exp.threadId 가 있어야 들어간다). 생기면 조용히 빠진다.
-  const memoryByThread = new Map(
-    liveMemories.filter((m) => m.threadId != null).map((m) => [m.threadId as string, m]),
-  );
+  const memoryByThread = await loadThreadMemories(user.userId, liveMemories);
 
   const expIdsByThread = new Map<string, string[]>();
   for (const e of expRows) {
@@ -230,9 +236,32 @@ export default async function Home() {
     expIdsByThread.set(e.threadId, list);
   }
 
-  // 기억을 남긴 근거(무슨 스킬이 처음이었나). 지도의 판독값·상세 패널이 쓴다 —
-  // trigger=new_skill 만 보여주면 "무슨 스킬?"에 답하는 게 화면에 없다.
-  const skillsByMemory = await loadSkillsByMemory(user.userId, liveMemories);
+  /**
+   * 갈래의 분야를 **속한 경험들의 최빈 category** 로 다시 만든다.
+   *
+   * 저장된 threads.category 도 같은 규칙으로 갱신된다 — 엔진이 attach 마다
+   * 다시 센다. 그러니 중복처럼 보이지만 세는 **대상이 다르다.**
+   *
+   *   DB   : experiences.category — 모델의 판정(inferred)
+   *   여기 : bodies[].category    — 그 위에 사람 교정을 겹친 값(declared)
+   *
+   * 엔진은 corrections 를 보지 않는다(세션 처리 시점에는 교정이 아직 없다).
+   * /diary 에서 분야를 고쳤는데 별의 방향과 색이 안 따라오면 "고쳐도 아무것도
+   * 안 달라진다"가 된다. 이미 불러온 expRows 안에서 세므로 추가 쿼리가 없다.
+   *
+   * (갈래 화면에만 있던 규칙이다. 그 화면을 없애면서 여기로 옮겼다.)
+   */
+  const bodyById = new Map(bodies.map((b) => [b.id, b]));
+  const dominantOf = (threadId: string, fallback: string): string => {
+    const tally = new Map<string, number>();
+    for (const id of expIdsByThread.get(threadId) ?? []) {
+      const c = bodyById.get(id)?.category;
+      if (c) tally.set(c, (tally.get(c) ?? 0) + 1);
+    }
+    if (tally.size === 0) return fallback;
+    // 동률이면 이름순 — 렌더마다 색이 바뀌지 않게 결정적으로 고른다.
+    return [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+  };
 
   const orbitThreads: ThreadBody[] = threadRows.map((t) => {
     const ids = expIdsByThread.get(t.id) ?? [];
@@ -241,7 +270,7 @@ export default async function Home() {
       kind: "thread" as const,
       id: t.id,
       title: t.title,
-      category: t.category,
+      category: dominantOf(t.id, t.category),
       status: t.status,
       experienceCount: t.experienceCount,
       occurredAt: t.startedAt.getTime(),
@@ -252,25 +281,8 @@ export default async function Home() {
       // 없으면 이 갈래를 시작한 경험 하나다(expRows 가 내림차순이라 마지막).
       // "이 일에 뭐가 있었나"와 "그중 뭐가 남았나"는 다른 질문이라 위성은
       // 경험 전부를 띄우고 이 목록만 테두리로 구분한다.
-      sourceIds: m
-        ? m.experienceIds
-        : [ids.at(-1)].filter((id): id is string => id != null),
-      memory: m
-        ? {
-            id: m.id,
-            title: m.title,
-            body: m.body,
-            importance: m.importance,
-            // 화면은 색온도에 값 하나가 필요하다. 저장은 전부, 선택은 읽을 때.
-            trigger: strongestTrigger(m.triggers, m.trigger),
-            triggers: m.triggers.length > 0 ? m.triggers : [m.trigger],
-            occurredAt: m.occurredAt.getTime(),
-            skills: (skillsByMemory.get(m.id) ?? []).map((sk) => ({
-              name: sk.name,
-              firstTime: sk.firstTime,
-            })),
-          }
-        : null,
+      sourceIds: m ? m.experienceIds : [ids.at(-1)].filter((id): id is string => id != null),
+      memory: m ?? null,
     };
   });
 

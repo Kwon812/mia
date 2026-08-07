@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { completeThread } from "@/app/actions";
 import {
   CAT_GROUPS,
   OrbitalMap,
@@ -131,6 +132,15 @@ export function MapStage({
   // OrbitalMap 의 effect 의존성에 들어가므로 매 렌더 새로 만들면 안 된다.
   const handleFocusChange = useCallback((o: OrbitBody | null) => setViewing(o), []);
 
+  // 완결은 사람만 안다 — 브라우징 기록에는 "더 할 게 없다"는 판단의 흔적이
+  // 없다. 갈래 화면에만 있던 버튼인데, 그 화면을 없애면서 여기로 옮겼다.
+  // 이게 없으면 갈래를 끝낼 방법이 사이트 어디에도 남지 않는다.
+  //
+  // 서버 액션이 revalidatePath 로 이 화면을 다시 그린다. 낙관적 갱신을 하지
+  // 않는 이유 — 완결은 기억까지 만드는 일이라, 실패했는데 화면만 바뀌면
+  // "끝냈다고 눌렀는데 기억이 없다"가 된다.
+  const handleComplete = useCallback((threadId: string) => completeThread(threadId), []);
+
   return (
     <main className="relative h-screen w-full overflow-hidden">
       {/* 관측 영역 */}
@@ -140,6 +150,7 @@ export function MapStage({
           threads={threads}
           centerLabel={name}
           onFocusChange={handleFocusChange}
+          onComplete={handleComplete}
           // 펼치면 위성 층이라 최근 경험이, 계 화면에서는 그 경험이 속한 갈래가 표식을 켠다.
           latestIds={reading ? latestExperienceIds : latestThreadIds}
         />
