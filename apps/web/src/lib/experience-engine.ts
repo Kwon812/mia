@@ -1348,7 +1348,20 @@ export async function processSession(sessionId: string, userId: string): Promise
 
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 1024,
+      // **1024 였는데 답이 잘리고 있었다.** `also`(추가 경험)는 출력 **끝**에
+      // 오는데 스키마상 optional 이라, 잘려나가도 검증을 통과한다 — 경험이
+      // 조용히 하나로 줄어든다. 세션이 길고 대상이 여럿일수록 그렇다.
+      //
+      // 실측: 상한에 붙은 호출이 v7 이후 7건이고, v8 재구축에서는 23건 중 5건
+      // (22%)이 그랬다. 같은 세션을 2000 으로 다시 돌리면 경험 3개가 나오는데
+      // 1024 에서는 1개다(temp 0, 3회씩).
+      //
+      //   temp=0 max_tokens=2000 → 경험 3·3·3   stop=tool_use
+      //   temp=0 max_tokens=1024 → 경험 3·1·1   stop=max_tokens
+      //
+      // 온전히 답하는 데 1014~1030 토큰이 든다. 여유를 두고 2048 로 올린다.
+      // max_tokens 는 **상한이지 청구량이 아니다** — 실제 출력만큼만 낸다.
+      max_tokens: 2048,
       // 판정 작업이다. 기본값 1.0 으로는 같은 세션을 두 번 돌리면 outcome 이
       // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
       // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
@@ -1405,6 +1418,26 @@ export async function processSession(sessionId: string, userId: string): Promise
         sessionId,
         reason: 'llm_output_invalid: no tool_use block in response',
         payload: response.content,
+      });
+      return;
+    }
+
+    // ── 잘린 답을 조용히 받지 않는다 ──
+    //
+    // `also` 는 출력 **끝**에 오는데 스키마상 optional 이라, 상한에 걸려 잘려도
+    // 검증을 통과한다 — 경험이 조용히 하나로 줄어든다. 필수 필드는 앞에서 이미
+    // 채워졌으니 겉보기엔 멀쩡한 판정이다. 실제로 그렇게 몇 달을 돌았다.
+    //
+    // 상한을 올렸지만(1024 → 2048) 세션이 더 길어지면 또 닿는다. 그때 조용히
+    // 틀리는 것보다 **드러나는 편**이 낫다 — ingest_failures 는 운영 알림이고
+    // processed_at 이 null 로 남아 재처리 대상이 된다.
+    if (response.stop_reason === 'max_tokens') {
+      await recordOutput(toolUse.input, false);
+      await db.insert(ingestFailures).values({
+        userId,
+        sessionId,
+        reason: `llm_output_truncated: stop_reason=max_tokens (출력 ${response.usage?.output_tokens ?? '?'} 토큰). also 가 잘렸을 수 있다`,
+        payload: toolUse.input,
       });
       return;
     }
