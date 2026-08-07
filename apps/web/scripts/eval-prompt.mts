@@ -9,6 +9,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V7, buildUserMessage } from '../src/lib/experience-engine';
 
 const RUNS = Number(process.argv[2] ?? 3);
+/** 두 번째 인자로 케이스 이름 일부를 주면 그것만 돌린다 — 한 케이스를 파고들 때
+ *  전체 68콜을 태울 이유가 없다. */
+const ONLY = process.argv[3] ?? '';
 
 // Haiku 4.5 가격 ($/1M 토큰) — daily-logs.ts 와 같은 값을 쓴다.
 const IN_PRICE = 1.0;
@@ -367,7 +370,7 @@ async function run(c: Case) {
 }
 
 const summary: any[] = [];
-for (const c of CASES) {
+for (const c of CASES.filter((c) => !ONLY || c.name.includes(ONLY))) {
   const outs = [];
   for (let i = 0; i < RUNS; i++) outs.push(await run(c));
 
