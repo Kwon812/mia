@@ -129,37 +129,65 @@ await sql.begin(async (tx) => {
 });
 console.log('파생 데이터 삭제 완료');
 
+/** 그 세션의 주 경험. 한 세션이 경험 여럿을 낼 수 있으므로 정렬로 하나를 고른다.
+ *  분할되면 앞엣것(가장 이른 것)이 그 세션의 본체이고, 사람이 고친 것도 대개
+ *  그 판정이다. 정렬이 없으면 DB 가 주는 순서대로라 재구축마다 달라진다. */
+const mainExperience = async (sessionId: string) => {
+  const [e] = await sql`select id from experiences where session_id = ${sessionId}
+                         order by occurred_at, id limit 1`;
+  return e ?? null;
+};
+
 let ok = 0;
+let restored = 0;
+let orphaned = 0;
+const bySession = new Map<string, typeof declared.corrections>();
+for (const c of declared.corrections) {
+  bySession.set(c.session_id, [...(bySession.get(c.session_id) ?? []), c] as never);
+}
+
 for (const [i, s] of sessions.entries()) {
   await processSession(s.id, s.user_id);
   const [row] = await sql`select processed_at from sessions where id = ${s.id}`;
   const done = row?.processed_at != null;
   if (done) ok += 1;
+
+  // ── 교정을 **그 자리에서 바로** 되돌린다 ──
+  //
+  // 나중에 한꺼번에 복원하면 안 된다. processSession 은 최근 경험 3건에 교정을
+  // 겹쳐서 프롬프트에 넣고, 교정 패턴("네가 바로잡힌 판정")도 함께 준다.
+  // 그런데 재구축은 시작할 때 corrections 를 통째로 지우므로(experiences 를
+  // 지우면 cascade 로 따라간다), 뒤이은 판정 전부가 **사람 교정을 못 본 채로**
+  // 내려진다 — 교정이 아무 데도 안 쓰이는 라벨 더미가 되는 바로 그 상태다.
+  //
+  // 실측(골든셋 declared 케이스와 같은 모양, 4회씩):
+  //   교정 선례 없음 → dev · dev · study · dev    (1/4 정답)
+  //   교정 선례 있음 → study · study · study · study
+  //
+  // 세션을 시간순으로 돌므로 여기서 되돌리면 다음 세션이 그것을 본다.
+  // 라이브에서 쌓인 순서와 같아진다.
+  for (const c of bySession.get(s.id) ?? []) {
+    const e = await mainExperience(c.session_id);
+    if (!e) { orphaned += 1; continue; }
+    await sql`insert into corrections (user_id, experience_id, field, model_value, human_value, source, created_at)
+      values (${c.user_id}, ${e.id}, ${c.field}, ${c.model_value}, ${c.human_value}, ${c.source}, ${c.created_at})`;
+    restored += 1;
+  }
+
   console.log(`  ${i + 1}/${sessions.length} ${done ? '✓' : '✗'} ${s.started_at.toISOString().slice(0, 16)}`);
 }
 console.log(`\n${ok}/${sessions.length} 처리 성공`);
 
-// 사람 판단 복원 — 세션 id 로 새 experience 를 찾아 다시 잇는다.
+// 나머지 사람 판단 복원 — 세션 id 로 새 experience 를 찾아 다시 잇는다.
 // model_value 는 백업한 값 그대로 넣는다. 그건 "그때 모델이 뭐라고 했나"의
 // 박제본이고, 재구축으로 모델 판정이 바뀌었더라도 그 쌍은 역사적 사실이다.
 {
-  let restored = 0;
-  let orphaned = 0;
   for (const q of declared.questions) {
-    const [e] = await sql`select id from experiences where session_id = ${q.session_id}
-                             order by occurred_at, id limit 1`;
+    const e = await mainExperience(q.session_id);
     if (!e) { orphaned += 1; continue; }
     await sql`insert into questions (user_id, experience_id, field, model_value, text, asked_at, answered_at, dismissed_at)
       values (${q.user_id}, ${e.id}, ${q.field}, ${q.model_value}, ${q.text}, ${q.asked_at}, ${q.answered_at}, ${q.dismissed_at})
       on conflict do nothing`;
-    restored += 1;
-  }
-  for (const c of declared.corrections) {
-    const [e] = await sql`select id from experiences where session_id = ${c.session_id}
-                             order by occurred_at, id limit 1`;
-    if (!e) { orphaned += 1; continue; }
-    await sql`insert into corrections (user_id, experience_id, field, model_value, human_value, source, created_at)
-      values (${c.user_id}, ${e.id}, ${c.field}, ${c.model_value}, ${c.human_value}, ${c.source}, ${c.created_at})`;
     restored += 1;
   }
   // 완결 갈래 되돌리기. 마지막 세션의 경험이 새로 붙은 갈래를 찾아 다시
