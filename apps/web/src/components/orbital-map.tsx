@@ -7,18 +7,22 @@ import { formatKstYmd } from "@/lib/date";
 
 // 궤도 지도 — 이 사이트의 본체.
 //
-// 규칙 하나: 기억은 크고 밝다. 경험은 작고 흐리다.
-// 광도와 크기가 위계를 만들고, 색은 그 기억이 어떤 종류인지만 말한다.
+// **천체는 한 종류다: 갈래 하나가 항성계 하나.**
 //
-// 궤도 요소는 전부 실제 값에서 나온다.
-//   반경 a      ← 얼마나 오래됐나 (log). 오래될수록 멀다.
-//   이심률 e    ← outcome. stuck 일수록 찌그러진다.
-//   광도        ← memory_score.
-//   근일점 방향 ← thread. 같은 작업이면 궤도면이 나란하다.
-//   공전 속도   ← 케플러 제3법칙(T ∝ a^1.5). 먼 것은 느리다.
+// 예전에는 둘이었다 — 기억이 별이고 갈래가 도는 것이었다. 그런데 기억은 갈래당
+// 하나라(uq_memories_thread) 같은 것을 둘로 그린 셈이었고, 대가가 컸다:
+// 방향 문법이 두 벌이었다(기억은 trigger, 갈래는 분야). 한 계에 어휘가 둘이면
+// 축 라벨도 두 벌이고, 그때부터 방향은 아무 뜻도 못 갖는다.
 //
-// 기억을 누르면 그 기억이 중심으로 오고, 그 기억이 참조하는 경험들이 위성으로
-// 그 둘레를 돈다. 기억은 경험에서 만들어진 것이므로 그 관계가 곧 궤도가 된다.
+// 합치면 기억은 사라지는 게 아니라 **별의 성질**이 된다.
+//   자리   ← 분야(방향) × 시작한 지(반경). 한 문법뿐이다.
+//   크기   ← 붙은 경험 수. 질량이다.
+//   광도   ← 그 갈래에 남은 기억의 중요도. 안 남았으면 어두운 별이다.
+//   색     ← 분야. 거기에 trigger 가 색온도로 얹힌다.
+//   선     ← 중심과 이어져 있나. 놓은 갈래(abandoned)만 끊긴다.
+//
+// 별을 당기면 그 안의 경험이 위성으로 돈다. 경험이 그 일을 이루는 것이므로
+// 그 관계가 곧 궤도가 된다 — 도는 것은 이제 위성뿐이다.
 
 export type Body = {
   id: string;
@@ -34,48 +38,31 @@ export type Body = {
   forgotten: boolean;
 };
 
-export type MemoryBody = {
-  kind: "memory";
+/** 갈래에 남은 기억. 갈래당 하나다(uq_memories_thread) — 그래서 별의 성질로
+ *  얹을 수 있다. 없으면 null: 아직 아무것도 안 남긴 일이고, 어두운 별이 된다. */
+export type ThreadMemory = {
   id: string;
-  /** 같은 작업에서 나온 기억끼리 궤도 방향을 공유하기 위한 값 */
-  threadId: string | null;
   title: string;
   body: string;
+  /** 1~10. 별의 광도가 된다 */
   importance: number;
+  /** 남은 이유 중 가장 센 것. 별의 색온도가 된다 */
   trigger: string;
-  occurredAt: number;
-  ageDays: number;
-  /** 남은 이유 전부. 방향·이심률은 위 trigger(가장 센 것)가 정한다. */
+  /** 남은 이유 전부. 여럿이면 그게 곧 그 기억의 성격이라 판독값에 다 적는다 */
   triggers: string[];
-  /** 이 기억을 남긴 갈래를 놓았나(threads.status = 'abandoned').
-   *  별은 그대로 남고 **중심과의 선만 끊긴다** — 남긴 것과 놓은 것을 선 하나로
-   *  가른다. 크기·색·위성은 아무것도 안 바뀐다(남긴 사실은 그대로니까). */
-  abandoned?: boolean;
-  /** 이 기억의 근거가 된 경험들 */
-  referencedIds: string[];
-  /** 그중 이 기억을 실제로 만든 경험 (memories.experience_id). 나머지는 같은 작업에서 딸려온 것들 */
-  /** 테두리를 두를 경험들.
-   *  기억이면 그 기억을 만든 근거(experience_ids), 갈래면 그 갈래를 시작한 경험.
-   *  위성은 갈래 경험 **전부**를 보여주고, 이 목록만 테두리로 구분한다 —
-   *  "이 일에 뭐가 있었나"와 "그중 뭐가 남았나"는 다른 질문이라 한 화면에 둘 다
-   *  있어야 한다. */
-  sourceIds: string[];
+  /** 기억이 선 시각. 자리는 갈래의 started_at 이 정하므로 표시용이다 */
+  occurredAt: number;
   /** 그 경험에서 쓴 스킬(비중 내림차순). firstTime 이 이 기억을 남긴 근거다 —
    *  trigger=new_skill 만으로는 "무슨 스킬?"에 답할 수 없다. */
   skills: { name: string; firstTime: boolean }[];
 };
 
 /**
- * 갈래 — 여러 날에 걸쳐 하나로 이어진 작업(threads).
+ * 갈래 — 여러 날에 걸쳐 하나로 이어진 작업(threads). **이 계의 유일한 천체다.**
  *
- * 기억이 "남은 것"이라면 갈래는 "이어지는 것"이다. 그래서 기억과 같은 계에
- * 뜨되 **바깥 궤도**를 돈다 — 기억 여럿을 아우르는 더 큰 구조라는 뜻이고,
- * 기존 기억 배치를 한 칸도 건드리지 않는다는 실리도 있다.
- *
- * 방향은 status 다. trigger·outcome 과 같은 위계 — 값이 고정 개수라 나눠도
- * 뭉개지지 않는다. 지금은 데이터가 어려 전부 active 라 한 방향에 모이지만,
- * completed 가 하나 나오는 순간 방향이 갈리는 것 자체가 정보다.
- * 색은 기억과 달리 자기 category 를 그대로 쓴다(갈래는 분야를 스스로 갖는다).
+ * 항성계 하나로 본다. 별이 그 일 자체이고, 위성이 그 안의 경험이다.
+ * 기억은 따로 뜨지 않고 `memory` 로 얹혀 광도와 색온도가 된다 — 갈래당 기억이
+ * 하나라 둘로 그리면 같은 것이 화면에 두 번 뜬다.
  */
 export type ThreadBody = {
   kind: "thread";
@@ -84,22 +71,31 @@ export type ThreadBody = {
   category: string;
   /** active | completed | abandoned */
   status: string;
-  /** 이 갈래에 붙은 경험 수 — 크기가 된다 */
+  /** 이 갈래에 붙은 경험 수 — 질량이고, 곧 크기다 */
   experienceCount: number;
   /** 시작 시각 (반경의 근거) */
   occurredAt: number;
   /** 완결 시각. active·abandoned 는 null */
   completedAt: number | null;
   ageDays: number;
-  /** 이 갈래에 속한 경험들 — 누르면 위성으로 펼쳐진다 */
+  /** 이 갈래에 속한 경험들 — 당기면 위성으로 펼쳐진다 */
   referencedIds: string[];
-  /** 이 갈래를 시작한 경험. 기억의 sourceIds 와 같은 자리를 쓴다. */
+  /** 이 갈래를 시작한 경험(과 기억을 만든 근거들). 위성에 테두리로 표시된다.
+   *  위성은 갈래 경험 **전부**를 보여주고 이 목록만 테두리로 구분한다 —
+   *  "이 일에 뭐가 있었나"와 "그중 뭐가 남았나"는 다른 질문이라 한 화면에 둘 다
+   *  있어야 한다. */
   sourceIds: string[];
+  /** 남은 것. 없으면 어두운 별이다. */
+  memory: ThreadMemory | null;
 };
 
-/** 주 궤도에 오르는 것들. 누르면 referencedIds 가 위성으로 펼쳐진다는 점이 같다. */
-export type OrbitBody = MemoryBody | ThreadBody;
+/** 주 궤도에 오르는 것. 한 종류뿐이지만 이름은 남긴다 — 소비처(map-stage ·
+ *  thread-stage)가 "지금 보고 있는 천체"라는 뜻으로 쓰고 있고, 그 뜻은
+ *  천체가 하나가 되어도 그대로다. */
+export type OrbitBody = ThreadBody;
 
+/** 위성(경험)의 이심률. 결과가 궤도의 안정성이 된다 — stuck 일수록 찌그러진다.
+ *  주 천체(별)는 이제 안 돌아서 이심률이 없다. 도는 것은 위성뿐이다. */
 const ECC: Record<string, number> = {
   success: 0.06,
   partial: 0.24,
@@ -112,73 +108,71 @@ const ECC: Record<string, number> = {
 // etc 묶음과는 값이 달라야 한다 — 같으면 "기타 분야"와 "분야 없음"이 한 색이 된다.
 const NEUTRAL: [number, number, number] = [150, 165, 190];
 
-// 기억 궤도의 큰 갈래는 trigger 가 정한다. 다섯 개로 고정된 값이라 360도를
-// 나눠도 갈래가 뭉개지지 않는다 — thread 는 계속 늘어나는 값이라 등간격으로
-// 나누면 스물만 넘어도 18도씩이 되어 방향이 정보가 못 된다.
-// 그래서 굵은 분할은 trigger, 그 안에서의 자리는 thread 가 맡는다.
-export const TRIGGER_ORDER = [
-  'new_skill',
-  'thread_complete',
-  'breakthrough',
-  'deepened',
-  'revival',
-  'comeback',
-];
-
-// 섹터를 π 로 나눈다(2π 가 아니라). 타원은 180도 돌리면 자기 자신이라
-// 그 너머는 같은 방향으로 보인다 — 실제로 쓸 수 있는 각도는 절반뿐이다.
 /**
- * 기억(별)의 방향을 나눈 조각. **온 원(2π)을 쪼갠다.**
+ * trigger → 색온도. **방향이 아니라 색이다.**
  *
- * 예전에는 π 였다. 그때 이 값은 궤도**면의 기울기**였고, 평면은 θ 와 θ+π 가
- * 같은 평면이라 반원이 곧 전체였다 — 맞은편은 못 쓰는 게 아니라 같은 자리였다.
+ * 예전에는 이 값이 별의 방향을 갈랐다. 그때는 별(기억)과 도는 것(갈래)이
+ * 따로였고 각자 제 방향 문법을 가졌는데, 한 계에 방향 어휘가 둘이면 축 라벨도
+ * 두 벌이 되어(NEW_SKILL 옆에 DEV) 방향이 아무 뜻도 못 갖는다.
+ * 천체가 하나가 되면서 방향은 분야 하나로 정리됐고, trigger 는 색으로 옮겼다.
  *
- * 지금 별은 안 돈다. 평면 위의 점이 아니라 **중심에서 뻗은 방향 위의 점**이라
- * (theta0=0), θ 와 θ+π 는 화면 반대쪽이다. 그래서 온 원이 다 쓸 수 있는
- * 자리가 됐고, 조각이 30도에서 60도로 넓어졌다.
- *
- * 넓어진 만큼 조각 안에서 흩뿌릴 여유가 생긴다 — 옆 조각을 침범할 걱정 없이
- * 폭을 비율로 계산해 쓸 수 있다(STAR_FILL).
+ * +1 이 가장 뜨겁고(푸른 별) -1 이 가장 식었다(붉은 별). 실제 별의 색온도와
+ * 같은 방향이다 — 막 뚫고 나온 것이 뜨겁고, 오래 식었다 돌아온 것이 붉다.
+ * 없는 값은 0(색온도 없음)으로 떨어져 분야 색 그대로 뜬다.
  */
-const SECTOR = (Math.PI * 2) / TRIGGER_ORDER.length;
-// 섹터 사이에 빈 각도를 남겨야 다섯 무리가 서로 구분된다.
-const SECTOR_FILL = 0.55;
-
-// ── 갈래(thread) ──
-// 이심률 — 그 작업이 어떤 상태인지가 궤도의 안정성이 된다.
-// 방향은 분야가 가져갔다(THREAD_SECTOR, CAT_GROUPS 아래). status 는 값이 셋인데
-// 실제로는 거의 전부 active 라, 방향에 실으면 섹터가 하나로 뭉쳐 아무것도
-// 못 읽는다. 개수가 고정이라도 **분포가 쏠린 값**은 방향에 못 쓴다.
-const ECC_STATUS: Record<string, number> = {
-  completed: 0.05, // 끝냈다. 자리를 잡았다.
-  active: 0.22, // 아직 돌고 있다
-  // 놓았다. 궤도선을 아예 안 그리고 회전도 멈추므로 이심률은 자리만 흔든다 —
-  // 0 으로 둬야 반경이 곧 "시작한 지"가 된다. 0.46 이던 시절에는 궤도 위
-  // 어디서 얼어붙었느냐에 따라 같은 나이가 0.54~1.46배로 흩어졌다.
-  abandoned: 0,
+const TRIGGER_TEMP: Record<string, number> = {
+  breakthrough: 1, // 막 뚫고 나왔다
+  new_skill: 0.6, // 처음 해봤다
+  deepened: 0.2, // 오래 붙들고 있다
+  thread_complete: -0.2, // 끝냈다. 식어서 자리를 잡았다
+  comeback: -0.6, // 비웠다 돌아왔다
+  revival: -1, // 오래 식었다 돌아왔다
 };
-/** 갈래는 기억 바깥을 돈다. 기억 여럿을 아우르는 더 큰 구조라는 뜻이고,
- *  같은 각도에 겹쳐도 반경이 달라 판정(hit)이 섞이지 않는다. */
-/**
- * 갈래 궤도의 반경 배율. **1 보다 작다 — 갈래는 안쪽이다.**
- *
- * 예전에는 1.34, 즉 기억보다 바깥이었다. 그때는 기억도 궤도를 돌았고 둘이
- * 같은 계에서 자리를 다퉜으니 갈래를 밖으로 뺀 것이 맞았다.
- *
- * 지금은 기억이 궤도를 떠나 별자리가 됐다. 계는 두 겹이다 —
- * 안쪽은 아직 아무것도 안 남긴 일(도는 갈래), 바깥은 남은 것(별).
- * 그러면 갈래는 안으로 접혀야 한다. 접어두면 별자리가 시작하는 자리를
- * 데이터에 맞춰 계산할 필요도 없어진다(STAR_BASE 가 상수가 된다).
- */
-const THREAD_BAND = 0.35;
+
+/** 색온도의 양 끝. 푸른 쪽은 흰빛에 가깝고 붉은 쪽은 호박색이다. */
+const TEMP_HOT: [number, number, number] = [202, 224, 255];
+const TEMP_COOL: [number, number, number] = [255, 186, 132];
+/** 색온도가 분야 색을 얼마까지 끌어당기나. **작아야 한다** — 색의 1차 뜻은
+ *  분야이고(범례가 그렇게 적혀 있다), 색온도는 그 위의 결이다. 0.34 면
+ *  dev 파랑은 뜨거워져도 파랑이고 study 분홍은 식어도 분홍이다. */
+const TEMP_MIX = 0.34;
+
+/** 분야 색에 색온도를 얹는다. 기억이 없으면(trigger=null) 분야 색 그대로다 —
+ *  아직 아무것도 안 남긴 일에는 색온도랄 게 없다. */
+function tempered(
+  color: [number, number, number],
+  trigger: string | null,
+): [number, number, number] {
+  if (!trigger) return color;
+  const k = TRIGGER_TEMP[trigger] ?? 0;
+  if (k === 0) return color;
+  const to = k > 0 ? TEMP_HOT : TEMP_COOL;
+  const m = Math.abs(k) * TEMP_MIX;
+  return [
+    Math.round(color[0] + (to[0] - color[0]) * m),
+    Math.round(color[1] + (to[1] - color[1]) * m),
+    Math.round(color[2] + (to[2] - color[2]) * m),
+  ];
+}
 
 /**
- * 별자리가 시작하는 반경(궤도 단위). 도는 갈래층 바깥이다.
+ * 광도 — 그 갈래에 남은 기억의 중요도.
  *
- * 예전에는 실제 갈래들의 가장 바깥을 재서 정했는데, 그러면 갈래가 하나
+ * 화면 안에서의 몫으로 잰다(topImportance). importance 는 이론상 1~10 인데
+ * 실제로는 3~4 두 칸에 뭉쳐 있어서, 절대값으로 알파를 주면 밝기가 정보가 못
+ * 된다 — 위성 층이 topScore 로 이미 푼 문제고 같은 규칙을 쓴다.
+ *
+ * 바닥값이 0 이 아닌 이유: 기억이 없는 갈래도 **보여야 한다.** 그게 지금
+ * 붙들고 있는 일이다. 다만 남은 것과는 확실히 갈려야 하므로 절반 아래로 둔다.
+ */
+const LUM_FLOOR = 0.42;
+
+/**
+ * 별자리가 시작하는 반경(궤도 단위). 중심(권도형)에서 이만큼 떨어진 곳부터다.
+ *
+ * 예전에는 실제 천체들의 가장 안쪽을 재서 정했는데, 그러면 갈래가 하나
  * 늘거나 오래될 때마다 **별 전체가 통째로 움직였다.** 자리가 기록이려면
- * 남의 사정으로 흔들리면 안 된다. 갈래층이 THREAD_BAND 로 접혀 있어
- * (6개월치에서 0.62) 상수 하나로 안전하게 넘길 수 있다.
+ * 남의 사정으로 흔들리면 안 된다. 상수여야 한다.
  */
 const STAR_BASE = 1.0;
 
@@ -207,21 +201,10 @@ const PACK_MARGIN = 1.45;
  *  이 값에 걸릴 일이 거의 없다 — 데이터가 이상할 때를 위한 안전장치로만 둔다. */
 const PACK_MAX = 24;
 
-// 기억의 이심률 — 그 기억이 어떻게 남았는지가 궤도의 안정성이 된다.
-const ECC_TRIGGER: Record<string, number> = {
-  thread_complete: 0.05, // 끝냈다. 자리를 잡았다.
-  // 오래 붙들고 있는 일. 아직 안 끝났지만 궤도는 잡혔다.
-  deepened: 0.12,
-  new_skill: 0.16,
-  comeback: 0.26,
-  breakthrough: 0.34, // 막 뚫고 나와 아직 흔들린다
-  revival: 0.4, // 오래 비웠다 돌아왔다
-};
-
 // 위성(경험) 궤도면의 갈래는 outcome 이 정한다. 네 개로 고정된 값이라
 // 나눠도 뭉개지지 않는다 — category 는 LLM 이 자유 텍스트로 쓰는 값이라
 // 이론상 무한하고, 표기가 흔들리면(개발/dev/프로그래밍) 계속 늘어난다.
-// 메인에서 trigger(고정)가 갈래를 잡고 thread(무한)가 자리를 잡는 것과 같은 위계다.
+// 계 층에서 분야 묶음(여덟)이 방향을 잡는 것과 같은 위계다.
 const OUTCOME_ORDER = ['success', 'partial', 'stuck', 'explore'];
 const SAT_SECTOR = Math.PI / OUTCOME_ORDER.length;
 const SAT_FILL = 0.55;
@@ -307,16 +290,22 @@ export function groupOfCategory(cat: string) {
   return GROUP_BY_CAT.get(cat) ?? CAT_GROUPS[CAT_GROUPS.length - 1];
 }
 
-/** 갈래의 궤도면을 가르는 값. 색과 **같은 묶음**을 쓴다.
+/**
+ * 별의 방향을 나눈 조각. **분야 묶음이 나눈다. 이 계의 유일한 방향 문법이다.**
  *
- *  카테고리 열셋을 그대로 나누면 섹터가 13.8도라 눈으로 못 읽는다(위성이 45도,
- *  기억이 36도다). 그래서 색이 이미 쓰고 있는 여덟 묶음으로 가른다 — 22.5도.
+ * 예전에는 두 벌이었다 — 별(기억)은 trigger 로 온 원을 여섯 조각, 도는 갈래는
+ * 분야로 반원을 여덟 조각. 그래서 축 라벨이 열넷이 되고 NEW_SKILL 옆에 DEV 가
+ * 붙었다. 한 계에 어휘가 둘이면 그때부터 방향은 아무 뜻도 못 갖는다.
  *
- *  방향과 색이 같은 값을 말하게 되지만 낭비가 아니다. 갈래에는 위성의 outcome
- *  같은 제2의 고정 축이 없고(threads 에 결과 컬럼이 없다), 남은 후보인 status 는
- *  분포가 active 로 쏠려 방향에 실으면 축이 통째로 죽는다. 한 값을 방향과 색
- *  둘로 같이 말하면 어느 쪽으로 세든 해석이 갈리지 않는다. */
-const THREAD_SECTOR = Math.PI / CAT_GROUPS.length;
+ * 남긴 쪽은 분야다. 색이 이미 분야이므로 방향과 색이 서로를 설명하고,
+ * 카테고리 열셋을 그대로 나누면 조각이 27도라 눈으로 못 읽지만(위성이 45도다)
+ * 색이 쓰는 여덟 묶음이면 40도다.
+ *
+ * 온 원(2π)을 쪼갠다. 별은 안 돌아서 평면 위의 점이 아니라 **중심에서 뻗은
+ * 방향 위의 점**이라(theta0=0), θ 와 θ+π 가 화면 반대쪽이다 — 맞은편도
+ * 쓸 수 있는 자리다.
+ */
+const SECTOR = (Math.PI * 2) / CAT_GROUPS.length;
 
 /** 카테고리 → 색. 등장 순서와 무관하게 언제나 같은 색이다 —
  *  예전에는 화면에 있는 값들을 정렬해 순서대로 팔레트를 나눠줬는데,
@@ -325,22 +314,9 @@ export function colorOfCategory(cat: string): [number, number, number] {
   return groupOfCategory(cat).color;
 }
 
-/** 그 기억을 만든 경험들 중 가장 많은 분야. 기억의 색은 여기서 온다.
- *  trigger 는 이미 방향과 이심률 둘을 쓰고 있어서, 색까지 trigger 로 주면
- *  같은 말을 세 번 하고 채널 하나를 통째로 버리게 된다. 분야를 색에 실으면
- *  기억과 경험이 같은 팔레트를 공유해 — 파란 기억을 누르면 파란 위성이
- *  많다 — 두 화면이 하나의 색 언어로 묶인다.
- *  동률이면 이름 순으로 고정한다. 렌더마다 색이 바뀌면 안 된다. */
-/** 기억의 색은 근거의 주된 분야에서 온다. 갈래는 자기 category 가 있어 이 함수를 안 탄다. */
-export function dominantCategory(m: MemoryBody, byId: Map<string, Body>): string | null {
-  const tally = new Map<string, number>();
-  for (const id of m.referencedIds) {
-    const b = byId.get(id);
-    if (!b) continue;
-    tally.set(b.category, (tally.get(b.category) ?? 0) + 1);
-  }
-  if (tally.size === 0) return null;
-  return Array.from(tally.entries()).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))[0][0];
+/** 이 갈래가 어느 방향 조각에 서는가. 색 묶음의 순서가 곧 조각의 순서다. */
+function sectorIndexOf(t: ThreadBody): number {
+  return CAT_GROUPS.indexOf(groupOfCategory(t.category));
 }
 
 
@@ -400,10 +376,11 @@ function phaseOf(id: string): number {
 // 반경의 4% 로 찌그러진다. 이 지도는 "지금 뭘 붙들고 있나"를 먼저 답해야 하므로
 // 최근을 뭉개는 쪽이 더 나쁘다. sqrt 는 같은 시점에 20% 를 지킨다.
 const radiusOf = (ageDays: number) => 0.16 + Math.sqrt(ageDays) * 0.12;
-/** 케플러 제3법칙. 최근 것이 1분쯤에 한 바퀴, 오래된 것은 훨씬 느리게. */
-const speedOf = (a: number) => 0.012 / Math.pow(a, 1.5);
 
 // ── 최근 표식 — 잔광 궤적 ───────────────────────────────
+//
+// **위성 층에서만 쓴다.** 계 층의 별은 안 돌아서 끌 길이 없다 — 거기서는
+// 코로나(drawCorona)가 같은 일을 한다.
 //
 // 예전에는 맥동이었다. 최근 천체의 크기와 밝기가 같이 숨쉬었는데, 화면에서
 // 유일하게 **뜻 없이 움직이는 것**이라 뭘 보려 해도 눈이 계속 그리로 끌려갔다.
@@ -425,14 +402,10 @@ const SAT_REVEAL_TO = 3.0;
  *  열한 개를 두 개와 같은 반경에 밀어 넣으면 궤도가 안 보이고 덩어리가 된다.
  *  상한을 두는 이유는 별끼리 위성계가 겹치기 시작하면 어느 별의 것인지 모르게
  *  되기 때문이다. 배율은 곱하는 쪽(호출부)에서 붙인다. */
-/** id → 천체. 기억이 먼저다 — 별이 된 갈래는 기억 쪽에만 있다. */
-function dominantBody(
-  id: string | null,
-  memories: MemoryBody[],
-  threads: ThreadBody[],
-): OrbitBody | null {
+/** id → 천체. */
+function dominantBody(id: string | null, threads: ThreadBody[]): OrbitBody | null {
   if (!id) return null;
-  return memories.find((m) => m.id === id) ?? threads.find((t) => t.id === id) ?? null;
+  return threads.find((t) => t.id === id) ?? null;
 }
 
 const satFieldF = (n: number) => Math.min(0.115, 0.045 + n * 0.007);
@@ -448,22 +421,26 @@ const zoomForStar = (n: number) => Math.max(2.4, Math.min(9, 0.3 / satFieldF(n))
 const SAT_REF_R = 235;
 const satScaleOf = (R: number) => Math.max(0.42, Math.min(1, Math.sqrt(R / SAT_REF_R)));
 
-/** 별이 된 기억은 도는 갈래보다 이만큼 크다. 권도형과 갈래 사이의 위계 —
- *  중심 > 별 > 도는 갈래 > 경험 — 이 크기만으로 읽혀야 한다. */
-const STAR_SCALE = 1.7;
+/** 별의 크기 — 붙은 경험 수, 곧 질량이다.
+ *
+ *  예전에는 기억의 중요도였다. 그런데 중요도는 이제 광도라, 크기까지 맡으면
+ *  한 값이 채널 둘을 쓰고 "얼마나 오래 붙들고 있는 일인가"는 화면에서 사라진다.
+ *  로그로 누른다 — 경험 100건짜리 갈래가 1건짜리의 100배로 뜨면 계가 그것
+ *  하나가 된다. 1건 5.5px · 10건 8.9px · 100건 12.6px. */
+const massSize = (n: number) => 3.5 + Math.log1p(n) * 2.0;
 
 /** 조각 안에서 별을 흩뿌리는 폭 — 조각 폭에 대한 비율이다. 축을 가운데 두고
  *  ±절반씩 쓴다. 나머지(1-이 값)는 옆 조각과의 여백으로 남아, 얼마를 흩든
- *  **다른 trigger 의 자리를 절대 침범하지 않는다.**
+ *  **다른 분야의 자리를 절대 침범하지 않는다.**
  *
  *  각도는 조각 안에서 아무 뜻도 없는 자유 축이라(뜻은 조각 전체가 갖는다)
  *  여기서 흩는 건 공짜다 — 반면 반경은 경과일이라 흩을수록 뜻이 깎인다.
  *  그래서 흩뿌림을 각도 쪽에 몰아준다.
- *  0.6 이면 60도 조각에서 ±18도를 쓰고 24도가 여백으로 남는다. */
+ *  0.6 이면 40도 조각에서 ±12도를 쓰고 16도가 여백으로 남는다. */
 const STAR_FILL = 0.6;
 
 /** 반경 쪽 흔들림 — 이웃 간격(STAR_SEP)에 대한 비율. 최소 간격 때문에 같은 날
- *  기억들이 자로 잰 듯 균등하게 늘어서는 걸 깬다. 1 보다 작아야 한다.
+ *  시작한 갈래들이 자로 잰 듯 균등하게 늘어서는 걸 깬다. 1 보다 작아야 한다.
  *  넘으면 흔들림이 간격을 먹어 다시 겹친다. */
 const STAR_RADIAL_JITTER = 0.5;
 
@@ -541,27 +518,25 @@ const pullAt = (t: number) => Math.pow(1 - Math.min(1, Math.max(0, t)), 0.45);
 // 궤도면을 위에서 살짝 기울여 본다. 3D 를 쓰지 않고 깊이를 만드는 방법.
 const FLATTEN = 0.46;
 
+/** 계에 놓인 별 하나. **안 돈다** — e·omega·n 이 전부 0 이고, 자리는
+ *  `a × (cos plane, sin plane)` 로 고정이다. 도는 것은 위성뿐이라 궤도 요소는
+ *  위성 층(Sat)에만 남아 있다. */
 type Elem = {
-  kind: "mem";
   id: string;
+  /** 중심에서의 거리(궤도 단위) */
   a: number;
-  e: number;
-  /** 근일점 편각 — 궤도 안에서 어디가 가장 가까운가 */
-  omega: number;
-  /** 궤도면 기울기(화면 공간). 방향은 이걸로 표현한다 */
+  /** 중심에서 뻗은 방향. 분야 조각 안의 자리다 */
   plane: number;
-  theta0: number;
-  n: number;
+  /** 광도 — 남은 기억의 중요도. 알파에 곱해진다 */
   lum: number;
   size: number;
   color: [number, number, number];
-  /** 이 궤도에 올라온 대상. 기억이거나 갈래다. */
+  /** 이 자리에 선 갈래 */
   mem: OrbitBody;
 };
 
 export function OrbitalMap({
   bodies,
-  memories,
   threads,
   centerLabel,
   latestIds,
@@ -569,17 +544,15 @@ export function OrbitalMap({
   onFocusChange,
 }: {
   bodies: Body[];
-  memories: MemoryBody[];
-  /** 갈래 — 기억과 같은 계를 돌되 바깥 궤도에 뜬다. 누르면 종속 경험이 위성으로. */
+  /** 계의 천체 전부. 갈래 하나가 별 하나다 — 당기면 속한 경험이 위성으로. */
   threads: ThreadBody[];
   centerLabel: string;
-  /** 최근에 들어온 것들. **앞에 있을수록 최근이다** — 순서가 곧 잔광 길이라
+  /** 최근에 들어온 것들. **앞에 있을수록 최근이다** — 순서가 곧 표식의 세기라
    *  배열을 섞으면 화면의 뜻이 바뀐다.
-   *  계에서는 기억이, 펼친 뒤에는 경험이 같은 표식을 쓴다 — "이게 방금 그거다"가
+   *  계에서는 갈래가, 펼친 뒤에는 경험이 같은 표식을 쓴다 — "이게 방금 그거다"가
    *  층을 건너 읽힌다. TRAIL_SPAN 이 정한 수(3)를 넘는 뒤쪽은 무시된다. */
   latestIds?: readonly string[];
-  /** 갈래를 완결로 표시한다. 갈래 화면에서만 넘어온다 — 메인은 기억을 다루니
-   *  이 동작이 없다. 없으면 버튼 자체가 안 뜬다. */
+  /** 갈래를 완결로 표시한다. 갈래 화면에서만 넘어온다. 없으면 버튼이 안 뜬다. */
   onComplete?: (threadId: string) => Promise<unknown>;
   /** 지금 화면이 무엇 하나에 대한 것인지. 눌러서 펼쳤거나, 당겨서 그 별의
    *  계 안에 들어와 있으면 그 천체를 넘긴다. 아니면 null.
@@ -614,8 +587,8 @@ export function OrbitalMap({
   const pickedRef = useRef<Body | null>(null);
   pickedRef.current = picked;
 
-  // 최근 표식도 ref 로 읽는다. 그리기 이펙트의 의존성이 [bodies, memories,
-  // threads] 뿐이라, 값으로 쓰면 클로저가 첫 렌더의 값을 잡은 채로 남는다 —
+  // 최근 표식도 ref 로 읽는다. 그리기 이펙트의 의존성이 [bodies, threads]
+  // 뿐이라, 값으로 쓰면 클로저가 첫 렌더의 값을 잡은 채로 남는다 —
   // 포커스에 들어가 위성 층으로 넘어가도 표식이 안 켜졌다.
   // picked·focus 가 이미 같은 이유로 ref 를 쓴다.
   //
@@ -657,8 +630,8 @@ export function OrbitalMap({
   // 캐릭터의 대사가 그대로 남아 있으면 읽을 것이 셋이 되고 그중 둘은 지금
   // 보고 있는 것과 문맥이 어긋난다(오늘 전체에 대한 말이다).
   useEffect(() => {
-    onFocusChange?.(focus ?? dominantBody(dominantId, memories, threads));
-  }, [focus, dominantId, memories, threads, onFocusChange]);
+    onFocusChange?.(focus ?? dominantBody(dominantId, threads));
+  }, [focus, dominantId, threads, onFocusChange]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -669,98 +642,19 @@ export function OrbitalMap({
 
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const byId = new Map(bodies.map((b) => [b.id, b]));
-    // 기억의 색은 근거의 주된 분야에서 온다. 분야→색은 고정 표라 전역이다.
-    const colorOf = (o: OrbitBody) => {
-      // 갈래는 자기 분야를 갖는다. 기억은 근거들의 주된 분야에서 빌려온다.
-      if (o.kind === "thread") return colorOfCategory(o.category);
-      const dom = dominantCategory(o, byId);
-      return dom ? colorOfCategory(dom) : NEUTRAL;
-    };
+    /** 별의 색 — 분야가 색상을, trigger 가 색온도를 준다.
+     *  기억이 없으면 색온도가 없어 분야 색 그대로다. */
+    const colorOf = (o: OrbitBody) => tempered(colorOfCategory(o.category), o.memory?.trigger ?? null);
 
-    // ── 궤도 요소 ──
-    // 주 궤도에 오르는 것은 기억뿐이다. 경험은 기억을 눌렀을 때 그 기억의
-    // 위성으로만 나타난다 — 계에 떠 있는 것은 "남은 것"이어야지 "지나간 것"이
-    // 전부 떠 있으면 무엇이 남았는지가 안 보인다.
-    /** trigger 로 갈래를 잡고, 그 안에서 thread 로 자리를 잡는다.
-     *  반환값은 궤도면의 기울기다 — 근일점 편각으로는 방향이 드러나지 않는다.
-     *  이심률이 낮으면 궤도가 거의 원이고, 원은 아무리 돌려도 같은 모양이라
-     *  화면에서는 눌린 수평 타원 하나로 수렴한다. 평면 자체를 기울여야 갈린다. */
-    function sectorOf(m: MemoryBody): number {
-      const idx = TRIGGER_ORDER.indexOf(m.trigger);
-      const base = (idx < 0 ? TRIGGER_ORDER.length - 1 : idx) * SECTOR;
-      // **같은 이유로 남은 기억은 같은 방향에 선다.** 축을 따라 한 줄이 된다.
-      //
-      // 예전에는 섹터 폭(SECTOR × SECTOR_FILL)을 threadId 해시로 다 썼다.
-      // 그때는 그게 맞았다 — 별이 궤도를 돌던 시절이라 방향은 "어느 갈래의
-      // 궤도면인가"였고, 겹치면 궤도선끼리 뭉갰다.
-      // 지금은 안 돈다. 축에 이름(NEW_SKILL 등)이 적혀 있는데 정작 그 이유로
-      // 남은 것들은 축에서 비켜서 흩어져 있었다 — 라벨이 가리키는 곳에 아무도
-      // 없는 셈이다. 축 위에 세우면 라벨과 별이 같은 것을 말한다.
-      //
-      // 아주 조금만 튼다. 완전히 한 직선이면 자로 그은 것 같아 계기판이 아니라
-      // 도표가 된다 — 겹침은 자리 계산(STAR_SEP)이 막는다.
-      return base + (phaseOf(m.id) - 0.5) * SECTOR * STAR_FILL;
-    }
-
-    /** 갈래의 궤도면. 섹터는 분야의 색 묶음이 가르고, 그 안의 자리는 카테고리가
-     *  잡는다 — 기억을 눌렀을 때 위성이 outcome 으로 갈리고 그 안에서 category 로
-     *  흩어지는 것과 똑같은 위계다. 기억의 sectorOf 와는 완전히 별개고,
-     *  기억 배치는 한 칸도 건드리지 않는다. */
-    function threadSectorOf(t: ThreadBody): number {
-      const g = groupOfCategory(t.category);
-      // 섹터 안을 묶음에 속한 카테고리 수만큼 슬롯으로 쪼갠다.
-      // dev 처럼 카테고리가 하나뿐인 묶음은 슬롯이 곧 섹터라, 그 안을 id 가 다 쓴다.
-      // media(entertainment·music)처럼 여럿이면 카테고리가 먼저 자리를 잡고
-      // 그 안을 id 가 채운다 — 색이 같아도 방향이 갈린다.
-      const slot = (THREAD_SECTOR * SECTOR_FILL) / g.cats.length;
-      const base =
-        CAT_GROUPS.indexOf(g) * THREAD_SECTOR +
-        Math.max(0, g.cats.indexOf(t.category as ExperienceCategory)) * slot;
-      // 같은 카테고리끼리는 id 가 슬롯을 채운다. 예전에는 여기에 카테고리를 또
-      // 넣었는데, 섹터가 이미 분야로 갈린 뒤라 대부분 상수였다 — dev 갈래 넷이
-      // 잔떨림 ±1.6도 안에서 겹쳤다. 없는 정보를 넣느라 있는 자리를 버린 셈이다.
-      return base + phaseOf(t.id) * slot;
-    }
-
-    const threadEls: Elem[] = threads.map((t) => {
-      // 바깥 궤도. 기억 여럿을 아우르는 더 큰 구조라는 뜻이고, 같은 각도에
-      // 겹쳐도 반경이 달라 판정(hit)이 섞이지 않는다.
-      const a = radiusOf(t.ageDays) * THREAD_BAND;
-      const p = phaseOf(t.id);
-      return {
-        kind: "mem" as const,
-        id: t.id,
-        a,
-        e: ECC_STATUS[t.status] ?? 0.22,
-        omega: p * Math.PI * 2,
-        plane: threadSectorOf(t),
-        theta0: p * Math.PI * 2,
-        // 놓은 갈래는 멈춘다. 이 화면은 전부가 천천히 도는 곳이라 하나만 서
-        // 있으면 눈이 바로 잡는다 — "30일간 아무도 안 건드린 일"이라는 뜻과
-        // 정확히 맞는다. 이심률 하나로는 그 뜻이 화면에서 안 읽혔다(타원이
-        // 얼마나 찌그러졌는지는 나란히 놓고 봐야 아는데, 갈래마다 방향도
-        // 반경도 달라 비교가 안 된다).
-        n: t.status === "abandoned" ? 0 : speedOf(a),
-        lum: 1,
-        color: colorOf(t),
-        // 크기는 붙은 경험 수 — 얼마나 오래 붙들고 있는 일인가.
-        // 기억의 importance(1~10)와 자릿수를 맞춰 로그로 누른다.
-        size: 4 + Math.log1p(t.experienceCount) * 3.4,
-        mem: t,
-      };
-    });
-
-    // 기억 크기의 기준. 화면에 올라온 것들 중 가장 중요한 것을 최대로 잡는다.
+    // ── 광도 ──
     //
-    // 예전에는 importance(1~10)를 그대로 픽셀에 곱했다. 그런데 importance 는
-    // memory_score 를 **이론상 최대 200** 으로 나눠 만든 값인데 실제 점수는
-    // 110 이 최대라(0·20·90·110 뿐이다) 열 칸이 3~4 두 칸으로 뭉갰다 —
-    // 화면에서는 6.4px 과 7.2px, 사실상 같은 크기다.
-    //
-    // 위성 층은 이미 이 문제를 화면 기준 정규화로 풀어놨다(topScore). 같은
-    // 규칙을 여기에도 쓴다. importance 자체는 절대값이라 /memories 목록에서
-    // 그대로 쓰이므로 건드리지 않는다 — 고치는 건 화면의 표현뿐이다.
-    const topImportance = Math.max(1, ...memories.map((m) => m.importance));
+    // 화면 안에서의 몫으로 잰다. importance 는 이론상 1~10 인데 실제로는
+    // 3~4 두 칸에 뭉쳐 있어서, 절대값으로 알파를 주면 밝기가 정보가 못 된다 —
+    // 위성 층이 topScore 로 이미 푼 문제고 같은 규칙을 쓴다. importance 자체는
+    // /memories 목록이 절대값으로 쓰므로 건드리지 않는다.
+    const topImportance = Math.max(1, ...threads.map((t) => t.memory?.importance ?? 0));
+    const lumOf = (t: ThreadBody) =>
+      t.memory ? LUM_FLOOR + (1 - LUM_FLOOR) * (t.memory.importance / topImportance) : LUM_FLOOR;
 
     // 별자리가 시작하는 곳. 상수다 — 근거는 STAR_BASE 주석에.
     const starBase = STAR_BASE;
@@ -768,34 +662,32 @@ export function OrbitalMap({
     // ── 조각 안에 별 놓기 ──
     //
     // 각도와 반경을 **같이** 정한다. 따로 정하면 안 되는 이유가 실측으로
-    // 드러났다: 6개월치(별 91)를 넣었더니 한 조각에 열몇 개가 몰렸는데,
-    // 각도는 해시라 겹치고 그 겹침을 반경 쪽 최소 간격이 혼자 감당했다.
-    // 밀린 것이 다음 것을 또 밀어 사슬이 폭주했고(마지막 별이 시작 반경의
-    // 다섯 배 밖), maxA 가 그만큼 커지면서 축척이 무너져 계 전체가 가운데
-    // 작은 덩어리로 뭉갰다.
+    // 드러났다: 6개월치를 넣었더니 한 조각에 열몇 개가 몰렸는데, 각도는 해시라
+    // 겹치고 그 겹침을 반경 쪽 최소 간격이 혼자 감당했다. 밀린 것이 다음 것을
+    // 또 밀어 사슬이 폭주했고(마지막 별이 시작 반경의 다섯 배 밖), maxA 가
+    // 그만큼 커지면서 축척이 무너져 계 전체가 가운데 작은 덩어리로 뭉갰다.
     //
-    // 조각 폭(60도 중 쓸 수 있는 36도)이 아직 통째로 남아 있는데 반경만
-    // 밀어낸 게 잘못이었다. 자리를 각도로 먼저 갈라 쓰고, 반경은 **같은
-    // 각도 자리에 놓인 것끼리만** 최소 간격을 건다.
+    // 조각 폭이 아직 통째로 남아 있는데 반경만 밀어낸 게 잘못이었다. 자리를
+    // 각도로 먼저 갈라 쓰고, 반경은 **같은 각도 자리에 놓인 것끼리만**
+    // 최소 간격을 건다.
     const starA = new Map<string, number>();
     const starPlane = new Map<string, number>();
     {
-      // 묶는 기준은 trigger 자체가 아니라 **sectorOf 가 실제로 쓰는 칸**이다.
-      // 목록에 없는 trigger 는 전부 마지막 칸으로 떨어지므로(둘 다 같은 방향에
-      // 선다), trigger 로 묶으면 같은 줄에 있는 것들이 다른 무리로 갈린다.
-      const byAxis = new Map<number, MemoryBody[]>();
-      for (const m of memories) {
-        const i = TRIGGER_ORDER.indexOf(m.trigger);
-        const key = i < 0 ? TRIGGER_ORDER.length - 1 : i;
+      // 묶는 기준은 카테고리가 아니라 **조각이 실제로 쓰는 칸**(색 묶음)이다.
+      // 목록에 없는 category 는 전부 etc 칸으로 떨어지므로(같은 줄에 선다),
+      // 카테고리로 묶으면 같은 줄에 있는 것들이 다른 무리로 갈린다.
+      const byAxis = new Map<number, ThreadBody[]>();
+      for (const t of threads) {
+        const key = sectorIndexOf(t);
         const list = byAxis.get(key) ?? [];
-        list.push(m);
+        list.push(t);
         byAxis.set(key, list);
       }
       for (const [key, list] of byAxis) {
         const base = key * SECTOR;
         // 안쪽(최근)부터. 동률이면 id 로 갈라 렌더마다 순서가 안 바뀌게 한다.
-        const rBase = (m: MemoryBody) =>
-          radiusOf(m.ageDays) + (phaseOf(`${m.id}r`) - 0.5) * STAR_SEP * STAR_RADIAL_JITTER;
+        const rBase = (t: ThreadBody) =>
+          radiusOf(t.ageDays) + (phaseOf(`${t.id}r`) - 0.5) * STAR_SEP * STAR_RADIAL_JITTER;
         const sorted = [...list].sort((x, y) => rBase(x) - rBase(y) || x.id.localeCompare(y.id));
 
         // 각도 자리를 번갈아 쓴다. 반경 순으로 훑으며 자리를 옮겨가므로,
@@ -831,49 +723,21 @@ export function OrbitalMap({
       }
     }
 
-    const els: Elem[] = memories.map((m) => {
-      // 별끼리의 거리는 지금까지와 같은 근거(occurred_at → 경과일)로 벌린다.
-      // 다만 0 에서 재지 않고 궤도층 바깥에서 잰다 — 규칙은 그대로고 원점만 옮겼다.
-      //
-      // occurred_at 은 그 갈래에서 **처음** 기억이 될 만한 경험의 시각이고,
-      // 근거가 더 쌓여도 안 움직인다(memory-recheck 의 append 분기가 안 건드린다).
-      // 그래서 별은 한번 서면 안쪽으로 되돌아오지 않는다 — 나이를 따라 밖으로만 간다.
-      const a = starA.get(m.id) ?? starBase + radiusOf(m.ageDays);
-      const p = phaseOf(m.id);
+    const els: Elem[] = threads.map((t) => {
+      // 반경은 started_at 에서 나온다 — "시작한 지 얼마나 됐나". 한번 서면
+      // 안쪽으로 되돌아오지 않고 나이를 따라 밖으로만 간다. last_activity_at
+      // 으로 바꾸는 안은 검토했고 안 하기로 했다(HANDOFF「정한 것」).
       return {
-        kind: "mem" as const,
-        id: m.id,
-        a,
-        // **이심률을 안 쓴다(0).** 찌그러짐은 궤도의 모양이라 궤도선이 있어야
-        // 읽히는 값인데, 별은 안 돌아서 궤도선을 안 그린다 — 남겨두면 보이지도
-        // 않으면서 반경만 흔든다. 실제로 e=0.2 일 때 별 하나가 시작점 안쪽으로
-        // 끌려 들어가 갈래 궤도 위에 얹혔다(theta0 위치의 반경이 a 와 크게
-        // 다르기 때문). e=0 이면 반경이 곧 a 라 "궤도층 바깥"이 정확히 지켜진다.
-        // trigger 는 방향(sectorOf)이 이미 말하고 있다.
-        e: 0,
-        // 갈래는 trigger, 갈래 안의 자리는 thread. 같은 작업에서 나온 기억은
-        // 같은 갈래 안에서 나란히 놓이고, 다른 종류의 기억은 다른 갈래로 간다.
-        // e=0 이라 근일점 편각은 아무 데도 안 쓰인다. 0 으로 둔다.
-        omega: 0,
-        plane: starPlane.get(m.id) ?? sectorOf(m),
-        // **궤도면 안에서의 각도를 0 으로 고정한다.** 이게 축 위에 세우는
-        // 나머지 절반이다 — plane 만 맞춰도 theta0 가 제각각이면 같은 평면
-        // 위의 원을 따라 흩어져서, 방향은 같은데 자리는 여전히 사방이 된다.
-        // theta0=0 이면 좌표가 (r, 0) 이라 평면 기울기 방향 그대로 r 만큼
-        // 나간 점이 된다 — 축이 곧 그 별들이 선 줄이다.
-        theta0: 0,
-        // **안 돈다.** 반경은 계속 나이를 따라 밖으로 가고, 각도만 멈춘다.
-        n: 0,
-        lum: 1,
-        color: colorOf(m),
-        // 중요도가 곧 크기다 — 다만 절대값이 아니라 화면 안에서의 몫이다.
-        // 별은 궤도를 도는 갈래보다 확실히 커야 위계가 읽힌다(STAR_SCALE).
-        size: (4 + (m.importance / topImportance) * 8) * STAR_SCALE,
-        mem: m,
+        id: t.id,
+        a: starA.get(t.id) ?? starBase + radiusOf(t.ageDays),
+        // 자리는 `a × (cos plane, sin plane)`. 조각(분야) 안의 한 점이다.
+        plane: starPlane.get(t.id) ?? sectorIndexOf(t) * SECTOR,
+        lum: lumOf(t),
+        color: colorOf(t),
+        size: massSize(t.experienceCount),
+        mem: t,
       };
     });
-
-    els.push(...threadEls);
 
     // ── 겹치지 않을 축척을 데이터에서 역산한다 ──
     //
@@ -884,53 +748,40 @@ export function OrbitalMap({
     //      몰리면 그 안에서는 여전히 겹친다. 무엇을 보고 있는지 분간이 안 된다.
     //   3) 지금 — **가장 빽빽한 한 쌍**을 찾아, 그 둘이 안 겹칠 만큼으로 잡는다.
     //
-    // 별은 안 돈다(n=0, theta0=0). 그래서 자리가 `a × (cos plane, sin plane)`
-    // 로 고정이고, 쌍마다 거리를 정확히 잴 수 있다. 크기(size)는 중요도에서
-    // 나온 px 값이라 축척과 무관하다 — 순환이 없다.
+    // 별은 안 돈다. 그래서 자리가 `a × (cos plane, sin plane)` 로 고정이고,
+    // 쌍마다 거리를 정확히 잴 수 있다. 크기(size)는 경험 수에서 나온 px 값이라
+    // 축척과 무관하다 — 순환이 없다.
     //
     //   필요한 축척 = (두 후광 반지름의 합 × 여유) / 두 별 사이 거리(궤도 단위)
     //
     // 가장 큰 값을 고르면 나머지는 저절로 만족한다. 데이터가 빽빽해질수록
     // 계가 커지고, 그만큼 물러나서 본다 — 안쪽 생김새는 안 바뀐다.
     //
-    // 91개면 4095쌍이다. 이펙트당 한 번이라 프레임에는 안 실린다.
-    const starEls = els.filter((e) => e.mem.kind === "memory");
+    // 131개면 8515쌍이다. 이펙트당 한 번이라 프레임에는 안 실린다.
     let unitNeed = 0;
-    for (let i = 0; i < starEls.length; i++) {
-      const A = starEls[i];
+    for (let i = 0; i < els.length; i++) {
+      const A = els[i];
       const ax = A.a * Math.cos(A.plane);
       const ay = A.a * Math.sin(A.plane);
-      for (let j = i + 1; j < starEls.length; j++) {
-        const B = starEls[j];
+      for (let j = i + 1; j < els.length; j++) {
+        const B = els[j];
         const d = Math.hypot(ax - B.a * Math.cos(B.plane), ay - B.a * Math.sin(B.plane));
         if (d < 1e-6) continue;
         unitNeed = Math.max(unitNeed, ((A.size + B.size) * 3.2 * PACK_MARGIN) / d);
       }
     }
 
-    // 기억이 하나도 없으면 궤도가 없다. 축척이 0 으로 무너지지 않게 바닥값을 둔다.
-    const maxA = els.reduce((mx, e) => Math.max(mx, e.a * (1 + e.e)), 0.5);
+    // 천체가 하나도 없으면 계가 없다. 축척이 0 으로 무너지지 않게 바닥값을 둔다.
+    const maxA = els.reduce((mx, e) => Math.max(mx, e.a), 0.5);
 
-    /** 궤도면 축의 이름. 그 방향이 무슨 뜻인지를 화면에 적어주는 값이다.
-     *
-     *  기억은 trigger, 갈래는 색 묶음이다. 예전에는 갈래가 축을 아예 못 갖게
-     *  막아놨는데(null), 그때 갈래의 방향이 status 라서 ACTIVE 같은 라벨이
-     *  기억의 trigger 축들 사이에 끼면 한 범례에 두 어휘가 섞였기 때문이다.
-     *  방향이 분야로 바뀌면서 그 이유가 없어졌다 — 이제 갈래 축의 라벨은
-     *  오른쪽 아래 색 범례와 **같은 단어**라 서로를 설명한다.
-     *
-     *  두 어휘가 실제로 한 화면에 섞이지는 않는다. 메인은 memories 만,
-     *  /threads 는 threads 만 받아서(각각 상대를 빈 배열로 넘긴다) 축 목록에
-     *  한 종류만 올라온다. */
-    const axisKeyOf = (o: OrbitBody) =>
-      o.kind === "memory" ? o.trigger : groupOfCategory(o.category).key;
-    /** 포커스 원의 크기 근거. 기억은 중요도, 갈래는 붙은 경험 수. */
-    const weightOf = (o: OrbitBody) =>
-      o.kind === "memory" ? o.importance : Math.log1p(o.experienceCount) * 4.2;
+    /** 방향 축의 이름. 그 방향이 무슨 뜻인지를 화면에 적어주는 값이다.
+     *  **어휘가 하나다** — 분야. 색 범례와 같은 단어라 서로를 설명한다. */
+    const axisKeyOf = (o: OrbitBody) => groupOfCategory(o.category).key;
+    /** 포커스 원의 크기 근거. 별과 같은 기준(질량)이어야 넘겨주는 지점이 안 튄다. */
+    const weightOf = (o: OrbitBody) => Math.log1p(o.experienceCount) * 4.2;
 
-    /** 주 궤도에 올라온 것 전부. 기억과 갈래를 id 로 함께 찾는다. */
+    /** 계에 올라온 것 전부. id 로 찾는다. */
     const orbitById = new Map<string, OrbitBody>();
-    for (const m of memories) orbitById.set(m.id, m);
     for (const t of threads) orbitById.set(t.id, t);
 
     let w = 0;
@@ -1077,48 +928,21 @@ export function OrbitalMap({
       cy = h / 2 + offY;
     }
 
-    /** 궤도 위 각도 theta 에 해당하는 화면 좌표. 잔광은 지금 각도에서
-     *  뒤로 물러난 각도를 여러 번 물어야 해서 t 가 아니라 theta 로 받는다. */
-    function orbitAt(el: Elem, theta: number) {
-      const r = ((el.a * (1 - el.e * el.e)) / (1 + el.e * Math.cos(theta - el.omega))) * unit;
-      // 궤도면 안의 좌표를 구한 뒤 평면 기울기만큼 화면에서 돌린다.
-      const lx = Math.cos(theta) * r;
-      const ly = Math.sin(theta) * r * FLATTEN;
-      const c = Math.cos(el.plane);
-      const sn = Math.sin(el.plane);
-      return { x: cx + lx * c - ly * sn, y: cy + lx * sn + ly * c, theta };
-    }
-
-    function orbitPoint(el: Elem, t: number) {
-      return orbitAt(el, el.theta0 + t * el.n);
-    }
-
-    function drawOrbit(el: Elem, alpha: number, group = false) {
-      const b = el.a * Math.sqrt(1 - el.e * el.e);
-      const c = el.a * el.e;
-      ctx!.save();
-      ctx!.translate(cx, cy);
-      ctx!.rotate(el.plane); // ← 평면 기울기. 이게 방향이다.
-      ctx!.scale(1, FLATTEN);
-      ctx!.rotate(el.omega);
-      ctx!.beginPath();
-      ctx!.ellipse(-c * unit, 0, el.a * unit, b * unit, 0, 0, Math.PI * 2);
-      ctx!.restore();
-      // 궤도선도 그 기억의 색을 쓴다. 중성 청회색이면 천체와 선이 따로 놀아
-      // "저 선이 누구 것인가"를 눈으로 못 잇는다 — 열다섯 개가 겹쳐 있으면 특히.
-      // 위성 궤도는 이미 제 색을 쓰고 있었으니 이쪽만 어긋나 있었다.
-      const lit = hovered === el.id || group;
-      ctx!.strokeStyle = lit
-        ? `rgba(99,230,210,${0.55 * alpha})`
-        : `rgba(${el.color.join(",")},${0.22 * alpha})`;
-      ctx!.lineWidth = lit ? 1.4 : 0.9;
-      ctx!.stroke();
+    /** 별의 화면 좌표. **시간을 안 받는다** — 별은 안 돈다.
+     *
+     *  중심에서 plane 방향으로 a 만큼 나간 점. 눌리지 않은 온전한 원 위다 —
+     *  FLATTEN 은 궤도면을 위에서 기울여 보느라 생기는 것이라 도는 것(위성)
+     *  에만 걸린다. 축척 역산(unitNeed)도 이 좌표로 거리를 재므로 둘이 어긋나면
+     *  겹침 계산이 통째로 틀어진다. */
+    function orbitPoint(el: Elem) {
+      const r = el.a * unit;
+      return { x: cx + r * Math.cos(el.plane), y: cy + r * Math.sin(el.plane), theta: 0 };
     }
 
     // ── 위성(경험) 배치 ──
     //
     // 두 곳이 같은 배치를 쓴다.
-    //   계 화면   — 별이 된 기억마다, 그 자리에서 작은 반경으로.
+    //   계 화면   — 별마다, 그 자리에서 작은 반경으로.
     //   펼친 뒤   — 고른 천체 하나만, 화면 가운데에서 큰 반경으로.
     // 예전에는 펼친 쪽에만 있었다(경험은 눌러야 나오는 층이었다). 이제 계
     // 화면에도 늘 떠 있으므로 식이 하나여야 한다 — 둘로 두면 펼치는 순간
@@ -1331,8 +1155,35 @@ export function OrbitalMap({
       }
     }
 
+    /** 최근 표식 — 코로나.
+     *
+     *  계 층의 별은 안 돌아서 잔광(지나온 길)이 성립하지 않는다. 대신 후광
+     *  바로 바깥에 고리 하나를 두른다. 새 색도 새 움직임도 안 더한다 — 그 별의
+     *  색이고, 도착 순간의 섬광(flare)에만 한 번 밝아졌다 잦아든다.
+     *  순위가 지름과 세기를 함께 정한다: 가장 최근이 가장 크고 진하다. */
+    function drawCorona(
+      x: number,
+      y: number,
+      size: number,
+      rank: number,
+      rgb: readonly [number, number, number],
+      alpha: number,
+    ) {
+      const span = TRAIL_SPAN[rank];
+      if (span == null || alpha <= 0.01) return;
+      // 후광(size×3.2)보다 확실히 밖이어야 고리로 읽힌다. 안쪽이면 별이
+      // 그냥 조금 커진 것처럼 보여 크기(=질량)를 잘못 읽는다.
+      const rad = size * 3.2 * (1.35 + span * 0.5);
+      const a = alpha * span * (0.32 + flare * 0.5);
+      ctx!.strokeStyle = `rgba(${rgb.join(",")},${a})`;
+      ctx!.lineWidth = 1 + span * 0.8;
+      ctx!.beginPath();
+      ctx!.arc(x, y, rad, 0, Math.PI * 2);
+      ctx!.stroke();
+    }
+
     // 경험 — 테두리가 있는 원이 아니라 빛 자체다. 단단한 가장자리를 그리지
-    // 않고 중심에서 바깥으로 사그라드는 그라디언트만 그린다. 기억은 심이 있는
+    // 않고 중심에서 바깥으로 사그라드는 그라디언트만 그린다. 별은 심이 있는
     // 발광체이고 경험은 그 둘레를 도는 빛 — 이 차이가 둘을 가른다.
     function drawPoint(
       x: number,
@@ -1366,11 +1217,11 @@ export function OrbitalMap({
       ctx!.fill();
     }
 
-    // 기억 — 경험과 같은 원리다. 테두리 있는 원을 그리지 않고 중심에서
+    // 별 — 경험과 같은 원리다. 테두리 있는 원을 그리지 않고 중심에서
     // 사그라드는 그라디언트만 그린다. 단단한 원은 "가장자리가 어디까지인가"라는
-    // 답할 수 없는 질문을 만든다 — 기억에는 경계가 없다.
+    // 답할 수 없는 질문을 만든다 — 별에는 경계가 없다.
     // 경험과 갈리는 건 모양이 아니라 크기와 심의 흰빛, 그리고 맥동이다.
-    function drawMemory(
+    function drawStar(
       x: number,
       y: number,
       radius: number,
@@ -1604,21 +1455,12 @@ export function OrbitalMap({
       if (flareAt === 0) flareAt = now;
       flare = reduced ? 0 : Math.exp(-(now - flareAt) / 1400);
       // 시간축이 둘이다.
-      //   simT — 계 전체(기억). 겨누고 있거나 기억 하나에 붙어 있으면 멈춘다.
-      //          포커스 중에 뒤에서 계속 돌면 빠져나왔을 때 자리가 달라져 있어
-      //          "어디서 들어왔는지"를 잃는다.
-      //   satT — 포커스 안의 위성(경험). 겨누고 있을 때만 멈춘다.
+      //   simT — 계 전체. 겨누고 있거나 별 하나에 붙어 있으면 멈춘다.
+      //          별은 이제 안 돌지만 맥동·섬광이 이 시계를 쓴다.
+      //   satT — 위성(경험). 겨누고 있을 때만 멈춘다.
       // 예전에는 하나였다. 그래서 포커스에 들어가는 순간 위성까지 같이 얼어
       // 근거가 도는 게 아니라 박혀 있었다 — 멈춰야 하는 건 배경이지 대상이 아니다.
-      // 전환 중에는 멈추지 않는다. 초점을 매 프레임 다시 구하므로 착지점이
-      // 움직여도 인수인계가 어긋나지 않는다 — 얼려둘 이유가 없다.
-      // 빠져나오는 순간부터 계가 다시 돌기 시작하고, 돌아가는 천체는 제자리가
-      // 아니라 "지금 있어야 할 자리"로 날아간다. 그게 궤도다.
-      // 당겨서 하나 안에 들어와 있는 동안에도 멈춘다. 별(기억)은 원래 안
-      // 돌지만 **갈래는 돈다** — 안 멈추면 확대해 들여다보는 사이에 대상이
-      // 화면 밖으로 흘러나가고, 그 위성계까지 통째로 따라 나간다.
-      // 멈추는 것은 계(simT)뿐이다. 그 안의 경험(satT)은 계속 돈다 —
-      // 멈춰야 하는 건 배경이지 지금 보고 있는 대상이 아니다.
+      // 멈추는 것은 계(simT)뿐이다. 그 안의 경험(satT)은 계속 돈다.
       const scaleTarget = hovered || focusRef.current || inStarId || lockedId ? 0 : 1;
       tScale += (scaleTarget - tScale) * 0.16;
       simT += dt * tScale;
@@ -1697,14 +1539,6 @@ export function OrbitalMap({
         0,
         Math.min(1, (zr - SAT_REVEAL_FROM) / (SAT_REVEAL_TO - SAT_REVEAL_FROM)),
       );
-      // 도는 갈래가 배어 나오는 정도. 별(경험)과 같은 경사를 쓴다 —
-      // "당기면 안의 것이 보인다"는 규칙 하나가 층마다 반복되는 것이라,
-      // 층마다 다른 문턱을 두면 그 규칙이 규칙으로 안 읽힌다.
-      //
-      // 갈래는 THREAD_BAND 로 중심 가까이 접혀 있어서, 별 하나 안으로 들어가
-      // 있을 때는 어차피 화면 밖이다 — 따로 안 걸러도 된다.
-      const threadReveal = satReveal;
-
       // 매 프레임 지우고 아래에서 다시 정한다. 안 지우면 물러난 뒤에도 마지막
       // 별의 판독값이 위에 남는다 — 위성계를 안 그리는 배율에서는 계산 자체가
       // 안 돌기 때문이다.
@@ -1722,12 +1556,11 @@ export function OrbitalMap({
       // 중앙으로 데려간다. 크로스페이드만 하면 "다른 화면으로 갈아탔다"가
       // 되는데, 초점을 향해 밀고 들어가면 "그 안으로 들어갔다"가 된다.
       //
-      // 초점은 그 천체의 "지금" 궤도 위치다. 클릭 순간의 좌표를 저장해 쓰면
-      // 안 된다 — 돌아올 때 계가 다시 돌기 시작하면 실제 궤도 위치는 이미
-      // 딴 데 가 있고, 전환이 끝나 시스템 레이어로 넘어가는 순간 그 차이만큼
-      // 천체가 뚝 튄다. 매 프레임 다시 구하면 넘겨주는 지점이 정확히 맞는다.
+      // 초점은 그 천체의 자리다. 별은 안 돌지만 카메라(cx·cy·unit)가 움직이므로
+      // 매 프레임 다시 구한다 — 클릭 순간의 화면 좌표를 저장해 쓰면 그사이
+      // 배율이나 이동이 바뀐 만큼 착지점이 어긋난다.
       const focEl = foc ? els.find((e) => e.id === foc.id) : null;
-      const fp = focEl ? orbitPoint(focEl, t) : null;
+      const fp = focEl ? orbitPoint(focEl) : null;
       const fx = fp ? fp.x : cx;
       const fy = fp ? fp.y : cy;
       const camZ = 1 + ez * (ZOOM - 1);
@@ -1743,11 +1576,6 @@ export function OrbitalMap({
           ctx!.scale(camZ, camZ);
           ctx!.translate(-fx, -fy);
         }
-        // 갈래 축. 포커스 안의 결과 축과 같은 원리다 — 갈래를 정하는 건
-        // trigger 고 thread 는 그 안에서 조금 틀 뿐이니, 축은 종류마다 하나면
-        // 된다. 갈래 한가운데라는 임의의 자리가 아니라 그 종류에 속한 기억들이
-        // 실제로 쓰는 평면 각도의 평균에 긋는다.
-        // 축이 궤도보다 먼저다 — 선은 배경이지 대상이 아니다.
         // 깊이 정렬. 기울여 본 평면이므로 화면 아래쪽(y > cy)이 관찰자에게
         // 가까운 쪽이다. 뒤쪽을 먼저, 중심을, 그다음 앞쪽을 그려야 앞을 지나는
         // 천체가 중심 위로 지나간다 — 안 그러면 전부 중심 뒤로 숨는다.
@@ -1756,14 +1584,14 @@ export function OrbitalMap({
         // "지금 어느 별 안에 들어와 있나"에 달려 있는데, 축은 배경이라 제일
         // 먼저 그려야 한다 — 계산과 그리기 순서가 반대다.
         // 위성을 거느리는 것은 전부 배율을 따라 커진다. 제 위성이 커지는 만큼
-        // 저도 커져야 "누가 중심인가"가 안 뒤집힌다 — 별이든 도는 갈래든 같다.
+        // 저도 커져야 "누가 중심인가"가 안 뒤집힌다.
         // 중심(권도형)은 안 커진다. 당겨 들어갔다는 건 중심을 벗어났다는 뜻이라
         // 어차피 화면 밖이고, 커지면 그 계의 주인과 크기를 다툰다.
         const starGrow = starGrowOf(zr);
         const sizeOf = (el: Elem) =>
           el.mem.referencedIds.length > 0 ? el.size * starGrow : el.size;
 
-        const placed = els.map((el) => ({ el, p: orbitPoint(el, t) }));
+        const placed = els.map((el) => ({ el, p: orbitPoint(el) }));
 
         // ── 화면 밖은 안 그린다 ──
         //
@@ -1775,9 +1603,8 @@ export function OrbitalMap({
         // 딱 맞춰 자르면 가장자리에서 빛이 뚝 끊긴다.
         const onScreen = (x: number, y: number, pad: number) =>
           x > -pad && x < w + pad && y > -pad && y < h + pad;
-        // 기억이 된 갈래(별)든 아직 도는 갈래든 **똑같이** 위성계를 갖는다.
-        // 둘 다 "하나의 일"이고 그 안에 경험이 들어 있다는 점이 같다 — 다른
-        // 것은 남겼느냐뿐이고, 그건 이미 자리(궤도 안/밖)와 선이 말하고 있다.
+        // 별은 전부 위성계를 갖는다. 갈래 하나가 항성계 하나이고 그 안에 경험이
+        // 들어 있다 — 남겼느냐 아니냐는 광도가 이미 말하고 있다.
         // 경험이 하나도 안 걸린 것만 뺀다(그릴 게 없다).
         const starSats =
           satReveal > 0.01
@@ -1865,62 +1692,42 @@ export function OrbitalMap({
         // 다 지우지는 않는다. 어디쯤에 있는지는 남아야 돌아갈 길을 안 잃는다.
         const otherDim = inStar ? 1 - 0.86 * satReveal : 1;
         const dimOf = (id: string) => (inStar && id !== inStar.el.id ? otherDim : 1);
-        /** 이 천체가 지금 층에서 보이는 정도. 별은 늘 1, 도는 갈래는 배율을 탄다 —
-         *  계 화면은 "무엇이 남았나"만 답하고, 아직 안 남긴 일은 당겨야 나온다. */
-        const layerOf = (el: Elem) => (el.mem.kind === "memory" ? 1 : threadReveal);
 
-        // ── 축은 층마다 한 벌씩 ──
+        // ── 축은 한 벌뿐이다 ──
         //
-        // 예전에는 기억(trigger)과 갈래(분야)의 축을 **한 벌로 합쳐** 그렸다.
-        // 그래서 라벨이 열넷이 되고 NEW_SKILL 옆에 DEV 가 붙었다 — 한 범례에
-        // 두 어휘가 섞이면 그때부터는 아무도 안 읽는다. 게다가 색은 분야인데
-        // 축의 절반은 분야가 아니라, 색과 방향이 서로를 설명하지 못했다.
+        // 예전에는 두 벌이었다. 기억의 축(trigger)과 갈래의 축(분야)을 배율로
+        // 건너다녔는데, 그건 천체가 둘이라 어휘도 둘이었기 때문이다 — 합쳐
+        // 그렸더니 라벨이 열넷이 되고 NEW_SKILL 옆에 DEV 가 붙어서, 층으로
+        // 나눠 하나씩 보여주는 게 그때 할 수 있는 최선이었다.
         //
-        // 층을 나눈다. 한 층에 어휘가 하나씩이고, 배율이 그 사이를 건넌다.
-        //   멀리서   — 별의 축(trigger). 계 화면은 "무엇이 남았나"만 답한다.
-        //   당기면   — 갈래의 축(분야). 권도형 안으로 들어온 것이다.
-        //   더 안쪽  — 경험의 축(결과). 별이나 갈래 하나 안이다.
-        const trigAxis = new Map<string, { sum: number; n: number }>();
+        // 천체가 하나가 되면서 어휘도 하나(분야)가 됐다. 층을 나눌 이유가
+        // 사라졌고, 축은 배율과 무관하게 늘 같은 것을 가리킨다.
+        // 더 안쪽 — 별 하나 안에서는 경험의 축(결과)으로 갈아 끼운다(axisMix).
         const catAxis = new Map<string, { sum: number; n: number }>();
         for (const el of els) {
-          const into = el.mem.kind === "memory" ? trigAxis : catAxis;
           const key = axisKeyOf(el.mem);
-          const acc = into.get(key) ?? { sum: 0, n: 0 };
+          const acc = catAxis.get(key) ?? { sum: 0, n: 0 };
           acc.sum += el.plane;
           acc.n += 1;
-          into.set(key, acc);
+          catAxis.set(key, acc);
         }
 
-        const outer = sysAlpha * (1 - axisMix);
-        const trigAlpha = outer * (1 - threadReveal);
-        const catAlpha = outer * threadReveal;
-        if (trigAlpha > 0.01) {
+        const catAlpha = sysAlpha * (1 - axisMix);
+        if (catAlpha > 0.01) {
           drawAxes({
-            angles: trigAxis,
+            angles: catAxis,
             lit: litAxis,
-            alpha: trigAlpha,
+            alpha: catAlpha,
             // 축과 중심처럼 어느 분야에도 속하지 않는 것들의 색.
             offRgb: NEUTRAL.join(","),
             hitPrefix: "maxis:",
             hitKind: "maxis",
             // 판정은 변환이 안 걸린 정지 상태에서만 받는다. 카메라가 움직이는
             // 동안 등록하면 보이는 곳과 눌리는 곳이 어긋난다.
-            canHit: ez < 0.02 && trigAlpha > 0.5,
-            // 기억 축은 반직선이다. 온 원을 쪼개 쓰므로 맞은편은 다른 조각이다.
-            ray: () => true,
-          });
-        }
-        if (catAlpha > 0.01) {
-          drawAxes({
-            angles: catAxis,
-            lit: litAxis,
-            alpha: catAlpha,
-            offRgb: NEUTRAL.join(","),
-            hitPrefix: "maxis:",
-            hitKind: "maxis",
             canHit: ez < 0.02 && catAlpha > 0.5,
-            // 갈래는 아직 궤도를 도는 것이라 방향이 궤도면 기울기다 —
-            // 맞은편도 같은 뜻이라 지름이 맞다.
+            // 반직선이다. 별은 안 돌아서 방향이 궤도면 기울기가 아니라 중심에서
+            // 뻗은 방향이고, 온 원을 쪼개 쓰므로 맞은편은 다른 조각이다.
+            ray: () => true,
           });
         }
         if (axisAngles && axisMix > 0.01) {
@@ -1937,36 +1744,27 @@ export function OrbitalMap({
           });
         }
 
-        for (const el of els) {
-          // 안 도는 것은 궤도선도 없다. 그릴 궤도가 없으니까 —
-          // 기억이 되어 별로 선 것(n=0)과 놓아버린 갈래가 여기 해당한다.
-          if (el.n === 0) continue;
-          // 궤도선은 타원 전체라 천체가 화면 밖이어도 선은 걸칠 수 있다.
-          // 반경으로 판단한다 — 궤도가 화면을 통째로 비껴갈 때만 뺀다.
-          if (!onScreen(cx, cy, el.a * (1 + el.e) * unit + Math.max(w, h))) continue;
-          drawOrbit(el, sysAlpha * dimOf(el.id) * layerOf(el), litAxis != null && litAxis === axisKeyOf(el.mem));
-        }
-
         // ── 별자리 선 ──
         //
-        // 별이 된 기억을 중심과 잇는다. 궤도를 떠난 것들이라 이 선이 없으면
-        // "권도형과 무슨 상관인지"가 화면에서 끊긴다 — 궤도선이 하던 말을
-        // 이 선이 대신한다.
+        // 별을 중심과 잇는다. 도는 것이 없어져 궤도선이 사라졌으니, 이 선이
+        // 없으면 "권도형과 무슨 상관인지"가 화면에서 끊긴다 — 궤도선이 하던
+        // 말을 이 선이 대신한다.
         //
-        // 놓은 갈래(abandoned)의 기억은 **선을 안 긋는다.** 별은 그대로 남는다 —
-        // 남긴 것은 사실이니까. 끊긴 선이 "그런데 놓았다"를 말한다.
+        // 놓은 갈래(abandoned)는 **선을 안 긋는다.** 별은 그대로 남는다 —
+        // 있었던 일은 사실이니까. 끊긴 선이 "그런데 놓았다"를 말한다.
         //
         // 축(drawAxes)도 중심에서 뻗는 방사선이라 구분이 필요하다. 축은 점선에
-        // 라벨이 붙고, 이 선은 실선에 그 기억의 색을 쓴다 — 선이 천체와 같은
-        // 색이면 "저 선이 누구 것인가"를 눈으로 잇는다(궤도선과 같은 규칙).
+        // 라벨이 붙고, 이 선은 실선에 그 별의 색을 쓴다 — 선이 천체와 같은
+        // 색이면 "저 선이 누구 것인가"를 눈으로 잇는다.
         for (const { el, p } of placed) {
-          if (el.mem.kind !== "memory" || el.mem.abandoned) continue;
+          if (el.mem.status === "abandoned") continue;
           const on = hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem));
           const g = ctx!.createLinearGradient(cx, cy, p.x, p.y);
           const rgb = el.color.join(",");
           // 중심 쪽이 흐리다. 별에 가까울수록 진해야 선이 별에 매달린 것으로
           // 읽힌다 — 균일하면 중심에서 뻗어나온 바퀴살이 되어 축과 헷갈린다.
-          const la = sysAlpha * dimOf(el.id);
+          // 광도를 태운다: 어두운 별의 선도 같이 옅어야 한 천체로 읽힌다.
+          const la = sysAlpha * dimOf(el.id) * el.lum;
           g.addColorStop(0, `rgba(${rgb},0)`);
           g.addColorStop(0.25, `rgba(${rgb},${(on ? 0.2 : 0.08) * la})`);
           g.addColorStop(1, `rgba(${rgb},${(on ? 0.6 : 0.28) * la})`);
@@ -1978,16 +1776,23 @@ export function OrbitalMap({
           ctx!.stroke();
         }
 
-        // 잔광은 천체보다 먼저, 깊이와 상관없이 한꺼번에 그린다. 천체가 제
-        // 잔광 위에 얹혀야 머리가 몸통에 붙는데, 깊이 정렬에 끼우면 앞쪽
-        // 천체의 잔광이 뒤쪽 천체를 덮는다 — 잔광은 배경이지 대상이 아니다.
+        // ── 최근에 들어온 것 ──
+        //
+        // 계 층에서는 잔광이 아니라 **코로나**다. 잔광은 "지나온 길"이라 도는
+        // 것에만 성립하는데 별은 안 돈다 — 궤도가 없으면 끌 길도 없다.
+        // (합치기 전에도 별은 n=0 이라 이 표식이 통째로 죽어 있었다.)
+        //
+        // 고리 하나로 대신한다. 새 색도 새 움직임도 안 더한다 — 그 별의 색으로
+        // 제 후광 바로 바깥에 두른다. 순위가 곧 지름이자 세기다.
+        // 펼친 뒤(위성 층)는 경험이 실제로 도니까 거기서는 잔광 그대로다.
         for (const { el, p } of placed) {
           const rank = latestRankRef.current.get(el.id);
-          if (rank == null || el.n === 0) continue; // 안 도는 것은 끌 길이 없다
-          drawTrail(rank, p.theta, sizeOf(el), el.color, sysAlpha, (th) => orbitAt(el, th));
+          if (rank == null || rank >= TRAIL_SPAN.length) continue;
+          if (!onScreen(p.x, p.y, sizeOf(el) * 6 + 40)) continue;
+          drawCorona(p.x, p.y, sizeOf(el), rank, el.color, sysAlpha * dimOf(el.id));
         }
 
-        // ── 별이 된 기억의 위성계 ──
+        // ── 위성계 ──
         //
         // 별마다 그 갈래의 경험이 둘레를 돈다. **멀리서는 안 보인다.**
         //
@@ -1995,19 +1800,6 @@ export function OrbitalMap({
         // 정작 별자리(이 화면이 답해야 하는 것 — 무엇이 남았나)가 안 읽혔다.
         // 축척이 이 계기판의 규칙이다: 멀리서는 계의 모양, 당기면 그 안의 것.
         // 확대하면 자연스럽게 배어 나오고, 별을 누르면 그 별 것만 크게 펼쳐진다.
-        //
-        // 도는 갈래(아직 기억이 없는 것)에는 위성을 안 붙인다. 남긴 게 없는
-        // 일이라 펼칠 근거가 없고, 붙이면 궤도층이 순식간에 뭉갠다.
-        // ── 별이 된 기억의 위성계 ──
-        //
-        // 별마다 그 갈래의 경험이 둘레를 돈다. **멀리서는 안 보인다.**
-        //
-        // 처음엔 늘 그렸는데, 별 넷에 위성계 넷이 붙으니 화면이 궤도선으로 덮여
-        // 정작 별자리(이 화면이 답해야 하는 것 — 무엇이 남았나)가 안 읽혔다.
-        // 축척이 이 계기판의 규칙이다: 멀리서는 계의 모양, 당기면 그 안의 것.
-        //
-        // 도는 갈래(아직 기억이 없는 것)에는 위성을 안 붙인다. 남긴 게 없는
-        // 일이라 펼칠 근거가 없고, 붙이면 궤도층이 순식간에 뭉갠다.
         if (starSats.length > 0) {
           const satAlphaBase = sysAlpha * satReveal;
           // 보이면 눌린다. 배어 나오기만 하고 못 누르면 "왜 안 눌리지"가 되고,
@@ -2059,7 +1851,7 @@ export function OrbitalMap({
           if (p.y > cy) continue; // 앞쪽은 나중에
           if (foc && el.id === foc.id) continue; // 모핑 중인 대상은 따로 그린다
           if (!onScreen(p.x, p.y, sizeOf(el) * 4 + 40)) continue;
-          drawMemory(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * layerOf(el), t);
+          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * el.lum, t);
         }
 
         // 질량 중심
@@ -2081,7 +1873,7 @@ export function OrbitalMap({
           if (p.y <= cy) continue; // 뒤쪽은 이미 그렸다
           if (foc && el.id === foc.id) continue;
           if (!onScreen(p.x, p.y, sizeOf(el) * 4 + 40)) continue;
-          drawMemory(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * layerOf(el), t);
+          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * el.lum, t);
         }
         ctx!.restore();
 
@@ -2089,15 +1881,13 @@ export function OrbitalMap({
         // 이전 공간이라, 카메라가 움직이는 동안 등록하면 보이는 곳과 눌리는
         // 곳이 어긋난다. 전환 중에는 아무것도 못 누르는 편이 낫다.
         for (const { el, p } of placed) {
-          // 안 보이는 갈래는 안 눌린다. 계 화면에서 중심 근처를 누르면 아직
-          // 안 드러난 갈래가 잡혀 엉뚱한 데로 확대되던 것을 막는다.
-          if (ez < 0.02 && onScreen(p.x, p.y, 60) && layerOf(el) > 0.4) {
+          if (ez < 0.02 && onScreen(p.x, p.y, 60)) {
             hit.set(el.id, { x: p.x, y: p.y, r: sizeOf(el) + 14, kind: "mem" });
           }
         }
       }
 
-      // ── 기억 하나에 붙었을 때 ──
+      // ── 천체 하나에 붙었을 때 ──
       if (foc && ft > 0.01) {
         const refs = refsOf(foc);
         // 궤도가 안에서 바깥으로 펴지며 나타난다. 다 자란 채로 페이드인하면
@@ -2164,7 +1954,7 @@ export function OrbitalMap({
         const toR = 18 + weightOf(foc) * 1.2;
         // 출발 크기도 계가 그렸을 크기와 같아야 넘겨주는 지점이 안 튄다.
         const fromR = focEl ? focEl.size : toR;
-        drawMemory(
+        drawStar(
           camX,
           camY,
           fromR + (toR - fromR) * ez,
@@ -2211,19 +2001,15 @@ export function OrbitalMap({
         if (!found || !p) setProbe(null);
         else if (p.kind === "maxis") {
           const key = found.slice(6);
-          // 축이 무엇을 뜻하는지가 화면마다 다르다 — 메인은 기억의 trigger,
-          // /threads 는 갈래의 분야다. 그리기는 axisKeyOf 로 합쳐놨는데 여기만
-          // memories.trigger 로 세고 있어서, 갈래 화면에서는 세는 대상도 없고
-          // (memories=[]) 키도 안 맞아 늘 0건이었다. 같은 함수로 센다.
-          const onAxis = [...memories, ...threads].filter((o) => axisKeyOf(o) === key);
+          // 그리기와 **같은 함수**로 센다. 한때 여기만 memories.trigger 로
+          // 세고 있어서 갈래 화면에서는 늘 0건이었다.
+          const onAxis = threads.filter((o) => axisKeyOf(o) === key);
+          const kept = onAxis.filter((o) => o.memory != null).length;
           setProbe({
             x: p.x,
             y: p.y,
-            text:
-              threads.length > 0
-                ? `${tag(key)} 분야의 갈래 ${onAxis.length}건`
-                : `${tag(key)} 로 남은 기억 ${onAxis.length}건`,
-            sub: "이 방향의 궤도들",
+            text: `${tag(key)} 분야의 갈래 ${onAxis.length}건${kept > 0 ? ` · 그중 ${kept}건이 남았다` : ""}`,
+            sub: "이 방향의 별들",
           });
         } else if (p.kind === "axis") {
           const oc = found.slice(5);
@@ -2238,7 +2024,7 @@ export function OrbitalMap({
           });
         } else if (p.kind === "mem" || p.kind === "focus") {
           const m = orbitById.get(found);
-          // 데이터가 갱신되며 이 기억이 빠졌을 수 있다(야간 배치의 망각 마킹 등).
+          // 데이터가 갱신되며 이 갈래가 빠졌을 수 있다(야간 배치의 망각 마킹 등).
           // 단언으로 두면 undefined.title 에서 프레임이 죽고, try/catch 가 삼켜
           // 그 프레임의 조준점까지 통째로 안 그려진다 — 커서가 사라진다.
           if (!m) setProbe(null);
@@ -2246,33 +2032,20 @@ export function OrbitalMap({
             x: p.x,
             y: p.y,
             text: clampSentence(m.title, PROBE_TEXT_LEN),
-            // **양쪽 다 '갈래'로 시작한다.**
+            // 한 줄에 상태 · 분야 · 경험 수 · 날짜. 반경이 이미 "시작한 지"를
+            // 말하지만 그건 상대값이라 날짜를 못 읽는다.
             //
-            // 한때 뺐었다 — 도는 것이 갈래뿐이라 같은 단어가 매번 앞에 붙는
-            // 게 낭비로 보였다. 그런데 지금은 별이 된 것도 갈래다(기억 하나가
-            // 갈래 하나다). 계에 두 종류가 떠 있고 둘 다 갈래인데 한쪽에만
-            // 이름이 붙어 있으면, 이름 없는 쪽이 다른 무엇으로 읽힌다.
-            // 남긴 게 있느냐 없느냐는 뒤에 이어지는 값(trigger / status)이 말한다.
+            // 남은 게 있으면 그 이유를 **전부** 덧붙인다. 여럿이면 그게 곧 그
+            // 기억의 성격이라, 가장 센 것 하나만 보이면 나머지를 알 길이 없다.
+            // 중요도는 안 적는다 — 광도가 이미 그 값이다.
             sub:
-              m.kind === "thread"
-                // 언제 시작해서 언제 끝났는지. 반경이 이미 "시작한 지"를
-                // 말하지만 그건 상대값이라, 날짜를 못 읽는다.
-                ? `갈래 · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)} 시작${
-                    m.completedAt ? ` → ${ymd(m.completedAt)} 완결` : ""
-                  }`
-                // '근거'가 아니라 '경험'이다. 근거는 이 기억을 만든 결정적인
-                // 경험 하나(sourceId)를 가리키는 말인데, 그건 펼친 화면 안에서
-                // 따로 드러난다. 여기 숫자는 같은 갈래에 속한 경험 전부라
-                // 근거라고 부르면 "결정적인 경험이 여섯 개"로 읽힌다.
-                // '기억'이라고 안 적는다 — 이 화면에 도는 게 기억뿐이라 매 줄에
-                // 같은 말이 붙는다. 중요도도 뺀다: 크기가 이미 그 값이다.
-                // trigger 는 전부 적는다. 남은 이유가 여럿이면 그게 곧 그 기억의
-                // 성격이라, 가장 센 것 하나만 보이면 나머지를 알 길이 없다.
-                : `갈래 · ${m.triggers.map(tag).join(' · ')} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)}`,
+              `갈래 · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)} 시작${
+                m.completedAt ? ` → ${ymd(m.completedAt)} 완결` : ""
+              }` + (m.memory ? ` · 남음 ${m.memory.triggers.map(tag).join(" · ")}` : ""),
             // 처음 쓴 스킬만. 호버는 훑는 자리라 일곱 개씩 늘어놓으면 아무것도
             // 안 읽힌다. trigger 가 왜 그 값인지에 답하는 것도 신규 쪽이다.
             // (전부는 눌러서 펼친 화면에 있다.)
-            skills: m.kind === "memory" ? m.skills.filter((sk) => sk.firstTime) : undefined,
+            skills: m.memory?.skills.filter((sk) => sk.firstTime),
           });
         } else {
           const b = byId.get(found)!;
@@ -2393,10 +2166,10 @@ export function OrbitalMap({
       // 목표를 다음 프레임에 지워버려서, 배율만 오르고 대상은 가운데로 안 온다.
       flingX = 0;
       flingY = 0;
-      // 당기는 동안 계를 멈춘다. 목표 지점은 지금 이 자리라, 도착할 때까지
-      // 대상이 움직이면 겨눈 곳과 도착하는 곳이 달라진다.
+      // 당기는 동안 계를 멈춘다. 별은 안 돌지만 위성은 돌고, 그 위성계를
+      // 겨눈 채로 들어가는 것이라 멈춰야 착지점이 안 어긋난다.
       lockedId = id;
-      const p = orbitPoint(el, reduced ? 0 : simT);
+      const p = orbitPoint(el);
       const k = z / zoom;
       const lim = offLimit(z);
       zoomTarget = z;
@@ -2454,7 +2227,6 @@ export function OrbitalMap({
         // **펼치지 않고 당긴다.** 확대하면 이미 그 안의 경험이 나오고 축도
         // 판독값도 그것의 것으로 갈리므로, 따로 펼친 층을 만들 이유가 없다 —
         // 화면이 하나면 어디서 어디로 갔는지를 안 잃는다.
-        // 기억이 된 갈래(별)와 아직 도는 갈래를 안 가른다. 같은 것이다.
         //
         // 경험이 하나도 안 걸린 것은 당겨봐야 나올 게 없다. 그건 펼친다.
         if (body && body.referencedIds.length > 0) {
@@ -2606,7 +2378,7 @@ export function OrbitalMap({
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("keydown", onKey);
     };
-  }, [bodies, memories, threads]);
+  }, [bodies, threads]);
 
 
   // 위에 판독값을 띄울 대상.
@@ -2614,29 +2386,15 @@ export function OrbitalMap({
   // 눌러서 펼친 것이 먼저다. 아무것도 안 눌렀어도 확대해서 한 별의 계 안에
   // 들어와 있으면 그 별을 띄운다 — 당긴 것 자체가 "이걸 보고 있다"는 뜻이라,
   // 거기서 한 번 더 누르라고 요구할 이유가 없다.
-  const dominant = useMemo(
-    () => dominantBody(dominantId, memories, threads),
-    [dominantId, memories, threads],
-  );
+  const dominant = useMemo(() => dominantBody(dominantId, threads), [dominantId, threads]);
   const headline: OrbitBody | null = focus ?? dominant;
 
-  // 지금 펼친 기억의 근거들이 어떤 카테고리인지 — 범례에 쓴다.
-  // 캔버스 안의 배분과 같은 함수를 써야 색이 어긋나지 않는다.
-  // 중심 기억이 쓰고 있는 색이 어느 분야인지. 범례에서 이것만 테를 두른다 —
+  // 중심 천체가 쓰고 있는 색이 어느 분야인지. 범례에서 이것만 테를 두른다 —
   // 중심도 위성과 같은 팔레트를 쓰는데 표시가 없으면 "가운데 저 색은 뭔가"에
-  // 답이 없다.
-  const focusDominantGroup = headline
-    ? (() => {
-        // 갈래는 자기 분야를 갖는다. 기억만 근거들에서 빌려온다.
-        const dom =
-          headline.kind === "thread"
-            ? headline.category
-            : dominantCategory(headline, new Map(bodies.map((b) => [b.id, b])));
-        return dom ? groupOfCategory(dom).key : null;
-      })()
-    : null;
+  // 답이 없다. 캔버스 안의 배분과 같은 함수를 써야 색이 어긋나지 않는다.
+  const focusDominantGroup = headline ? groupOfCategory(headline.category).key : null;
 
-  // 이 기억의 근거에 등장하는 색 묶음만. 카테고리 단위로 적으면 같은 색인
+  // 이 갈래의 경험에 등장하는 색 묶음만. 카테고리 단위로 적으면 같은 색인
   // 항목이 둘 나란히 놓여 "왜 같은 색이 둘이지"가 된다 — 색의 범례이므로
   // 색 단위로 적는다. 정확한 카테고리는 위성을 겨누면 판독값에 나온다.
   const focusGroups = (() => {
@@ -2650,15 +2408,15 @@ export function OrbitalMap({
 
   return (
     <div ref={wrapRef} className="relative h-full w-full">
-      {/* 키보드로도 닿아야 한다. 마우스 없이는 기억을 하나도 고를 수 없었다.
-          Tab 으로 지도에 들어오면 Enter/Space 로 가장 밝은 기억부터 펼치고
+      {/* 키보드로도 닿아야 한다. 마우스 없이는 천체를 하나도 고를 수 없었다.
+          Tab 으로 지도에 들어오면 Enter/Space 로 가장 밝은 별부터 펼치고
           Escape 로 나간다 — 캔버스라 스크린리더에는 요약을 대신 읽힌다. */}
       <canvas
         ref={canvasRef}
         className="map-canvas"
         tabIndex={0}
         role="img"
-        aria-label={`궤도 지도 — 기억 ${memories.length}개, 경험 ${bodies.length}개. Enter 로 가장 중요한 기억을 펼치고 Escape 로 돌아온다.`}
+        aria-label={`별 지도 — 갈래 ${threads.length}개(그중 ${threads.filter((t) => t.memory != null).length}개가 남았다), 경험 ${bodies.length}개. Enter 로 가장 밝은 별을 펼치고 Escape 로 돌아온다.`}
       />
 
       {/* 중심 라벨 */}
@@ -2672,15 +2430,12 @@ export function OrbitalMap({
           focus ? "mt-9" : "mt-6"
         }`}
       >
-        {/* 펼친 것이 갈래면 이름표를 안 단다. 위쪽 판독값에 이미 제목과
-            상태가 다 적혀 있어서 '갈래'는 같은 말을 한 번 더 하는 것뿐이고,
-            그 한 단어 때문에 화면에 어휘가 하나 더 는다. 기억은 다르다 —
-            계에서 별로 서 있던 것이 중심으로 왔다는 표시가 필요하다. */}
-        <span className="tick">{focus ? (focus.kind === "thread" ? "" : "기억") : centerLabel}</span>
-        {/* 궤도가 통째로 비었을 때만. memories 만 보면 갈래 화면(memories=[])
-            에서 갈래가 다섯 개 떠 있는데도 "남은 것이 없다"가 뜬다. */}
-        {!focus && memories.length === 0 && threads.length === 0 && (
-          <div className="tick mt-3 opacity-60">아직 궤도에 남은 것이 없다</div>
+        {/* 펼치면 이름표를 안 단다. 위쪽 판독값에 이미 제목과 상태가 다 적혀
+            있어서 '갈래'는 같은 말을 한 번 더 하는 것뿐이고, 그 한 단어 때문에
+            화면에 어휘가 하나 더 는다. */}
+        <span className="tick">{focus ? "" : centerLabel}</span>
+        {!focus && threads.length === 0 && (
+          <div className="tick mt-3 opacity-60">아직 계에 아무것도 없다</div>
         )}
       </div>
 
@@ -2717,7 +2472,7 @@ export function OrbitalMap({
         </div>
       )}
 
-      {/* 붙어 있는 기억, 또는 확대해서 화면을 채운 별 */}
+      {/* 펼친 별, 또는 확대해서 화면을 채운 별 */}
       {headline && (
         <div className="pointer-events-none absolute left-1/2 top-16 w-full max-w-lg -translate-x-1/2 px-6 text-center">
           {/* key 를 대상 id 로 둔다. 확대하며 다른 별로 넘어갈 때 .settle 이
@@ -2725,11 +2480,16 @@ export function OrbitalMap({
               제목이 소리 없이 뒤바뀐다. */}
           <div className="settle" key={headline.id}>
             <div className="tick mb-2">
-              {headline.kind === "thread"
-                ? `${tag(headline.status)} · 경험 ${headline.referencedIds.length}건 · ${ymd(headline.occurredAt)} 시작${
-                    headline.completedAt ? ` → ${ymd(headline.completedAt)} 완결` : ""
-                  }`
-                : `${tag(headline.trigger)} · 경험 ${headline.referencedIds.length}건 · ${ymd(headline.occurredAt)}`}
+              {`${tag(headline.status)} · 경험 ${headline.referencedIds.length}건 · ${ymd(headline.occurredAt)} 시작${
+                headline.completedAt ? ` → ${ymd(headline.completedAt)} 완결` : ""
+              }`}
+              {headline.memory && (
+                // 남았다면 왜 남았는지. 광도가 "얼마나"를 말하고 이 줄이
+                // "무엇 때문에"를 말한다.
+                <div className="mt-1 text-lum-2">
+                  남음 · {headline.memory.triggers.map(tag).join(" · ")}
+                </div>
+              )}
             </div>
             <h2 className="text-[18px] font-medium text-lum-0">{headline.title}</h2>
 
@@ -2742,7 +2502,7 @@ export function OrbitalMap({
                 누르면 이제 펼치는 게 아니라 확대되기 때문이다 — focus 로만
                 묶어두면 /threads 에서 완결 버튼에 영영 닿을 수 없다.
                 스쳐 지나가다 떠도 상관없다. 이 버튼은 또 한 번 눌러야 한다. */}
-            {headline.kind === "thread" && headline.status === "active" && onComplete && (
+            {headline.status === "active" && onComplete && (
               <button
                 type="button"
                 disabled={completing}
@@ -2764,11 +2524,11 @@ export function OrbitalMap({
               </button>
             )}
 
-            {/* 이 기억을 남긴 근거. 제목 바로 아래에 두고 본문과는 헤어라인으로
-                가른다 — 무엇이 처음이었나가 먼저, 무슨 일이 있었나가 그다음이다. */}
-            {headline.kind === "memory" && headline.skills.length > 0 && (
+            {/* 이 갈래에 남은 기억의 근거. 제목 바로 아래에 둔다 —
+                무엇이 처음이었나가 먼저, 무슨 일이 있었나가 그다음이다. */}
+            {headline.memory && headline.memory.skills.length > 0 && (
               <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1.5">
-                {headline.skills.map((sk) => (
+                {headline.memory.skills.map((sk) => (
                   <span
                     key={sk.name}
                     className={[

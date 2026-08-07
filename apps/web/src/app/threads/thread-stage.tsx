@@ -71,7 +71,6 @@ export function ThreadStage({
       <div className="absolute inset-0">
         <OrbitalMap
           bodies={bodies}
-          memories={[]}
           threads={threads}
           centerLabel={centerLabel}
           onFocusChange={handleFocusChange}
@@ -99,7 +98,7 @@ export function ThreadStage({
           <div className="readout mt-3 max-w-[26ch] text-[13px] leading-relaxed text-lum-2">
             하나의 일. 경험 하나로 끝나기도 하고 여러 날에 걸쳐 이어지기도 한다.
             <br />
-            <span className="text-lum-3">끝나면 기억이 되고, 놓으면 멈춘 별로 남는다.</span>
+            <span className="text-lum-3">끝나면 기억이 되고, 놓으면 선이 끊긴 별로 남는다.</span>
           </div>
         </div>
       </div>
@@ -132,9 +131,9 @@ export function ThreadStage({
           <div className="readout mt-3 text-[13px] leading-relaxed text-lum-2">
             반경 = 시작한 지 · 크기 = 경험 수
             <br />
-            방향·색 = 분야 · 이심률 = 상태
+            방향·색 = 분야
             <br />
-            놓은 갈래는 궤도 없이 멈춘 별로 남는다
+            놓은 갈래는 중심과의 선이 끊긴다
             <br />
             점선 축에 그 방향의 분야가 적힌다 · 축을 겨누면 그 분야만 밝아진다
             <br />

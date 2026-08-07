@@ -131,6 +131,9 @@ export default async function ThreadsPage() {
     // threads.started_at 과 같은 시각이지만 저장하지는 않는다 — 재구축 때마다
     // 어긋날 값이 하나 늘 뿐이고, 이미 있는 목록으로 정확히 계산된다.
     sourceIds: [(expIdsByThread.get(t.id) ?? []).at(-1)].filter((id): id is string => id != null),
+    // 이 화면은 기억을 안 읽는다. 그래서 별이 전부 같은 밑광도로 뜬다 —
+    // "무엇이 남았나"는 홈이 답하고 여기는 "무슨 일들이 있나"만 답한다.
+    memory: null,
   }));
 
   // 최근 경험 셋과 그것들이 속한 갈래. 펼치면 그 경험들 자체가 잔광을 끈다.

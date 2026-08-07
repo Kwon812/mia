@@ -5,10 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   CAT_GROUPS,
   OrbitalMap,
-  dominantCategory,
   groupOfCategory,
   type Body,
-  type MemoryBody,
   type OrbitBody,
   type ThreadBody,
 } from "@/components/orbital-map";
@@ -54,7 +52,6 @@ function kstHm(ms: number): string {
 
 export function MapStage({
   bodies,
-  memories,
   threads,
   name,
   level,
@@ -66,12 +63,11 @@ export function MapStage({
   todayMinutes,
   todaySessions,
   latestExperienceIds,
-  latestMemoryIds,
+  latestThreadIds,
   question,
 }: {
   bodies: Body[];
-  memories: MemoryBody[];
-  /** 아직 기억이 없는 갈래만. 기억이 된 갈래는 그 기억이 별로 서므로 여기 없다. */
+  /** 계의 천체 전부. 갈래 하나가 별 하나이고, 남은 기억이 그 별의 광도다. */
   threads: ThreadBody[];
   name: string;
   level: number;
@@ -82,12 +78,12 @@ export function MapStage({
   counts: { experience: number; skill: number; memory: number };
   todayMinutes: number;
   todaySessions: number;
-  /** 최근 경험 셋과, 그것들이 속한 갈래의 기억들. 둘이 같은 표식(잔광)을
-   *  쓴다 — 계에서는 기억이, 펼친 뒤에는 그 경험이.
-   *  앞에 있을수록 최근이고, 잔광 길이가 그 순서를 나타낸다.
-   *  기억 쪽 개수는 경험이 어디에 붙었느냐가 정한다 — 0개일 수도 셋일 수도 있다. */
+  /** 최근 경험 셋과, 그것들이 속한 갈래들. 둘이 같은 표식을 쓴다 —
+   *  계에서는 별이 코로나로, 펼친 뒤에는 그 경험이 잔광으로.
+   *  앞에 있을수록 최근이고, 그 순서가 표식의 세기를 정한다.
+   *  갈래 쪽 개수는 경험이 어디에 붙었느냐가 정한다 — 하나일 수도 셋일 수도 있다. */
   latestExperienceIds: string[];
-  latestMemoryIds: string[];
+  latestThreadIds: string[];
   /** 캐릭터가 오늘 묻는 것 (층 2). 없으면 안 그린다. */
   question: AskQuestion | null;
 }) {
@@ -101,11 +97,11 @@ export function MapStage({
   const reading = viewing != null;
 
   // 범례는 **지금 보고 있는 층의 색**을 적는다.
-  //   계 전체 — 기억들이 실제로 쓰고 있는 분야
+  //   계 전체 — 별들이 실제로 쓰고 있는 분야
   //   별 하나 — 그 별에 딸린 경험들의 분야
   // 화면에 없는 색을 설명하는 줄은 만들지 않는다. 확대해 한 별에 들어왔는데
   // 범례가 계 전체를 설명하고 있으면, 안 보이는 색 넷을 읽게 된다.
-  const memoryGroups = (() => {
+  const usedGroups = (() => {
     const byId = new Map(bodies.map((b) => [b.id, b]));
     const used = viewing
       ? new Set(
@@ -114,14 +110,12 @@ export function MapStage({
             .filter((c): c is string => c != null)
             .map((c) => groupOfCategory(c).key),
         )
-      : new Set(
-          memories
-            .map((m) => dominantCategory(m, byId))
-            .filter((c): c is string => c != null)
-            .map((c) => groupOfCategory(c).key),
-        );
+      : new Set(threads.map((t) => groupOfCategory(t.category).key));
     return CAT_GROUPS.filter((g) => used.has(g.key));
   })();
+
+  // 남은 것이 몇 개인가. 별의 밝기가 그 값이라 숫자로도 한 번 적는다.
+  const keptCount = threads.filter((t) => t.memory != null).length;
 
   // bodies 는 occurred_at 내림차순이라(page.tsx 쿼리) 앞에서부터가 최근이다.
   const recent = bodies.slice(0, RECENT_LIMIT);
@@ -143,12 +137,11 @@ export function MapStage({
       <div className="absolute inset-0">
         <OrbitalMap
           bodies={bodies}
-          memories={memories}
           threads={threads}
           centerLabel={name}
           onFocusChange={handleFocusChange}
-          // 펼치면 위성 층이라 최근 경험이, 계 화면에서는 그 경험이 속한 기억이 잔광을 끈다.
-          latestIds={reading ? latestExperienceIds : latestMemoryIds}
+          // 펼치면 위성 층이라 최근 경험이, 계 화면에서는 그 경험이 속한 갈래가 표식을 켠다.
+          latestIds={reading ? latestExperienceIds : latestThreadIds}
         />
       </div>
 
@@ -171,22 +164,22 @@ export function MapStage({
         </div>
       </div>
 
-      {/* 우상 — 궤도에 무엇이 올라 있나 */}
+      {/* 우상 — 계에 무엇이 올라 있나 */}
       <div className="pointer-events-none absolute right-8 top-8 text-right">
         <div className="settle" style={{ "--d": "80ms" } as React.CSSProperties}>
           <div className="tick mb-2">계에 있는 것</div>
           <div className="readout text-[16px] text-lum-0">
-            별 {memories.length}
+            별 {threads.length}
             <span className="ml-1 text-[13.5px] text-lum-2">
-              · 도는 것 {threads.length} / 경험 {counts.experience}
+              · 남은 것 {keptCount} / 경험 {counts.experience}
             </span>
           </div>
 
-          {/* 색 범례. 궤도 축에 이름은 적혀 있지만 그건 "그 방향이 무엇인가"이지
+          {/* 색 범례. 축에 이름은 적혀 있지만 그건 "그 방향이 무엇인가"이지
               "이 색이 무엇인가"가 아니다 — 축에서 멀리 떨어진 천체는 색만 남는다.
-              기억의 색으로 실제로 쓰인 분야만 적는다. */}
+              실제로 쓰인 분야만 적는다. */}
           <div className="mt-3 flex flex-col items-end gap-1.5">
-            {memoryGroups.map(({ key, label, color: col }) => (
+            {usedGroups.map(({ key, label, color: col }) => (
               <span key={key} className="flex items-center gap-2">
                 <span className="readout text-[13px] uppercase text-lum-1">{label}</span>
                 <span
@@ -202,11 +195,11 @@ export function MapStage({
 
           <div className="mt-3 ml-auto h-px w-28" style={{ background: "var(--color-lum-4)" }} />
           <div className="readout mt-3 text-[13px] leading-relaxed text-lum-2">
-            안쪽에서 도는 것 = 아직 아무것도 안 남긴 일
+            별 하나 = 하나의 일. 밝을수록 많이 남았다
             <br />
-            바깥 별 = 남은 것 · 선이 끊긴 것은 놓은 일
+            선이 끊긴 것은 놓은 일
             <br />
-            별의 거리 = 경과일 · 크기 = 중요도 · 색 = 주된 분야
+            거리 = 시작한 지 · 크기 = 경험 수 · 방향·색 = 분야
             <br />
             당기거나 누르면 그 안의 경험이 보인다
           </div>
