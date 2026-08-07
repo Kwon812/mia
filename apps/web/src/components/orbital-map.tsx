@@ -477,6 +477,12 @@ function phaseOf(id: string): number {
 const FILL = 0.8;
 const REVEAL_ONSET = 0.25;
 
+/** 은하와 별 중 **누가 눌리는가**를 가르는 문턱(starReveal 기준).
+ *  한 값을 양쪽이 반대로 써서 겹치는 구간이 없다 — 겹치면 은하가 제 별을
+ *  삼킨다(판정 반경이 원반을 따라 자라고, nearest 가 그걸 CAPTURE 배로 또
+ *  넓힌다). 별이 이만큼 드러났으면 누르려는 건 별이지 은하가 아니다. */
+const STAR_HIT = 0.35;
+
 /** id → 천체. */
 function dominantBody(id: string | null, threads: ThreadBody[]): OrbitBody | null {
   if (!id) return null;
@@ -530,6 +536,10 @@ const STAR_OVER_SAT = 1.3;
  *  밝으면 안 된다. 너무 낮추면 근거끼리의 밝기 차(그게 memory_score 다)가
  *  같이 눌리므로 살짝만 깎는다. */
 const SAT_UNDER_STAR = 0.82;
+
+/** 겨눈 위성이 커지는 배율. **별의 크기 하한이 이 값을 알아야 한다** —
+ *  모르면 겨누는 순간 경험이 제 갈래보다 커진다(실측 69.5px 대 56.5px). */
+const SAT_LIT = 1.6;
 
 /** 천체를 그린 반지름 = size × 이 값. 별과 위성이 계수가 달라(3.2 vs 4.1)
  *  size 끼리 직접 못 견준다 — 크기 하한을 풀 때 둘 다 필요하다. */
@@ -947,10 +957,19 @@ export function OrbitalMap({
     //
     // 이동을 제 값으로 두고 같이 수렴시키면 그 불연속이 원천적으로 없다.
     // 배율이 1 로 가면 이동 목표도 0 이라 둘이 나란히 가운데로 돌아온다.
-    let offX = 0;
+    // 카메라의 자리는 **앵커**로 잡는다 — "이 세계점이 이 화면점에 있다".
+    // 화면 이동량(offX·offY)은 여기서 유도되는 값이지 상태가 아니다.
+    // 왜 그래야 하는지는 아래 applyCamera 주석에.
+    let anchorWX = 0; // 붙들어 둔 세계점
+    let anchorWY = 0;
+    let anchorSX = 0; // 그것이 있어야 할 화면점
+    let anchorSY = 0;
+    let anchorWXT = 0; // 목표(클릭으로 데려갈 때만 현재와 갈린다)
+    let anchorWYT = 0;
+    let anchorSXT = 0;
+    let anchorSYT = 0;
+    let offX = 0; // ← applyCamera 가 매 프레임 다시 푼다. 읽기 전용으로 쓴다.
     let offY = 0;
-    let offXTarget = 0;
-    let offYTarget = 0;
     let dpr = 1;
     let raf = 0;
     let mouse: { x: number; y: number } | null = null;
@@ -1004,6 +1023,21 @@ export function OrbitalMap({
     const hit = new Map<string, { x: number; y: number; r: number; kind: string }>();
 
     function resize() {
+      // 창이 바뀌어도 **붙들어 둔 세계점은 그대로 둔다.**
+      //
+      // 예전에는 이동량을 0 으로 되돌렸다("근거가 무의미해진다"). 층이 하나일
+      // 때는 그래도 됐는데 — 되돌려봐야 그 계의 중심이었으니까 — 지금은
+      // 수천 배까지 들어갈 수 있어서, 은하 깊숙이 있다가 창이 조금만 바뀌면
+      // 그 배율 그대로 우주 원점으로 내던져진다. 아무것도 없는 검은 화면이고
+      // 어디로 돌아가야 할지도 모른다.
+      //
+      // 앵커로 두니 할 일이 거의 없다. 세계점(anchorW)은 창과 무관하므로
+      // 그대로 두고, 화면점(anchorS)만 새 화면의 같은 **비율** 자리로 옮긴다.
+      const rel =
+        fitted && w > 0 && h > 0
+          ? { x: anchorSX / w, y: anchorSY / h, tx: anchorSXT / w, ty: anchorSYT / h }
+          : null;
+
       dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = wrap!.clientWidth;
       h = wrap!.clientHeight;
@@ -1036,9 +1070,17 @@ export function OrbitalMap({
         fitted = true;
         zoom = zoomTarget = fitZoom;
       }
-      // 창 크기가 바뀌면 이동량의 근거(그때의 화면 좌표)가 무의미해진다.
-      // 가운데로 되돌린다 — 확대 배율은 지킨다.
-      offX = offY = offXTarget = offYTarget = 0;
+      if (rel) {
+        anchorSX = rel.x * w;
+        anchorSY = rel.y * h;
+        anchorSXT = rel.tx * w;
+        anchorSYT = rel.ty * h;
+      } else {
+        // 첫 진입. 우주 원점이 화면 가운데다.
+        anchorWX = anchorWY = anchorWXT = anchorWYT = 0;
+        anchorSX = anchorSXT = w / 2;
+        anchorSY = anchorSYT = h / 2;
+      }
       applyCamera();
     }
 
@@ -1055,11 +1097,133 @@ export function OrbitalMap({
       };
     }
 
-    /** zoom·off 로부터 cx·cy·unit 을 푼다. 매 프레임 그리기 전에 부른다. */
+    // ══════════════════════════════════════════════════════
+    // 카메라 — **앵커 하나로 정의한다**
+    // ══════════════════════════════════════════════════════
+    //
+    // 카메라 = 배율(zoom) + 앵커. 앵커는 약속이다:
+    // **"세계점 (anchorW) 는 화면점 (anchorS) 에 있다."**
+    // 화면 이동량은 상태가 아니라 그 약속에서 매 프레임 유도된다.
+    //
+    // ── 왜 이렇게 바꿨나 ──
+    //
+    // 예전에는 상태가 `zoom` 과 `offX` 두 벌이었고 각자 제 목표로 이징했다.
+    // 그런데 화면 자리는
+    //
+    //     화면x = w/2 + offX + 세계x · baseUnit · zoom
+    //
+    // 처럼 둘이 **곱해져서** 나온다. offX 와 zoom 을 따로 선형 보간하면 중간
+    // 프레임은 어느 앵커도 만족하지 않는다 — 도착점에서만 맞고 가는 내내
+    // 대상이 미끄러지다 마지막에 제자리를 찾는다. 그게 손에 느껴지던
+    // "확대가 지멋대로다"의 진짜 원인이었다. (그 전에 고친 '드래그가 목표를
+    // 덮어쓴다'는 별개의 두 번째 버그였고, 그것만으로는 안 나았다.)
+    //
+    // 앵커로 두면 이 문제가 원천적으로 사라진다. 휠은 앵커를 커서에 **한 번
+    // 못박고** 배율만 이징시킨다. 배율이 어떤 중간값이든 offX 는 그 배율에서
+    // 앵커를 만족하도록 다시 풀리므로, 커서 밑의 점은 애니메이션 내내 한 픽셀도
+    // 안 움직인다.
+    //
+    // ── 손짓별로 무엇을 만지나 ──
+    //
+    //   휠     앵커를 커서에 못박는다(현재=목표, 이징 없음). 배율만 이징.
+    //   드래그 앵커의 **화면점**을 민다. 배율 목표는 안 건드린다.
+    //   클릭   앵커 **목표**를 (대상, 화면 가운데)로. 앵커도 같이 이징해 미끄러져 온다.
+
+    /** 지금 카메라에서 화면점 → 세계점. */
+    const worldAt = (sx: number, sy: number) => ({
+      x: (sx - cx) / unit,
+      y: (sy - cy) / unit,
+    });
+
+    /**
+     * 앵커의 화면점을 민다 — 그게 곧 이동이다.
+     * 현재와 목표를 **같이** 밀어서 진행 중인 확대의 앵커를 안 깬다.
+     */
+    function panBy(dx: number, dy: number) {
+      anchorSX += dx;
+      anchorSY += dy;
+      anchorSXT += dx;
+      anchorSYT += dy;
+    }
+
+    /**
+     * 화면점 (sx, sy) 아래의 세계점을 **그 자리에 못박고** 배율만 z 로 간다.
+     * 휠이 쓰는 유일한 통로다.
+     *
+     * 앵커를 지금 카메라에서 뽑으므로 이 순간 화면은 한 칸도 안 움직인다.
+     * 그리고 목표까지 같은 값으로 두므로 이징하는 동안에도 앵커가 안 흔들린다 —
+     * 배율만 변하고 자리는 그 배율에서 다시 풀린다.
+     */
+    function zoomAt(z: number, sx: number, sy: number) {
+      const wpt = worldAt(sx, sy);
+      anchorWX = anchorWXT = wpt.x;
+      anchorWY = anchorWYT = wpt.y;
+      anchorSX = anchorSXT = sx;
+      anchorSY = anchorSYT = sy;
+      zoomTarget = z;
+    }
+
+    /**
+     * 세계점 (wx, wy) 를 화면 가운데로 데려오며 배율 z 로 간다. 클릭이 쓴다.
+     * **목표만** 정한다 — 앵커가 이징하면서 대상이 가운데로 미끄러져 온다.
+     */
+    function zoomToPoint(wx: number, wy: number, z: number) {
+      // 새 손짓이 앞선 손짓의 여운을 끈다.
+      flingX = 0;
+      flingY = 0;
+      anchorWXT = wx;
+      anchorWYT = wy;
+      anchorSXT = w / 2;
+      anchorSYT = h / 2;
+      zoomTarget = z;
+    }
+
+    /** 우주 전체로 물러난다. 원점을 화면 가운데에. */
+    function resetCamera() {
+      zoomTarget = fitZoom;
+      anchorWXT = 0;
+      anchorWYT = 0;
+      anchorSXT = w / 2;
+      anchorSYT = h / 2;
+      flingX = 0;
+      flingY = 0;
+    }
+
+    /**
+     * 앵커와 배율로부터 cx·cy·unit 을 푼다. 매 프레임 그리기 전에 부른다.
+     *
+     *   화면x = cx + 세계x · unit,  앵커 약속은 anchorSX = cx + anchorWX · unit
+     *   → cx = anchorSX - anchorWX · unit
+     *
+     * 배율이 어떤 중간값이든 이 식이 앵커를 지킨다. 그래서 이징 중에도 붙들어
+     * 둔 점이 안 미끄러진다 — 이게 이 카메라의 전부다.
+     */
     function applyCamera() {
       unit = baseUnit * zoom;
-      cx = w / 2 + offX;
-      cy = h / 2 + offY;
+      cx = anchorSX - anchorWX * unit;
+      cy = anchorSY - anchorWY * unit;
+
+      // 한계. 우주가 화면에서 통째로 사라지지 않는 선까지만 — 그 너머는
+      // 아무것도 없는 검은 화면이라 갈 이유가 없다.
+      //
+      // 벽에 걸리면 **앵커를 그 자리로 다시 잡는다.** 좌표만 자르면 다음
+      // 프레임에 같은 앵커가 또 벽 밖을 가리켜서, 벽에 붙은 채로 부르르 떤다.
+      // 앵커를 옮기면 "여기까지"가 그대로 새 약속이 된다.
+      const lim = offLimit(zoom);
+      const rawX = cx - w / 2;
+      const rawY = cy - h / 2;
+      const ox = Math.max(-lim.x, Math.min(lim.x, rawX));
+      const oy = Math.max(-lim.y, Math.min(lim.y, rawY));
+      if (ox !== rawX) {
+        cx = w / 2 + ox;
+        anchorSX = anchorSXT = cx + anchorWX * unit;
+      }
+      if (oy !== rawY) {
+        cy = h / 2 + oy;
+        anchorSY = anchorSYT = cy + anchorWY * unit;
+      }
+      offX = ox;
+      offY = oy;
     }
 
     /** 궤도 단위 좌표 → 화면 좌표. 카메라(cx·cy·unit) 하나만 걸린다. */
@@ -1358,7 +1522,7 @@ export function OrbitalMap({
     ) {
       // 최근이라고 크기·밝기를 건드리지 않는다. 그건 잔광(drawTrail)이 맡는다 —
       // 여기서 또 밝히면 "밝다"가 광도(memoryScore)인지 최근인지 갈리지 않는다.
-      const rad = size * (lit ? 1.6 : 1) * SAT_GLOW;
+      const rad = size * (lit ? SAT_LIT : 1) * SAT_GLOW;
       const c = lit ? [143, 244, 228] : color;
       const gc = c.join(",");
       // 하한을 두는 이유: 점수가 0인 경험도 "있다"는 건 보여야 한다.
@@ -1669,23 +1833,22 @@ export function OrbitalMap({
 
       // 관성. 손을 뗀 속도로 계속 미끄러지다 잦아든다. 감쇠도 프레임 수가
       // 아니라 시간 기준이라 주사율이 달라도 같은 거리를 간다.
+      //
+      // **panBy 로 목표를 옮긴다.** 예전에는 지금 값만 밀고 `offXTarget = offX`
+      // 로 목표를 덮어썼는데, 그러면 미끄러지는 중에 굴린 확대의 앵커가 다음
+      // 프레임에 통째로 지워졌다 — 휠이 관성을 강제로 꺼야만 했던 이유다.
       if (!dragging && (flingX !== 0 || flingY !== 0)) {
-        const lim = offLimit(zoom);
-        const nx = offX + flingX * dt;
-        const ny = offY + flingY * dt;
-        offX = Math.max(-lim.x, Math.min(lim.x, nx));
-        offY = Math.max(-lim.y, Math.min(lim.y, ny));
+        const before = { x: offX, y: offY };
+        panBy(flingX * dt, flingY * dt);
+        applyCamera(); // 벽에 걸렸는지 알려면 실제로 풀어봐야 한다
         // 벽에 닿으면 그 방향 속도를 버린다. 안 그러면 한계에 붙어 계속
         // 밀고 있는 상태가 되어 놓아준 느낌이 안 난다.
-        if (offX !== nx) flingX = 0;
-        if (offY !== ny) flingY = 0;
+        if (Math.abs(offX - before.x) < Math.abs(flingX * dt) - 0.5) flingX = 0;
+        if (Math.abs(offY - before.y) < Math.abs(flingY * dt) - 0.5) flingY = 0;
         const decay = Math.pow(0.05, dt); // 1초에 5% 남는다
         flingX *= decay;
         flingY *= decay;
         if (Math.hypot(flingX, flingY) < 8) flingX = flingY = 0;
-        // 목표를 따라 옮긴다 — 안 그러면 아래 이징이 곧바로 되돌린다.
-        offXTarget = offX;
-        offYTarget = offY;
       }
 
       // 확대는 프레임 수가 아니라 시간으로 수렴시킨다. 계수 곱셈(z += (t-z)*k)은
@@ -1693,13 +1856,31 @@ export function OrbitalMap({
       // 배율과 이동은 **같은 계수**를 쓴다 — 따로 놀면 확대하는 동안 겨눈 지점이
       // 미끄러지고, 돌아올 때 한쪽이 먼저 도착해 끊겨 보인다.
       const k = 1 - Math.pow(0.0012, dt);
-      if (zoom !== zoomTarget || offX !== offXTarget || offY !== offYTarget) {
-        zoom += (zoomTarget - zoom) * k;
-        offX += (offXTarget - offX) * k;
-        offY += (offYTarget - offY) * k;
-        if (Math.abs(zoomTarget - zoom) < 0.0015) zoom = zoomTarget;
-        if (Math.abs(offXTarget - offX) < 0.3) offX = offXTarget;
-        if (Math.abs(offYTarget - offY) < 0.3) offY = offYTarget;
+      //
+      // **배율은 로그 공간에서 이징한다.** 층 폭이 수천 배라 선형으로 하면
+      // 안쪽(작은 값)에서는 기어가고 바깥에서는 날아간다 — 같은 한 칸이
+      // 어디서 굴렸느냐에 따라 전혀 다른 거리가 된다. 로그로 두면 "몇 배"가
+      // 일정해서 어느 층에서든 같은 속도로 들어간다.
+      //
+      // 앵커는 클릭으로 데려갈 때만 목표와 갈린다(휠은 못박아 둔다).
+      // 배율과 **같은 계수**를 써야 둘이 나란히 도착한다.
+      if (zoom !== zoomTarget) {
+        zoom = Math.exp(Math.log(zoom) + (Math.log(zoomTarget) - Math.log(zoom)) * k);
+        if (Math.abs(Math.log(zoomTarget / zoom)) < 0.0004) zoom = zoomTarget;
+      }
+      if (anchorWX !== anchorWXT || anchorWY !== anchorWYT) {
+        anchorWX += (anchorWXT - anchorWX) * k;
+        anchorWY += (anchorWYT - anchorWY) * k;
+        // 세계 단위라 문턱도 세계 단위여야 한다 — 화면 반 픽셀에 해당하는 양.
+        const eps = 0.5 / Math.max(1e-9, baseUnit * zoomTarget);
+        if (Math.abs(anchorWXT - anchorWX) < eps) anchorWX = anchorWXT;
+        if (Math.abs(anchorWYT - anchorWY) < eps) anchorWY = anchorWYT;
+      }
+      if (anchorSX !== anchorSXT || anchorSY !== anchorSYT) {
+        anchorSX += (anchorSXT - anchorSX) * k;
+        anchorSY += (anchorSYT - anchorSY) * k;
+        if (Math.abs(anchorSXT - anchorSX) < 0.3) anchorSX = anchorSXT;
+        if (Math.abs(anchorSYT - anchorSY) < 0.3) anchorSY = anchorSYT;
       }
       applyCamera();
 
@@ -1845,11 +2026,18 @@ export function OrbitalMap({
         // (STAR_GLOW 3.2 · SAT_GLOW 4.1) size 끼리 직접 비교하면 안 된다.
         // 광도가 후광을 좁히는 몫(bloomOf)까지 되나눠야 실제로 그려질 반지름이
         // 하한을 넘는다.
+        //
+        // **겨눈 상태(SAT_LIT)까지 미리 감안한다.** 안 그러면 위성을 겨누는
+        // 순간 그것만 1.6배가 되어 제 별을 넘어선다(실측 69.5px 대 56.5px) —
+        // 겨눔은 잠깐이지만 그 순간 위계가 뒤집히는 건 마찬가지다.
+        // 호버 여부로 하한을 바꾸면 겨눌 때마다 별이 펄쩍 뛰므로, **항상**
+        // 가장 큰 위성이 겨눠진 셈 치고 잡는다 — 별이 조금 커지는 대신
+        // 크기가 손짓에 안 흔들린다.
         const satFloor = new Map<string, number>();
         for (const s of starSats) {
           const maxSat = s.sats.reduce((mx, st) => Math.max(mx, st.size), 0);
           if (maxSat <= 0) continue;
-          const needRad = maxSat * SAT_GLOW * STAR_OVER_SAT;
+          const needRad = maxSat * SAT_LIT * SAT_GLOW * STAR_OVER_SAT;
           satFloor.set(s.el.id, needRad / (STAR_GLOW * bloomOf(starLumOf(s.el))));
         }
         /** 화면에 실제로 그리는 크기. 판정 반경도 이걸 써야 보이는 것과 눌리는
@@ -1993,10 +2181,27 @@ export function OrbitalMap({
             ctx!.fillStyle = `rgba(${rgb},${(lit ? 0.95 : 0.6) * galAlpha})`;
             ctx!.fillText(g.label.toUpperCase(), gx, gy + Math.max(12, R * GALAXY_EDGE * FLATTEN) + 9);
 
-            // 판정. 카메라가 움직이는 동안에는 안 받는다 — 보이는 곳과 눌리는
+            // ── 판정 ──
+            //
+            // **별이 눌리기 시작하면 은하는 안 눌린다.** 문턱을 별과 같은 값
+            // (STAR_HIT)으로 두어 둘이 정확히 배타적이다.
+            //
+            // 안 그러면 은하가 제 별을 통째로 삼킨다. 판정 반경이 원반 크기를
+            // 따라 자라는데 nearest 가 그걸 CAPTURE(2.4)배로 또 넓혀 잡으므로,
+            // 실측 zr 27 에서 은하 하나가 반경 417px 를 먹었다 — 그 안의 별을
+            // 누르려 하면 은하가 잡혀서 도로 밖으로 튕겨 나갔다.
+            //
+            // 반경도 **그려진 점**에 맞춘다. 원반 전체(rad)로 잡으면 눈에 보이는
+            // 빛보다 훨씬 넓은 데가 눌려서 "왜 여기서 잡히지"가 된다.
+            // 카메라가 움직이는 동안에는 아예 안 받는다 — 보이는 곳과 눌리는
             // 곳이 어긋난다.
-            if (ez < 0.02 && galAlpha > 0.35) {
-              hit.set(`gal:${g.key}`, { x: gx, y: gy, r: Math.max(18, rad), kind: "galaxy" });
+            if (ez < 0.02 && starReveal < STAR_HIT) {
+              hit.set(`gal:${g.key}`, {
+                x: gx,
+                y: gy,
+                r: Math.max(16, Math.min(rad, 46)),
+                kind: "galaxy",
+              });
             }
           }
         }
@@ -2170,8 +2375,9 @@ export function OrbitalMap({
         // 곳이 어긋난다. 전환 중에는 아무것도 못 누르는 편이 낫다.
         // 보이는 것만 눌린다. 은하만 떠 있는 배율에서 아직 안 드러난 별이
         // 판정을 가로채면, 은하를 누르려다 그 안의 별로 끌려 들어간다.
+        // 은하 판정과 **같은 문턱**을 반대로 쓴다 — 둘이 겹치는 구간이 없다.
         for (const { el, p } of placed) {
-          if (ez < 0.02 && starReveal > 0.35 && onScreen(p.x, p.y, 60)) {
+          if (ez < 0.02 && starReveal >= STAR_HIT && onScreen(p.x, p.y, 60)) {
             hit.set(el.id, { x: p.x, y: p.y, r: sizeOf(el) + 14, kind: "mem" });
           }
         }
@@ -2441,39 +2647,18 @@ export function OrbitalMap({
       flingX = flingX * 0.7 + ((dx / dtms) * 1000) * 0.3;
       flingY = flingY * 0.7 + ((dy / dtms) * 1000) * 0.3;
 
-      // 목표까지 같이 옮긴다. 목표를 안 옮기면 손을 떼는 순간 이징이 원래
-      // 자리로 되돌려서, 끌고 있는 내내 화면이 손가락을 밀어낸다.
-      const lim = offLimit(zoom);
-      offX = offXTarget = Math.max(-lim.x, Math.min(lim.x, offX + dx));
-      offY = offYTarget = Math.max(-lim.y, Math.min(lim.y, offY + dy));
+      // **목표를 옮긴다 — 덮어쓰지 않는다.**
+      //
+      // 예전에는 `offX = offXTarget = offX + dx` 였다. 목표를 지금 값으로
+      // 갈아엎는 식이라, 확대가 이징되는 동안 마우스가 조금만 움직이면 휠이
+      // 붙들어 둔 앵커가 통째로 날아갔다 — 확대 방향이 손과 무관해지던 원인.
+      // panBy 는 둘 다 같은 양만큼 밀어서 그 관계를 안 깬다: 확대는 제 앵커를
+      // 지키고 드래그는 그 위에 평행이동만 얹는다.
+      panBy(dx, dy);
     }
     function onLeave() {
       mouse = null;
     }
-    /**
-     * 그 천체가 화면 한가운데 오도록 당긴다.
-     *
-     * 자리는 배율에 비례해 중심에서 멀어진다(반경 = a × baseUnit × zoom).
-     * 그래서 지금 화면에서의 중심→천체 벡터에 배율비를 곱하면 목표 배율에서의
-     * 벡터가 나오고, 그만큼 반대로 밀면 화면 한가운데에 선다.
-     * 목표만 정하고 실제 이동은 매 프레임 이징이 맡는다 — 배율과 이동이 같은
-     * 계수로 수렴해야 당기는 동안 대상이 미끄러지지 않는다(onWheel 과 같은 규칙).
-     */
-    /** 궤도 단위의 한 점을 화면 가운데로 데려오며 배율 z 로 당긴다. */
-    function zoomToPoint(wx: number, wy: number, z: number) {
-      // 휠과 같은 이유로 관성을 끈다 — 안 끄면 관성 블록이 여기서 넣은 이동
-      // 목표를 다음 프레임에 지워버려서, 배율만 오르고 대상은 가운데로 안 온다.
-      flingX = 0;
-      flingY = 0;
-      const lim = offLimit(z);
-      zoomTarget = z;
-      // 목표 배율에서의 자리로 푼다. 지금 배율(unit)로 재서 k 를 곱하던 식은
-      // 배율이 이징 중일 때 어긋났다 — 목표 공간에서 직접 푸는 게 정확하다.
-      const u = baseUnit * z;
-      offXTarget = Math.max(-lim.x, Math.min(lim.x, -wx * u));
-      offYTarget = Math.max(-lim.y, Math.min(lim.y, -wy * u));
-    }
-
     function zoomToBody(id: string, z: number) {
       const el = els.find((e) => e.id === id);
       if (!el) return;
@@ -2556,11 +2741,7 @@ export function OrbitalMap({
       }
     }
     resetViewRef.current = () => {
-      zoomTarget = fitZoom;
-      offXTarget = 0;
-      offYTarget = 0;
-      flingX = 0;
-      flingY = 0;
+      resetCamera();
       lockedId = null;
     };
 
@@ -2571,10 +2752,7 @@ export function OrbitalMap({
         // 확대도 같이 푼다. 빠져나오는 키가 하나여야 한다 — 확대해 들어간
         // 상태에서 Escape 를 눌러 포커스만 풀리면 어디로 돌아가야 할지
         // 알려주는 게 화면에 없다.
-        zoomTarget = fitZoom;
-        offXTarget = 0;
-        offYTarget = 0;
-        flingX = flingY = 0;
+        resetCamera();
       }
     }
 
@@ -2596,15 +2774,12 @@ export function OrbitalMap({
       const sx = e.clientX - r.left;
       const sy = e.clientY - r.top;
 
-      // ── 관성을 먼저 끈다 ──
+      // 새 손짓이 앞선 손짓의 여운을 끈다. 미끄러지는 도중에 확대하면
+      // 미끄러짐은 거기서 멈추고 확대만 이어진다 — 지도라면 그게 맞다.
       //
-      // 이게 없으면 끌다 놓은 직후(미끄러지는 중)에 굴렸을 때 확대가 통째로
-      // 어긋난다. 관성 블록이 **매 프레임 offXTarget 을 지금 위치로 덮어쓰기**
-      // 때문이다 — 아래에서 커서를 붙잡으려고 계산해 넣은 목표가 다음 프레임에
-      // 지워지고, 배율만 오르니 화면이 커서와 무관하게 밀린다.
-      //
-      // 지도라면 새 손짓이 앞선 손짓의 여운을 끄는 게 맞다. 미끄러지는 도중에
-      // 확대하면 미끄러짐은 거기서 멈추고 확대만 이어진다.
+      // 예전에는 이게 **정확성을 위해 필수**였다(관성이 매 프레임 목표를
+      // 덮어썼으니까). 이제 관성도 panBy 로 목표를 옮기기만 해서, 이 줄은
+      // 순전히 손맛의 문제다. 지워도 확대는 안 깨진다.
       flingX = 0;
       flingY = 0;
 
@@ -2613,10 +2788,10 @@ export function OrbitalMap({
       // 않으면 한 칸에 화면이 통째로 튄다.
       const unitPx = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
       const dy = e.deltaY * unitPx * (e.ctrlKey ? 3 : 1);
-      // 한 칸에 얼마나 파고드나. 층이 셋이 되면서 오갈 폭이 900배가 됐다 —
-      // 예전 계수(0.0016, 한 칸 1.21배)로는 바닥까지 서른다섯 칸이라 손목이
-      // 먼저 지친다. 한 칸 1.45배면 열아홉 칸이고, 한 층 안에서의 미세 조정도
-      // 아직 할 만하다.
+      // 한 칸에 얼마나 파고드나. 층이 셋이 되면서 오갈 폭이 수천 배가 됐다 —
+      // 예전 계수(0.0016, 한 칸 1.21배)로는 바닥까지 마흔 칸이라 손목이 먼저
+      // 지친다. 한 칸 1.45배면 스물넷이고, 한 층 안에서의 미세 조정도 아직
+      // 할 만하다. (층을 건너뛰는 건 클릭이 맡는다.)
       const next = Math.min(
         zoomMax(),
         Math.max(zoomMin(), zoomTarget * Math.exp(-dy * 0.0031)),
@@ -2627,40 +2802,15 @@ export function OrbitalMap({
       if (next < fitZoom * starLayer * REVEAL_ONSET) lockedId = null;
 
       if (next <= fitZoom + 1e-6) {
-        // 계 전체로 물러나면 가운데로도 같이 돌아온다. 배율 1 은 "계 전체"
-        // 라는 뜻이라 한쪽으로 치우쳐 있으면 그 뜻이 안 산다.
-        // 배율과 이동이 같은 계수로 수렴하므로 도착 시점이 정확히 맞는다.
-        offXTarget = 0;
-        offYTarget = 0;
+        // 우주 전체로 물러나면 가운데로도 같이 돌아온다. 그 배율의 뜻이
+        // "전체가 보인다"라, 한쪽으로 치우쳐 있으면 뜻이 안 산다.
+        resetCamera();
+        zoomTarget = next;
       } else {
-        // ── 커서 밑의 점을 붙잡는다 ──
-        //
-        // 확대·축소 **양쪽 다** 같은 규칙이다. 예전에는 축소만 화면 한가운데를
-        // 기준으로 삼았는데, 그러면 들어갈 때와 나올 때 화면이 서로 다른 축으로
-        // 움직여서 굴리는 손과 화면이 따로 논다 — 지도라면 어느 쪽이든 손가락
-        // 밑이 그대로 있어야 한다.
-        //
-        // **목표 공간에서만 푼다.** 예전 식은 지금 값(cx·unit — 이징 중이라
-        // 매 프레임 변한다)과 목표값(offXTarget·zoomTarget)을 섞어 썼다.
-        // 그래서 이징이 끝나기 전에 또 굴리면 붙잡은 점이 조금씩 밀렸다 —
-        // 빠르게 여러 번 굴릴수록 어긋남이 쌓인다.
-        //
-        //   목표 카메라 중심 c = w/2 + offXTarget,  단위 u = baseUnit × zoomTarget
-        //   커서 밑의 세계 좌표 wx = (sx - c) / u
-        //   배율이 k 배가 되어도 wx 가 그대로이려면 c' = sx - (sx - c)·k
-        //   → offXTarget' = d - (d - offXTarget)·k       (d = sx - w/2)
-        const k = next / zoomTarget;
-        const dx0 = sx - w / 2;
-        const dy0 = sy - h / 2;
-
-        // 가두는 기준은 **계가 화면에 남는가**지 중심이 보이는가가 아니다.
-        // 확대해 들어간다는 건 원래 중심을 벗어난다는 뜻이다(이름표는 DOM 이라
-        // 제자리에 남는다). 대신 바깥 궤도가 완전히 사라지지는 않게 한다.
-        const lim = offLimit(next);
-        offXTarget = Math.max(-lim.x, Math.min(lim.x, dx0 - (dx0 - offXTarget) * k));
-        offYTarget = Math.max(-lim.y, Math.min(lim.y, dy0 - (dy0 - offYTarget) * k));
+        // 커서 밑의 점을 붙든다. 확대·축소 **양쪽 다** 같은 규칙이다 —
+        // 들어갈 때와 나올 때 축이 다르면 굴리는 손과 화면이 따로 논다.
+        zoomAt(next, sx, sy);
       }
-      zoomTarget = next;
     }
 
     resize();
