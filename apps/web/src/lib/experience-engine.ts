@@ -126,6 +126,11 @@ segment_ids 에 그대로 쓸 수 있다. segments 는 그 뒤의 최근 구간�
 **earlier 가 있으면 세션은 segments 에 보이는 것보다 훨씬 길다.** 요약할 때 앞부분을 빼고
 "마지막에 한 일"만 말하지 마라 — earlier 의 시간이 segments 보다 클 수도 있다.
 
+**「대상별 체류 합계」** 줄은 위 셋(segments·via·earlier)에 흩어진 시간을 대상마다 더해
+미리 계산해 준 값이다. 같은 대상도 나갔다 오면 구간이 새로 생기므로(ZEP 이 2분·6분·14분
+세 줄로 나오는 식) 타임라인만 보면 무엇이 큰 일이었는지 놓치기 쉽다. **이 세션에 큰 대상이
+둘 이상이었는지는 이 줄로 판단하라.** 타임라인은 순서와 흐름을 보는 데 쓴다.
+
 **모든 시각은 KST(+09:00) 다.** 새벽·심야 여부를 판단할 때 그대로 읽으면 된다.
 
 ## 무엇을 믿을 것인가
@@ -767,6 +772,89 @@ async function findDormantCandidates(
   }));
 }
 
+/**
+ * 이 세션에서 **무엇에 얼마나 머물렀나** — 대상별 합계 한 줄.
+ *
+ * 압축 로그는 시간을 세 군데에 나눠 담는다. 모델이 "이 세션에 큰 대상이
+ * 둘이었나"를 알려면 그 셋을 머릿속에서 합쳐야 한다:
+ *
+ *   segments      개별 구간. **연속 체류** 단위라 같은 대상도 나갔다 오면
+ *                 새 줄이다(ZEP 이 2·6·14분 세 줄로 나온다).
+ *   segments[].via 1분 미만이라 앞 구간에 접힌 것. 시간이 안 적혀 있다.
+ *   earlier       상한 20칸을 넘겨 잘린 앞부분. 이미 대상별 합계고 순서가 없다.
+ *
+ * **모양이 다른 목록에 걸친 산수**라 LLM 이 특히 못한다. 실측으로 대가가
+ * 드러났다 — 183분 세션에서 ZEP 68분 · Project NA 46분이었는데 모델이 하나로
+ * 냈고(segment_ids 0..18), 그 경험이 메타버스 갈래에 붙으면서 갈래가 오염됐다.
+ * 뒤이은 Project NA 세션 셋이 계속 거기 붙었다.
+ *
+ * 그래서 **더해서 준다.** 합치는 게 아니다 — segments 는 그대로 두므로 순서도
+ * 시각도 안 잃는다(그 둘은 "행사 중 딴짓"과 "A 하고 B"를 가르는 정보다).
+ *
+ * 대상 = **도메인 + 제목**이다. 도메인만으로 묶으면 안 된다 — 같은 localhost
+ * 라도 "Project NA" 와 "SOLDIER : A DAY" 는 다른 일이고, 프롬프트도 그렇게
+ * 시킨다. via 와 earlier.top 이 이미 `도메인 · 제목` 문자열이라 같은 키로 묶인다.
+ *
+ * via 는 **안 센다.** 시간이 안 적혀 있어 30초로 어림해봤는데, 스쳐간 횟수가
+ * 많은 곳이 부풀었다 — 실측에서 `www.naver.com · NAVER` 가 12분·11분·10분으로
+ * 잡혀 "큰 대상" 자리에 올라왔다. 네이버는 거쳐가는 곳이지 일이 아니다.
+ * via 는 정의상 1분도 안 머문 곳이라 어차피 문턱(10분) 근처에 못 간다.
+ * 스쳐간 흔적은 타임라인의 via 에 그대로 남아 있으므로 잃는 정보도 없다.
+ */
+
+function buildTargetTotals(log: unknown): string | null {
+  const l = log as {
+    segments?: {
+      sec?: number;
+      start?: string;
+      end?: string;
+      domain?: string;
+      title?: string;
+      via?: string[];
+    }[];
+    earlier?: { top?: unknown[] };
+  } | null;
+  const total = new Map<string, number>();
+  const add = (label: string, sec: number) => {
+    if (!label || sec <= 0) return;
+    total.set(label, (total.get(label) ?? 0) + sec);
+  };
+
+  for (const g of l?.segments ?? []) {
+    const label = g?.title ? `${g.domain} · ${g.title}` : (g?.domain ?? '');
+    // sec 이 없는 옛 세션은 시각 차이로 어림잡는다(secOf 와 같은 규칙).
+    // 관측이 한 번뿐인 구간은 0 이 되어 실제보다 작지만, 없는 것보다 낫다 —
+    // 이 값의 쓰임은 "무엇이 큰 대상이었나" 라 순위만 맞으면 된다.
+    let sec = g?.sec ?? 0;
+    if (!sec && g?.start && g?.end) {
+      const ms = new Date(g.end).getTime() - new Date(g.start).getTime();
+      if (Number.isFinite(ms) && ms > 0) sec = Math.round(ms / 1000);
+    }
+    add(label, sec);
+  }
+
+  // earlier.top 은 판이 둘이다. 배포된 확장이 코드보다 옛것이라 실데이터는
+  // 문자열("zep.us · … 46분")이고, 지금 빌더는 {i,label,sec} 를 만든다.
+  // 둘 다 받는다 — 한쪽만 보면 긴 세션의 앞부분이 통째로 안 세어진다.
+  for (const p of l?.earlier?.top ?? []) {
+    if (typeof p === 'string') {
+      const m = /^(.*?)\s+(\d+)분$/.exec(p);
+      if (m) add(m[1], Number(m[2]) * 60);
+    } else if (p && typeof p === 'object') {
+      const o = p as { label?: string; sec?: number };
+      if (o.label) add(o.label, o.sec ?? 0);
+    }
+  }
+
+  const rows = [...total.entries()]
+    .map(([label, sec]) => ({ label, min: Math.round(sec / 60) }))
+    .filter((r) => r.min >= 1)
+    .sort((a, b) => b.min - a.min)
+    .slice(0, 8);
+  if (rows.length === 0) return null;
+  return rows.map((r) => `${r.label} ${r.min}분`).join(' · ');
+}
+
 /** close_reason 을 LLM 이 쓸 수 있는 말로 옮긴다. 'maxlen' 은 특히 중요하다 —
  *  4시간에 잘렸다는 것은 하던 일이 끝나지 않았다는 뜻이라 success 의 반증이다. */
 const CLOSE_REASON_HINT: Record<string, string> = {
@@ -841,6 +929,7 @@ export function buildUserMessage(
           .join('\n')
       : null;
 
+  const targetTotals = buildTargetTotals(session.compressedLog);
   return [
     '## 기존 컨텍스트',
     '### 보유 스킬 목록',
@@ -867,6 +956,10 @@ export function buildUserMessage(
     `- 어떻게 끝났나: ${CLOSE_REASON_HINT[session.closeReason] ?? session.closeReason}`,
     `- 활동량: ${session.activityScore} (스크롤·클릭·키의 가중합. 분당 10 이상이면 손이 바빴다는 뜻)`,
     `- 방문 도메인(도메인별 체류 시간 등): ${JSON.stringify(session.domains)}`,
+    // 아래 타임라인에 흩어진 시간을 대상별로 더해 준다. 근거는 buildTargetTotals 에.
+    ...(targetTotals
+      ? [`- 대상별 체류 합계(segments·via·earlier 를 모두 더한 값): ${targetTotals}`]
+      : []),
     '- 압축 로그(타임라인):',
     JSON.stringify(session.compressedLog),
   ].join('\n');
