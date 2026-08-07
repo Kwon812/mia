@@ -25,8 +25,7 @@ b429dae  feat: 지도를 별자리로 — 기억이 궤도를 떠나고, 당기�
 - 당기면 경험·갈래가 배어 나오고 축 어휘도 층을 따라 갈림
 - 축척을 데이터에서 역산 (가장 빽빽한 쌍 기준) · 배율 1 = 계 전체
 - 맥동을 잔광 궤적으로 교체
-- **DB 에 6개월치 시드가 들어가 있다** (`5eed` 표식, 경험 405 · 갈래 131 · 기억 87).
-  지우려면 `cd apps/web && npx tsx --tsconfig scripts/tsconfig.json scripts/seed-6months.mts --clear`
+- **DB 에 6개월치 목데이터가 들어가 있다** → 바로 아래 「목데이터」 절 참고
 
 ### 남은 문제 (이게 다음 작업의 이유다)
 
@@ -80,6 +79,64 @@ b429dae  feat: 지도를 별자리로 — 기억이 궤도를 떠나고, 당기�
 
 버려지는 것: `sectorOf` · `starA` · `starPlane` · `STAR_*` 상수 전부.
 살아남는 것: 그리기(그라디언트 · 잔광 · 판독값 · 확대 카메라 · 컬링).
+
+---
+
+## 목데이터 (시드) — 지금 DB 에 들어가 있다
+
+> **"목데이터 지워줘" 라는 말을 들으면 이 절만 보면 된다.**
+
+2026-08-08, 지도가 데이터 많을 때 어떻게 보이는지 확인하려고 넣었다.
+**실데이터와 한 DB 에 섞여 있다.** 지금 화면에 보이는 갈래·기억·경험 대부분이
+이것이다 (실데이터는 경험 21 · 갈래 5 · 기억 4 수준).
+
+```
+넣은 것   세션·경험 405 · 갈래 131 · 기억 87   (180일치)
+표식      모든 id 가 '5eed' 로 시작한다
+```
+
+### 지우기
+
+```bash
+cd apps/web
+npx tsx --tsconfig scripts/tsconfig.json scripts/seed-6months.mts --clear
+```
+
+지운 개수를 줄별로 찍는다. FK 순서대로 지우고, **시드 갈래를 가리키는
+앱 생성 기억까지 같이** 지운다 — 그게 없으면 갈래 삭제가 FK 에 막혀 통째로
+실패한다(실제로 한 번 막혔다).
+
+### 남았는지 확인
+
+```sql
+select
+  (select count(*) from sessions    where id::text like '5eed%') as sessions,
+  (select count(*) from threads     where id::text like '5eed%') as threads,
+  (select count(*) from experiences where id::text like '5eed%') as experiences,
+  (select count(*) from memories    where id::text like '5eed%') as memories;
+```
+
+전부 0 이면 깨끗하다.
+
+### 다시 넣기
+
+```bash
+npx tsx --tsconfig scripts/tsconfig.json scripts/seed-6months.mts          # 미리보기
+npx tsx --tsconfig scripts/tsconfig.json scripts/seed-6months.mts --apply  # 실행
+npx tsx --tsconfig scripts/tsconfig.json scripts/seed-6months.mts --years  # 1~4년 전 (연 단위 확인용)
+```
+
+고정 시드 PRNG 라 몇 번 돌려도 **같은 데이터**가 나온다 — "어제 본 화면"과
+비교할 수 있다.
+
+### 안 건드리는 것
+
+- **`user_skills`** — PK 가 `(user_id, skill_name)` 이라 id 표식을 붙일 수가
+  없다. 넣으면 진짜 스킬과 섞여 되돌릴 수 없으므로 아예 안 넣는다.
+  대신 `experience_skills` 만 넣어서 호버 칩은 뜨고 `/skills` 는 안 더럽힌다.
+- **`characters` 의 누적 카운터**(experience_count 등) — 넣을 때도 지울 때도
+  안 만진다. 그래서 화면 우하단 숫자(경험 21 · 스킬 12)는 시드와 무관하게
+  실데이터 그대로다. **지운 뒤 따로 손볼 것이 없다.**
 
 ---
 
