@@ -158,14 +158,20 @@ function tempered(
 /**
  * 광도 — 그 갈래에 남은 기억의 중요도.
  *
- * 화면 안에서의 몫으로 잰다(topImportance). importance 는 이론상 1~10 인데
- * 실제로는 3~4 두 칸에 뭉쳐 있어서, 절대값으로 알파를 주면 밝기가 정보가 못
- * 된다 — 위성 층이 topScore 로 이미 푼 문제고 같은 규칙을 쓴다.
+ * **관측 범위로 정규화한다.** 0 을 기준으로 나누면 안 된다 — 실측 분포가
+ * 중요도 1~10 에 퍼져 있어도 `imp/10` 은 0.48~1.0 이라, 부드러운 그라디언트
+ * 위에서는 그 차이가 안 읽힌다(실제로 "밝기 차가 안 보인다"가 나왔다).
+ * 화면에 있는 것 중 가장 어두운 것을 바닥에, 가장 밝은 것을 천장에 놓고
+ * 그 사이를 다 쓴다 — 위성 층이 topScore 로 푸는 것과 같은 규칙이되,
+ * **최솟값도 같이 뺀다**는 것이 다르다.
  *
- * 바닥값이 0 이 아닌 이유: 기억이 없는 갈래도 **보여야 한다.** 그게 지금
- * 붙들고 있는 일이다. 다만 남은 것과는 확실히 갈려야 하므로 절반 아래로 둔다.
+ * 세 층이 확실히 갈려야 한다:
+ *   LUM_DARK      아직 아무것도 안 남긴 일
+ *   LUM_KEPT_MIN  남긴 것 중 가장 약한 것 — 어두운 별보다 확실히 위
+ *   1             가장 중요한 것
  */
-const LUM_FLOOR = 0.42;
+const LUM_DARK = 0.2;
+const LUM_KEPT_MIN = 0.46;
 
 /**
  * 별자리가 시작하는 반경(궤도 단위). 중심(권도형)에서 이만큼 떨어진 곳부터다.
@@ -421,13 +427,18 @@ const zoomForStar = (n: number) => Math.max(2.4, Math.min(9, 0.3 / satFieldF(n))
 const SAT_REF_R = 235;
 const satScaleOf = (R: number) => Math.max(0.42, Math.min(1, Math.sqrt(R / SAT_REF_R)));
 
-/** 별의 크기 — 붙은 경험 수, 곧 질량이다.
+/** 별의 크기(px) — 붙은 경험 수, 곧 질량이다.
  *
  *  예전에는 기억의 중요도였다. 그런데 중요도는 이제 광도라, 크기까지 맡으면
  *  한 값이 채널 둘을 쓰고 "얼마나 오래 붙들고 있는 일인가"는 화면에서 사라진다.
- *  로그로 누른다 — 경험 100건짜리 갈래가 1건짜리의 100배로 뜨면 계가 그것
- *  하나가 된다. 1건 5.5px · 10건 8.9px · 100건 12.6px. */
-const massSize = (n: number) => 3.5 + Math.log1p(n) * 2.0;
+ *
+ *  **관측 범위로 정규화한다.** 절대 로그(`3.5 + log1p(n)·2`)를 쓰던 때는
+ *  1건이 4.9 · 2건이 5.7 이었다 — 실측 분포가 1~4건에 80%가 몰려 있어서
+ *  데이터 대부분이 0.8px 안에 들어갔고, 후광까지 부드러우니 아무 차이도
+ *  안 보였다. 로그는 그대로 두되(15건이 1건의 15배로 뜨면 계가 그것 하나가
+ *  된다) **최솟값을 빼서** 있는 폭을 다 쓴다. */
+const SIZE_MIN = 3.2;
+const SIZE_MAX = 13;
 
 /** 조각 안에서 별을 흩뿌리는 폭 — 조각 폭에 대한 비율이다. 축을 가운데 두고
  *  ±절반씩 쓴다. 나머지(1-이 값)는 옆 조각과의 여백으로 남아, 얼마를 흩든
@@ -646,15 +657,40 @@ export function OrbitalMap({
      *  기억이 없으면 색온도가 없어 분야 색 그대로다. */
     const colorOf = (o: OrbitBody) => tempered(colorOfCategory(o.category), o.memory?.trigger ?? null);
 
+    /** 관측 범위 안에서의 몫. lo 에서 0, hi 에서 1. 폭이 0 이면(전부 같은 값)
+     *  없는 차이를 만들지 않도록 가운데로 준다. 화면 안에서 재는 것이라
+     *  저장된 값(importance·experience_count)은 안 건드린다 — /memories 목록은
+     *  절대값을 그대로 쓴다. */
+    const spanOf = (vals: number[]) => {
+      const lo = Math.min(...vals);
+      const hi = Math.max(...vals);
+      return (v: number) => (hi > lo ? (v - lo) / (hi - lo) : 0.5);
+    };
+
     // ── 광도 ──
     //
-    // 화면 안에서의 몫으로 잰다. importance 는 이론상 1~10 인데 실제로는
-    // 3~4 두 칸에 뭉쳐 있어서, 절대값으로 알파를 주면 밝기가 정보가 못 된다 —
-    // 위성 층이 topScore 로 이미 푼 문제고 같은 규칙을 쓴다. importance 자체는
-    // /memories 목록이 절대값으로 쓰므로 건드리지 않는다.
-    const topImportance = Math.max(1, ...threads.map((t) => t.memory?.importance ?? 0));
+    // 남긴 것들끼리의 순위다. 아직 안 남긴 것은 그 순위 밖의 어두운 별이라
+    // 정규화에 안 넣는다 — 넣으면 "안 남김"이 최솟값 자리를 차지해서
+    // 실제로 남은 것 중 가장 약한 것과 구분이 안 된다.
+    const kept = threads.map((t) => t.memory?.importance).filter((n): n is number => n != null);
+    const impRatio = spanOf(kept.length > 0 ? kept : [0]);
+    // 이 화면이 기억을 아예 안 읽으면(/threads) "어둡다"가 "안 남았다"가 아니라
+    // "모른다"는 뜻이 된다. 그때는 층을 나누지 않고 전부 제 밝기로 띄운다 —
+    // 안 그러면 화면 전체가 LUM_DARK 로 깔려 아무것도 안 보인다.
+    const anyKept = kept.length > 0;
     const lumOf = (t: ThreadBody) =>
-      t.memory ? LUM_FLOOR + (1 - LUM_FLOOR) * (t.memory.importance / topImportance) : LUM_FLOOR;
+      !anyKept
+        ? 1
+        : t.memory
+          ? LUM_KEPT_MIN + (1 - LUM_KEPT_MIN) * impRatio(t.memory.importance)
+          : LUM_DARK;
+
+    // ── 질량 ──
+    // 로그를 먼저 씌우고 그 위에서 범위를 잰다. 순서가 바뀌면 정규화가
+    // 선형 공간에서 일어나 로그로 누른 뜻이 사라진다.
+    const massRatio = spanOf(threads.map((t) => Math.log1p(t.experienceCount)));
+    const sizeOfMass = (n: number) =>
+      SIZE_MIN + (SIZE_MAX - SIZE_MIN) * massRatio(Math.log1p(n));
 
     // 별자리가 시작하는 곳. 상수다 — 근거는 STAR_BASE 주석에.
     const starBase = STAR_BASE;
@@ -734,7 +770,7 @@ export function OrbitalMap({
         plane: starPlane.get(t.id) ?? sectorIndexOf(t) * SECTOR,
         lum: lumOf(t),
         color: colorOf(t),
-        size: massSize(t.experienceCount),
+        size: sizeOfMass(t.experienceCount),
         mem: t,
       };
     });
@@ -1228,22 +1264,37 @@ export function OrbitalMap({
       color: [number, number, number],
       lit: boolean,
       alpha: number,
+      lum: number,
       t: number,
     ) {
       const [r, g, b] = lit ? [143, 244, 228] : color;
       // 아주 느린 맥동. 살아 있다는 표시 정도로만 — 5% 라 겨눠보지 않으면
-      // 움직인다는 것도 모른다. "최근"은 여기서 안 다룬다(drawTrail).
+      // 움직인다는 것도 모른다. "최근"은 여기서 안 다룬다(drawCorona).
       const pulse = reduced ? 1 : 1 + Math.sin(t * 0.5 + x * 0.01) * 0.05;
-      const rad = radius * pulse * (lit ? 1.45 : 1) * 3.2;
+      // **광도는 알파와 후광 넓이를 같이 쓴다.**
+      //
+      // 알파만으로는 안 읽혔다. 안쪽이 흰빛으로 타는 그라디언트라 심은 어느
+      // 밝기에서든 비슷하게 하얗고, 실제로 갈리는 건 바깥 후광이 어디까지
+      // 번지느냐다 — 실제 별도 그렇게 보인다.
+      const bloom = 0.66 + 0.34 * Math.max(0, Math.min(1, lum));
+      const rad = radius * pulse * (lit ? 1.45 : 1) * 3.2 * bloom;
 
       // 안쪽 10%만 흰빛으로 타들어가고, 거기서부터 색을 거쳐 사그라든다.
       // 정지점을 촘촘히 둬야 경계 없이도 "심이 있다"가 읽힌다.
+      //
+      // **정지점을 bloom 으로 되나눈다.** 안 그러면 광도가 심까지 같이 줄여서
+      // 크기(질량)와 밝기가 한 덩어리로 읽힌다 — 작고 밝은 별과 크고 어두운
+      // 별이 구분이 안 된다. 되나누면 심의 px 크기는 radius 만 따르고,
+      // 광도는 **꼬리가 어디까지 번지느냐**만 정한다.
+      // (bloom ≤ 1 이라 나눈 값은 커지고, 1 을 넘는 정지점은 잘라낸다 —
+      //  가장 어두운 별은 꼬리 없이 심만 남는다.)
+      const st = (v: number) => Math.min(1, v / bloom);
       const gr = ctx!.createRadialGradient(x, y, 0, x, y, rad);
       gr.addColorStop(0, `rgba(255,255,255,${alpha})`);
-      gr.addColorStop(0.09, `rgba(${r},${g},${b},${alpha})`);
-      gr.addColorStop(0.2, `rgba(${r},${g},${b},${0.78 * alpha})`);
-      gr.addColorStop(0.36, `rgba(${r},${g},${b},${0.34 * alpha})`);
-      gr.addColorStop(0.62, `rgba(${r},${g},${b},${0.1 * alpha})`);
+      gr.addColorStop(st(0.09), `rgba(${r},${g},${b},${alpha})`);
+      gr.addColorStop(st(0.2), `rgba(${r},${g},${b},${0.78 * alpha})`);
+      gr.addColorStop(st(0.36), `rgba(${r},${g},${b},${0.34 * alpha})`);
+      gr.addColorStop(st(0.62), `rgba(${r},${g},${b},${0.1 * alpha})`);
       gr.addColorStop(1, `rgba(${r},${g},${b},0)`);
       ctx!.fillStyle = gr;
       ctx!.beginPath();
@@ -1851,7 +1902,7 @@ export function OrbitalMap({
           if (p.y > cy) continue; // 앞쪽은 나중에
           if (foc && el.id === foc.id) continue; // 모핑 중인 대상은 따로 그린다
           if (!onScreen(p.x, p.y, sizeOf(el) * 4 + 40)) continue;
-          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * el.lum, t);
+          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * el.lum, el.lum, t);
         }
 
         // 질량 중심
@@ -1873,7 +1924,7 @@ export function OrbitalMap({
           if (p.y <= cy) continue; // 뒤쪽은 이미 그렸다
           if (foc && el.id === foc.id) continue;
           if (!onScreen(p.x, p.y, sizeOf(el) * 4 + 40)) continue;
-          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * el.lum, t);
+          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * el.lum, el.lum, t);
         }
         ctx!.restore();
 
@@ -1954,12 +2005,15 @@ export function OrbitalMap({
         const toR = 18 + weightOf(foc) * 1.2;
         // 출발 크기도 계가 그렸을 크기와 같아야 넘겨주는 지점이 안 튄다.
         const fromR = focEl ? focEl.size : toR;
+        // 펼친 대상은 알파도 후광도 안 깎는다. 지금 화면이 이것 하나에 대한
+        // 것이라 다른 것과 비교할 대상이 없고, 광도는 비교로만 읽히는 값이다.
         drawStar(
           camX,
           camY,
           fromR + (toR - fromR) * ez,
           colorOf(foc),
           hovered === foc.id,
+          1,
           1,
           t,
         );
