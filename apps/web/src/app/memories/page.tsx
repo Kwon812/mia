@@ -71,33 +71,43 @@ export default async function MemoriesPage() {
                           {(m.triggers.length > 0 ? m.triggers : [m.trigger]).join(" · ")}
                         </span>
                       </div>
-                      <div>
-                        <h2 className="mb-2 text-[16px] font-medium text-lum-0">{m.title}</h2>
-                        <p className="utterance text-[15.5px] text-lum-1">{m.body}</p>
+                      {/* 제목만 세우고 본문·스킬은 접는다. 목록에서 먼저 보여야
+                          하는 것은 "무엇이 남았나"이지 그 내용이 아니다. */}
+                      <details className="disclosure">
+                        <summary>
+                          <span className="disclosure-mark" aria-hidden="true">
+                            ›
+                          </span>
+                          <h2 className="text-[16px] font-medium text-lum-0">{m.title}</h2>
+                        </summary>
 
-                        {/* 스킬 — 제목과 분리한다. 예전에는 "Supabase를 처음 써봤다 ·
-                            {요약}" 처럼 제목에 욱여넣어서 두 정보가 한 줄에 뭉쳤다.
-                            처음 쓴 것은 밝게 + 표식을 달아 trigger(new_skill)가
-                            화면에서 근거를 얻게 한다. */}
-                        {skills.length > 0 && (
-                          <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                            {skills.map((s) => (
-                              <span
-                                key={s.name}
-                                className={[
-                                  "readout rounded-sm border px-1.5 py-0.5 text-[12px]",
-                                  s.firstTime
-                                    ? "border-[rgba(160,185,220,0.34)] text-lum-0"
-                                    : "border-[rgba(160,185,220,0.12)] text-lum-3",
-                                ].join(" ")}
-                                title={s.firstTime ? "이때 처음 썼다" : `비중 ${s.weight}`}
-                              >
-                                {s.name}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                        <div className="mt-3 pl-[21px]">
+                          <p className="utterance text-[15.5px] text-lum-1">{m.body}</p>
+
+                          {/* 스킬 — 제목과 분리한다. 예전에는 "Supabase를 처음 써봤다 ·
+                              {요약}" 처럼 제목에 욱여넣어서 두 정보가 한 줄에 뭉쳤다.
+                              처음 쓴 것은 밝게 + 표식을 달아 trigger(new_skill)가
+                              화면에서 근거를 얻게 한다. */}
+                          {skills.length > 0 && (
+                            <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                              {skills.map((s) => (
+                                <span
+                                  key={s.name}
+                                  className={[
+                                    "readout rounded-sm border px-1.5 py-0.5 text-[12px]",
+                                    s.firstTime
+                                      ? "border-[rgba(160,185,220,0.34)] text-lum-0"
+                                      : "border-[rgba(160,185,220,0.12)] text-lum-3",
+                                  ].join(" ")}
+                                  title={s.firstTime ? "이때 처음 썼다" : `비중 ${s.weight}`}
+                                >
+                                  {s.name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </details>
                     </article>
                   );
                 })}

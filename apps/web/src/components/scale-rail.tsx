@@ -5,18 +5,18 @@ import { usePathname } from "next/navigation";
 
 // 메뉴가 아니라 축척이다.
 //
-// 이 사이트의 모든 화면은 같은 것을 다른 배율로 본 것이다 — 개별 천체(기억),
-// 하루치 궤적(일기), 무리(스킬), 계 전체(성격). 그래서 목록으로 나열하지 않고
-// 배율 눈금으로 세운다. 눈금이 길수록 넓게 본다.
+// 이 사이트의 모든 화면은 같은 것을 다른 배율로 본 것이다 — 지금의 나,
+// 하는 일(갈래), 남은 것(기억), 하루치 궤적(일기), 계 전체(성격). 그래서
+// 목록으로 나열하지 않고 배율 눈금으로 세운다. 눈금이 길수록 넓게 본다.
 //
 // 화면 왼쪽 가장자리에 붙어 있고 평소엔 눈금만 보인다. 겨누면 이름이 나온다 —
 // 계기판에서 라벨은 필요할 때만 있으면 된다.
 const SCALES = [
-  { href: "/", label: "지금", tick: 10 },
-  { href: "/memories", label: "기억", tick: 18 },
-  { href: "/diary", label: "일기", tick: 24 },
-  { href: "/threads", label: "갈래", tick: 26 },
-  { href: "/skills", label: "스킬", tick: 28 },
+  { href: "/", label: "나", tick: 10 },
+  { href: "/threads", label: "갈래", tick: 18 },
+  { href: "/memories", label: "기억", tick: 24 },
+  { href: "/diary", label: "일기", tick: 28 },
+  { href: "/skills", label: "스킬", tick: 31 },
   { href: "/personality", label: "성격", tick: 34 },
 ] as const;
 

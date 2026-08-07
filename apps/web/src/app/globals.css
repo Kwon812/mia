@@ -104,6 +104,49 @@ body {
   height: 1px;
 }
 
+/* ── 펼침 ────────────────────────────────────────
+   목록은 제목만 세우고 상세는 접는다. 스무 개가 한꺼번에 펼쳐져 있으면
+   목록이 아니라 벽이 되어서, 무엇이 있는지부터 안 보인다.
+   details/summary 를 그대로 쓴다 — 상태를 들고 있을 이유가 없다. */
+.disclosure > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* 사파리는 list-style 로 안 지워진다 */
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure-mark {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-lum-3);
+  transition:
+    rotate 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 200ms ease;
+}
+
+.disclosure > summary:hover .disclosure-mark {
+  color: var(--color-lum-0);
+}
+
+.disclosure[open] > summary .disclosure-mark {
+  rotate: 90deg;
+  color: var(--color-lum-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-mark {
+    transition: none;
+  }
+}
+
 /* ── 축척 레일 — 메뉴 대신 축척이 곧 이동이다 ────────────
    멀리 볼수록 전체(성격), 당길수록 개별(기억). 목록이 아니라 배율이다. */
 .rail {
