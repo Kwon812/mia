@@ -379,7 +379,10 @@ describe('buildCompressedLog — 상한·중복 제거', () => {
     const earlier = log.earlier!;
     expect(earlier.segments).toBe(5); // site0~site4
     expect(earlier.sec).toBeGreaterThan(0);
-    expect(earlier.top[0]).toMatch(/^site0\.com · T0 \d+분$/);
+    // 번호는 segments 에서 이어진다 — 그래야 앞부분도 배정 대상이 된다.
+    expect(earlier.top[0].i).toBe(20);
+    expect(earlier.top[0].label).toBe('site0.com · T0');
+    expect(earlier.top[0].sec).toBeGreaterThan(0);
   });
 
   it('상한을 안 넘으면 earlier 자체가 없다', () => {

@@ -155,6 +155,35 @@ export const experienceThreadSchema = z.object({
   // 안 한 일에 대한 진술이어서 기록에 흔적이 없다. assertion 위계로 declared 다.
 });
 
+/** 세션 안에서 이 경험이 나온 구간들. compressed_log.segments 의 인덱스다.
+ *
+ *  비어 있으면 "세션 전체"라는 뜻이다 — 나뉘지 않은 경험(대부분)과 구간 정보가
+ *  없던 옛 세션이 여기 해당한다. 엔진이 유효성을 검사하고, 시간(occurred_at·
+ *  duration_min)을 이 값으로 계산한다. */
+const segmentIdsSchema = z.array(z.number().int().min(0)).max(40).optional();
+
+/** 한 세션에서 갈라져 나온 **또 하나의** 경험.
+ *
+ *  최상위(주된 경험)와 같은 모양에서 dialogues 만 뺐다 — 대사는 세션당 4개고
+ *  슬롯마다 덮어써지는 값이라 경험 단위가 아니다.
+ *
+ *  왜 배열이 아니라 "주된 것 + 나머지" 인가: 나누는 판단은 **보수적이어야 한다.**
+ *  경험 수가 레벨 공식(√(경험 수 × 스킬 수))에 직접 들어가서, 한 일을 둘로
+ *  쪼개면 캐릭터 성장이 부풀고 성격 축까지 흔들린다. 갈래는 반대로 "애매하면
+ *  new" 인데(잘못 붙이면 영영 못 떼지만 잘못 나누면 사람이 합칠 수 있다),
+ *  경험은 잘못 나누면 되돌릴 장치가 없다. 최상위를 기본으로 두면 모델이
+ *  아무것도 안 해도 지금까지와 같은 결과가 나온다. */
+export const experienceAlsoSchema = z.object({
+  summary: z.string().min(1).max(600),
+  detail: z.string().optional(),
+  category: z.enum(EXPERIENCE_CATEGORIES),
+  outcome: z.enum(EXPERIENCE_OUTCOMES),
+  is_first_time: z.boolean(),
+  skills: z.array(experienceSkillSchema).max(40),
+  thread: experienceThreadSchema,
+  segment_ids: segmentIdsSchema,
+});
+
 export const experienceOutputSchema = z.object({
   // 상한은 넉넉히 두고 초과분은 엔진이 자른다. 101자라고 경험 전체를 버리는
   // 것은 손실이 너무 크다 — 이 파일이 dialogues 에서 이미 그렇게 판단했다.
@@ -173,6 +202,16 @@ export const experienceOutputSchema = z.object({
   // 0개일 때도 같은 논리가 그대로 성립하므로 하한을 아예 없앤다.
   dialogues: z.array(experienceDialogueSchema).max(16),
   thread: experienceThreadSchema,
+  segment_ids: segmentIdsSchema,
+  /** 같은 세션에서 갈라져 나온 다른 작업들. 대개 비어 있다.
+   *
+   *  **상한을 여기서 걸지 않는다.** max(2) 였을 때 모델이 셋을 내면 zod 가
+   *  출력 전체를 반려해서 멀쩡한 summary·outcome·skills·thread 까지 통째로
+   *  버려졌다(실측: 226분 세션 하나가 그렇게 경험이 되지 못했다).
+   *  이 파일이 dialogues 에서 이미 같은 판단을 했다 — **자르면 될 것을 폐기
+   *  사유로 삼지 않는다.** 개수는 엔진이 시간 순으로 재서 자른다. */
+  also: z.array(experienceAlsoSchema).max(8).optional(),
 });
 
 export type ExperienceOutput = z.infer<typeof experienceOutputSchema>;
+export type ExperienceAlso = z.infer<typeof experienceAlsoSchema>;

@@ -305,8 +305,14 @@ interface CompressedEarlier {
   sec: number;
   /** 접히기 전 구간 수 — 얼마나 잘게 오갔는지가 그 자체로 신호다. */
   segments: number;
-  /** `"도메인 · 제목 42분"` 꼴, 오래 머문 순. */
-  top: string[];
+  /**
+   * 앞부분에서 무엇을 얼마나 했나. **번호는 segments 에서 이어진다.**
+   *
+   * 번호가 없으면 이 시간은 배정 대상이 될 수 없고, 그러면 앞부분에서 오래
+   * 한 일은 영영 따로 떼어낼 수 없다 — 실측에서 34분짜리 작업이 뒤쪽 2구간
+   * (10분 미만)으로만 보여 주된 경험에 흡수됐다.
+   */
+  top: { i: number; label: string; sec: number }[];
 }
 
 /** buildCompressedLog 내부 누적용 — 아직 CompressedSegment 로 확정되기 전 상태. */
@@ -451,7 +457,7 @@ function foldWaypoints(segs: RawSegment[]): RawSegment[] {
 }
 
 /** 잘려나갈 앞부분을 대상별 합계로 접는다. 순서와 시각은 버리고 시간만 남긴다. */
-function summarizeEarlier(cut: RawSegment[]): CompressedEarlier {
+function summarizeEarlier(cut: RawSegment[], keptCount: number): CompressedEarlier {
   const byTarget = new Map<string, number>();
   for (const seg of cut) {
     const key = viaLabel(seg);
@@ -460,7 +466,7 @@ function summarizeEarlier(cut: RawSegment[]): CompressedEarlier {
   const top = [...byTarget.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, MAX_EARLIER_TOP)
-    .map(([label, ms]) => `${label} ${Math.round(ms / 60000)}분`);
+    .map(([label, ms], n) => ({ i: keptCount + n, label, sec: Math.round(ms / 1000) }));
 
   return {
     start: kstIso(cut[0].startAt),
@@ -509,7 +515,7 @@ export function buildCompressedLog(
   let trimmed = folded;
   if (folded.length > maxSegments) {
     const cut = folded.slice(0, folded.length - maxSegments);
-    earlier = summarizeEarlier(cut);
+    earlier = summarizeEarlier(cut, maxSegments);
     trimmed = folded.slice(-maxSegments);
   }
   const segments = trimmed.map(toSegment);
