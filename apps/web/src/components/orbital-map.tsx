@@ -829,6 +829,24 @@ export function OrbitalMap({
     // 나이는 **그 은하 안에서의 몫**으로 잰다. 절대 경과일을 쓰면 오래된 분야는
     // 전부 바깥에 몰리고 새 분야는 전부 중심에 몰려, 은하마다 안이 텅 비거나
     // 가장자리만 찬다. 은하는 저마다 제 시간을 갖는다.
+    /**
+     * 은하마다 제 기울기. **없으면 여덟 은하가 똑같은 자세로 서 있다** —
+     * 같은 그림을 복사해 붙인 것처럼 보이고, 그게 "자연스럽지 않다"의 절반이다.
+     * 키에서 뽑으므로 렌더마다 안 바뀐다.
+     */
+    const spinOf = (key: string) => phaseOf(`${key}spin`) * Math.PI * 2;
+
+    /**
+     * 나선팔 위의 한 점. 진행도 at(0=팽대부, 1=팔 끝) → 극좌표.
+     *
+     * **배치와 그리기가 이 함수 하나를 같이 쓴다.** 갈리면 별이 팔에서 벗어난다 —
+     * 그러면 팔은 아무 데도 안 지나는 선이 되고, 별은 왜 거기 있는지 모를 점이 된다.
+     */
+    const armAt = (key: string, arm: number, at: number) => ({
+      th: at * ARM_SPAN + (arm * Math.PI * 2) / ARMS + spinOf(key),
+      r: BULGE * Math.exp(ARM_PITCH * (at * ARM_SPAN)),
+    });
+
     const starXY = new Map<string, { x: number; y: number }>();
     for (const g of galaxies) {
       // **원반과 halo 가 각자 제 자를 쓴다.** 은하 전체로 한 번에 재면 안 된다 —
@@ -850,14 +868,13 @@ export function OrbitalMap({
         if (inDisc) {
           // 로그 나선 r = r0·e^(bθ). θ 를 나이에 매달면 반경이 저절로 따라온다.
           const arm = Math.floor(phaseOf(`${t.id}arm`) * ARMS) % ARMS;
+          const p = armAt(g.key, arm, at);
           // 팔은 선이 아니라 띠다. 안 흩으면 자로 그은 곡선이 되어 1단계의
           // 격자와 같은 문제가 된다 — 규칙적이면 계기판이 아니라 도표다.
-          const spread = (phaseOf(`${t.id}w`) - 0.5) * ARM_WIDTH;
-          th = at * ARM_SPAN + spread + (arm * Math.PI * 2) / ARMS;
-          r = BULGE * Math.exp(ARM_PITCH * (at * ARM_SPAN));
+          th = p.th + (phaseOf(`${t.id}w`) - 0.5) * ARM_WIDTH;
           // 반경 쪽도 조금 흩는다. 팔의 두께는 각도만으로는 안 나온다 —
           // 바깥으로 갈수록 같은 각도가 더 넓어져 안쪽만 얇아 보인다.
-          r *= 1 + (phaseOf(`${t.id}rr`) - 0.5) * 0.16;
+          r = p.r * (1 + (phaseOf(`${t.id}rr`) - 0.5) * 0.16);
         } else {
           // halo — 팔을 떠났다. 각도는 뜻이 없다(궤도를 벗어난 것이니까).
           // 반경만 말한다: 끝낸 것은 가까이 멈추고, 놓은 것은 흘러나간다.
@@ -1521,22 +1538,37 @@ export function OrbitalMap({
      *  바로 바깥에 고리 하나를 두른다. 새 색도 새 움직임도 안 더한다 — 그 별의
      *  색이고, 도착 순간의 섬광(flare)에만 한 번 밝아졌다 잦아든다.
      *  순위가 지름과 세기를 함께 정한다: 가장 최근이 가장 크고 진하다. */
+    /**
+     * 최근 표식 — 코로나. **층을 건너 같은 모양으로 쓴다.**
+     *
+     *   우주   방금 뭔가 들어온 **은하**
+     *   은하   그 **별**(갈래)
+     *   항성계 그 **경험** — 여기서는 실제로 도니까 잔광(drawTrail)이 대신한다
+     *
+     * 새 색도 새 움직임도 안 더한다. 색은 분야, 크기는 질량, 광도는 중요도로
+     * 이미 다 찼고 — 고리는 아무 데도 안 쓰이는 유일한 채널이다. 맥동은 안 쓴다:
+     * 화면에서 유일하게 뜻 없이 움직이는 것이 되어 뭘 보려 해도 눈이 끌려간다.
+     *
+     * @param bodyRad 그 천체가 실제로 그려진 반지름. 고리는 그 **바깥**에 둘러야
+     *   고리로 읽힌다 — 안쪽이면 천체가 그냥 조금 커진 것처럼 보여 크기(=질량)를
+     *   잘못 읽는다. 별과 은하는 반지름 셈법이 달라서 값으로 받는다.
+     */
     function drawCorona(
       x: number,
       y: number,
-      size: number,
+      bodyRad: number,
       rank: number,
       rgb: readonly [number, number, number],
       alpha: number,
     ) {
       const span = TRAIL_SPAN[rank];
       if (span == null || alpha <= 0.01) return;
-      // 후광(size×3.2)보다 확실히 밖이어야 고리로 읽힌다. 안쪽이면 별이
-      // 그냥 조금 커진 것처럼 보여 크기(=질량)를 잘못 읽는다.
-      const rad = size * STAR_GLOW * (1.35 + span * 0.5);
-      const a = alpha * span * (0.32 + flare * 0.5);
+      const rad = bodyRad * (1.35 + span * 0.5);
+      // 도착 순간에 한 번 밝아졌다 잦아든다(flare). 잦아든 뒤에도 남는 세기가
+      // 표식의 본체다 — 예전엔 그게 0.32 라 몇 초 뒤엔 있는지도 몰랐다.
+      const a = alpha * span * (0.5 + flare * 0.42);
       ctx!.strokeStyle = `rgba(${rgb.join(",")},${a})`;
-      ctx!.lineWidth = 1 + span * 0.8;
+      ctx!.lineWidth = 1 + span * 1.1;
       ctx!.beginPath();
       ctx!.arc(x, y, rad, 0, Math.PI * 2);
       ctx!.stroke();
@@ -2205,6 +2237,26 @@ export function OrbitalMap({
             ctx!.arc(gx, gy, rad * 2.6, 0, Math.PI * 2);
             ctx!.fill();
 
+            // ── 방금 뭔가 들어온 은하 ──
+            //
+            // 별에만 있던 표식을 한 층 위로 올린다. 없으면 지도를 열었을 때
+            // 점 몇 개만 보이고 **어디서 방금 일이 있었는지 알 길이 없다** —
+            // 아래층까지 내려가야 비로소 보였다.
+            //
+            // 은하의 순위는 그 안에서 가장 최근인 것을 따른다. 갈래 셋이 한
+            // 은하에 몰리면 그 은하가 1등이지 3등이 아니다.
+            let best: number | null = null;
+            for (const t of g.members) {
+              const rk = latestRankRef.current.get(t.id);
+              if (rk != null && (best == null || rk < best)) best = rk;
+            }
+            // **별이 드러나면 사라진다.** 고리는 그 은하가 아직 *점*일 때 쓰는
+            // 표식이다 — 안으로 들어가면 은하만 한 거대한 원이 되어 표식이
+            // 아니라 노이즈가 되고, 그 층의 주인은 이미 별의 코로나다.
+            if (best != null) {
+              drawCorona(gx, gy, rad * 1.5, best, g.color, galAlpha * (1 - starReveal));
+            }
+
             // 이름표. 축 라벨이 하던 일을 여기서 한다 — 다만 허공의 방향이
             // 아니라 실제로 그것이 있는 자리에 붙는다.
             // 원반 가장자리 바로 아래에 붙인다. 후광 반경(rad)에 매달면 당길수록
@@ -2253,26 +2305,51 @@ export function OrbitalMap({
         //
         // 은하 빛과 **반대로** 나타난다. 멀리서는 은하가 점이라 팔이 있을 자리가
         // 없고, 당겨서 별이 드러나는 만큼 팔도 같이 드러난다.
-        const armAlpha = sysAlpha * starReveal * (1 - axisMix) * 0.42;
+        const armAlpha = sysAlpha * starReveal * (1 - axisMix);
         if (armAlpha > 0.01) {
-          ctx!.lineWidth = 1;
           for (const g of galaxies) {
             if (!g.members.some((t) => t.status === "active")) continue; // 원반이 비었다
             const R = GALAXY_R * unit;
             if (!onScreen(worldX(g.x), worldY(g.y), R * 2.6 + 80)) continue;
+
+            // 점을 겹쳐 찍어 **띠**를 만든다. 1px 선으로 그었더니 그냥 선이었다 —
+            // 실제 나선팔은 가스와 먼지가 깔린 넓고 흐릿한 길이지 그어놓은
+            // 획이 아니다. 잔광(trailDot)이 이미 쓰는 어휘라 새 모양을 안 만든다.
+            //
+            // 점 사이가 벌어지면 띠가 아니라 **점선**이 된다(실제로 그렇게 나왔다).
+            //
+            // 개수를 반경 폭으로 정한 게 잘못이었다. 로그 나선의 호 길이는
+            // 반경 폭의 `√(1+b²)/b` 배 — 지금 값으로 **3.5배**다. 그만큼 점이
+            // 성기게 찍혔다. 호 길이로 재고, 그래도 벌어지면 점 반지름에
+            // 직전 점까지의 거리만큼 하한을 둬 반드시 겹치게 한다
+            // (drawTrail 이 같은 이유로 같은 짓을 한다).
+            const span = R * (1 - BULGE);
+            const arcLen = (Math.sqrt(1 + ARM_PITCH * ARM_PITCH) / ARM_PITCH) * span;
+            const steps = Math.max(40, Math.min(220, Math.round(arcLen / 3)));
             for (let arm = 0; arm < ARMS; arm++) {
-              ctx!.beginPath();
-              for (let k = 0; k <= 56; k++) {
-                const at = k / 56;
-                const th = at * ARM_SPAN + (arm * Math.PI * 2) / ARMS;
-                const r = BULGE * Math.exp(ARM_PITCH * (at * ARM_SPAN));
+              let prev: { x: number; y: number } | null = null;
+              for (let k = 0; k <= steps; k++) {
+                const at = k / steps;
+                const { th, r } = armAt(g.key, arm, at);
                 const px = worldX(g.x + Math.cos(th) * r * GALAXY_R);
                 const py = worldY(g.y + Math.sin(th) * r * GALAXY_R * FLATTEN);
-                if (k === 0) ctx!.moveTo(px, py);
-                else ctx!.lineTo(px, py);
+                // 직전 점까지의 실제 거리. 나선은 안쪽이 촘촘하고 바깥이 성겨서
+                // 한 값으로는 못 맞춘다 — 재서 쓴다.
+                const gap = prev ? Math.hypot(px - prev.x, py - prev.y) : 0;
+                prev = { x: px, y: py };
+
+                // 두께는 반경을 따라 조금씩만 벌어진다. **가늘어야 한다** —
+                // 별을 흩뿌린 폭(ARM_WIDTH)에 맞춰 띠를 그렸더니 팔이 아니라
+                // 뭉개진 덩어리가 됐다. 별은 팔 **둘레에** 흩어지는 것이지
+                // 팔이 그 폭을 다 채우는 게 아니다. 팔은 그 한가운데 지나는
+                // 가는 빛줄기고, 부드러움은 두께가 아니라 겹친 점이 만든다.
+                const wide = Math.max(1.1, r * GALAXY_R * unit * ARM_WIDTH * 0.07);
+                // 세기는 반대로 사그라든다. 안쪽이 진하고 끝에서 0 이어야
+                // 잘린 자국이 안 남는다 — 팔은 끝나는 게 아니라 옅어져 사라진다.
+                // 팽대부 쪽도 살짝 죽인다(안 그러면 두 팔이 중심에서 뭉친다).
+                const fade = Math.pow(1 - at, 1.35) * Math.min(1, at * 6 + 0.25);
+                trailDot(px, py, Math.max(wide, gap * 0.85), g.color, armAlpha * fade * 0.42);
               }
-              ctx!.strokeStyle = `rgba(${g.color.join(",")},${armAlpha})`;
-              ctx!.stroke();
             }
           }
         }
@@ -2316,7 +2393,14 @@ export function OrbitalMap({
           const rank = latestRankRef.current.get(el.id);
           if (rank == null || rank >= TRAIL_SPAN.length) continue;
           if (!onScreen(p.x, p.y, sizeOf(el) * 6 + 40)) continue;
-          drawCorona(p.x, p.y, sizeOf(el), rank, el.color, sysAlpha * dimOf(el.id) * starReveal);
+          drawCorona(
+            p.x,
+            p.y,
+            sizeOf(el) * STAR_GLOW * bloomOf(starLumOf(el)),
+            rank,
+            el.color,
+            sysAlpha * dimOf(el.id) * starReveal,
+          );
         }
 
         // ── 위성계 ──
