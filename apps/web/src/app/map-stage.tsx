@@ -267,8 +267,19 @@ export function MapStage({
           </p>
           {/* 캐릭터의 말 바로 아래에 붙인다 — 이건 폼이 아니라 대화의 연장이다.
               지도를 읽는 중(reading)에는 위 컨테이너가 통째로 사라지므로
-              질문도 함께 물러난다. */}
-          {question && <AskCard question={question} />}
+              질문도 함께 물러난다.
+
+              **여기만 포인터를 되살린다.** 이 계층의 판독값은 전부
+              pointer-events-none 이다 — 지도가 화면 전체를 덮고 있어서 그러지
+              않으면 글자 위에서 드래그가 죽는다. 그런데 그 상속이 질문 버튼까지
+              먹어서 눌러도 아무 일이 안 일어났다.
+              reading 일 때 다시 none 으로 두는 건 그 순간 이 층이 opacity 0 이라
+              **안 보이는 버튼이 지도 클릭을 가로채기** 때문이다. */}
+          {question && (
+            <div style={{ pointerEvents: reading ? "none" : "auto" }}>
+              <AskCard question={question} />
+            </div>
+          )}
         </div>
       </div>
     </main>
