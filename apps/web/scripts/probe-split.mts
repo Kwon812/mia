@@ -67,7 +67,14 @@ for (const t of targets) {
   });
   const tu = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
   const parsed = experienceOutputSchema.safeParse(tu?.input);
+  // 그 세션으로 예전에 무엇이 나왔나 — 새 압축기·새 프롬프트와 나란히 본다.
+  const olds = await sql<{ summary: string; category: string; outcome: string; memoryScore: number }[]>`
+    select summary, category, outcome, memory_score as "memoryScore"
+      from experiences where session_id = ${t.sessionId} order by occurred_at`;
   console.log(`\n══ ${t.sessionId.slice(0, 8)} · ${row.durationMin}분 · 구간 ${log.segments.length}개${log.earlier ? ` (+앞부분 ${Math.round(log.earlier.sec / 60)}분)` : ''}`);
+  for (const o of olds) {
+    console.log(`  옛: "${o.summary.slice(0, 60)}" [${o.category}/${o.outcome}] M${o.memoryScore}`);
+  }
   if (!parsed.success) { console.log('  검증 실패:', parsed.error.issues.slice(0, 2)); continue; }
 
   const out = parsed.data;

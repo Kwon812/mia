@@ -30,5 +30,10 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // scripts/ 는 배포 산출물이 아니다. 여기 두면 `next build` 의 타입 검사가
+  // 스크립트까지 끌어들이는데, 프로브들이 확장 소스(builder.ts → dexie)를
+  // import 하므로 웹 워크스페이스에 없는 의존성을 찾다가 배포가 깨진다
+  // (로컬은 호이스팅돼서 통과하고 Vercel 에서만 터졌다).
+  // 스크립트 타입 검사는 scripts/tsconfig.json 으로 따로 돌린다.
+  "exclude": ["node_modules", "scripts"]
 }
