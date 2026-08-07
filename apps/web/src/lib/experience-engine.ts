@@ -418,10 +418,14 @@ export const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
         },
       },
     },
-    required: [
-      'summary', 'category', 'outcome', 'is_first_time', 'skills', 'dialogues', 'thread',
-      'segment_ids', 'also',
-    ],
+    // segment_ids 와 also 는 **required 가 아니다.**
+    //
+    // 둘을 required 로 뒀을 때 골든셋이 15/17 → 13/17 로 내려갔다. 실패한 것이
+    // 분할과 무관한 항목들(success·category 재판정·잠긴 갈래 부활)이라, 매
+    // 호출에서 두 필드를 반드시 채우게 만든 것이 다른 판정을 밀어낸 것으로 본다.
+    // 나누지 않는 세션에서는 이 둘이 아예 없는 게 맞기도 하다 — 기본은 나누지
+    // 않는 것이니 "빈 값을 채우는 일"조차 없어야 한다.
+    required: ['summary', 'category', 'outcome', 'is_first_time', 'skills', 'dialogues', 'thread'],
     additionalProperties: false,
   },
 };
