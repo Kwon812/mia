@@ -1185,17 +1185,42 @@ export async function processSession(sessionId: string, userId: string): Promise
     const [userRow] = await db.select({ createdAt: users.createdAt }).from(users).where(eq(users.id, userId)).limit(1);
 
     // 활성 thread 최대 5개 — "이 경험이 기존 진행 중 작업의 연장인지" 판단용 컨텍스트.
-    const activeThreadRows = await db
+    //
+    // **마지막 요약을 같이 준다.** buildActiveThreadsList 는 처음부터 이걸
+    // 그리게 돼 있었고 주석도 이유를 적어뒀는데("제목만 주면 그 작업이 무엇을
+    // 하던 것인지 알 수 없어, 분야만 같아도 붙이게 된다"), **정작 쿼리가
+    // 안 뽑아서 늘 undefined 였다.** 잠긴 갈래(findDormantCandidates)만
+    // 채워지고 진행 중 갈래는 제목과 분야만 넘어갔다 — 흔한 쪽이 헐벗은 셈이다.
+    //
+    // 실측으로 대가가 드러났다. 갈래 category 는 붙을 때마다 최빈값으로 다시
+    // 세는데(attach UPDATE), 주제가 옮아가면 **제목과 분야가 어긋난 줄**이 된다:
+    //
+    //   "kt cloud TECH UP 2기 메타버스 행사 참여" (카테고리: dev, 경험 3건)
+    //   "Project NA 기술 아키텍처 설계"           (카테고리: dev, 경험 11건)
+    //
+    // 둘 다 dev 인데 하나는 제목이 메타버스다. 그 모순을 풀어줄 단서가 없으니
+    // 모델이 앞엣것을 골랐고, Project NA 세션 셋이 메타버스 행사 갈래에 붙었다.
+    const activeThreadRaw = await db
       .select({
         id: threads.id,
         title: threads.title,
         category: threads.category,
         experienceCount: threads.experienceCount,
+        lastSummary: sql<string | null>`(
+          select e2.summary from ${experiences} e2
+           where e2.thread_id = ${threads.id}
+           order by e2.occurred_at desc limit 1
+        )`,
       })
       .from(threads)
       .where(and(eq(threads.userId, userId), eq(threads.status, 'active')))
       .orderBy(desc(threads.lastActivityAt))
       .limit(5);
+    // null → undefined. 잠긴 갈래 쪽(findDormantCandidates)과 같은 모양으로 맞춘다.
+    const activeThreadRows: ActiveThreadRow[] = activeThreadRaw.map((t) => ({
+      ...t,
+      lastSummary: t.lastSummary ?? undefined,
+    }));
 
     // 잠긴 작업 후보. 3년 전 갈래도 다시 이어질 수 있어야 한다 —
     // 사람 기억에 "끝"은 드물고, 대개는 한동안 안 건드릴 뿐이다.
