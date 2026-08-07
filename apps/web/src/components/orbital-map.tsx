@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { clampSentence, type ExperienceCategory } from "@na/shared";
+import { EXPERIENCE_CATEGORIES, clampSentence, type ExperienceCategory } from "@na/shared";
 
 import { formatKstYmd } from "@/lib/date";
 
@@ -217,19 +217,54 @@ const LAYER_RATIO = 30;
  * 움직이고, 그러면 "어제 저기 있던 게 오늘 여기"가 된다. 색(colorOfCategory)
  * 을 등장 순서와 무관하게 고정한 것과 같은 이유다.
  *
- * 순서 = CAT_GROUPS 순서. 단위는 궤도 단위이고, 이웃 간격이 대략 1 이다.
+ * ── 왜 색 묶음이 아니라 카테고리인가 ──
+ *
+ * 처음엔 색 묶음(여덟)을 그대로 은하로 썼다. 그런데 묶은 이유는 **순전히
+ * 색**이었다 — "검은 배경 위 작은 후광으로 구분되는 색은 여덟이 한계다"
+ * (CAT_GROUP_DEFS 주석). 자리는 그 한계를 안 받는다. 우주에 점 열넷을 놓는
+ * 건 아무 문제가 없다.
+ *
+ * 그대로 뒀더니 `search` 갈래가 `ETC` 은하에 들어가 있었다 — 왜 거기 있는지
+ * 화면 어디에도 답이 없었다. `life` 는 넷(news·finance·shopping·productivity)이
+ * 한 덩어리라 더 심했다.
+ *
+ * 나누면 두 채널이 서로 다른 것을 말한다:
+ *   색       그 결이 무엇인가 (여덟) — 같은 색이면 비슷한 종류
+ *   자리·이름 무슨 일인가 (열넷)   — 같은 색이어도 다른 자리, 다른 이름
+ * 같은 자홍색 넷이 흩어져 떠 있어도 헷갈리지 않는다. 오히려 "이것들이 한
+ * 결이구나"가 색으로 읽히고, 각각이 무엇인지는 이름이 말한다.
+ *
+ * 순서는 EXPERIENCE_CATEGORIES 그대로. 단위는 궤도 단위다.
  */
-const GALAXY_SITES: readonly (readonly [number, number])[] = [
-  [0.62, 0.34], // dev        ┐
-  [1.74, 0.96], // docs       ├ 필라멘트 A — 왼쪽 아래에서 오른쪽 위로
-  [2.72, 1.58], // study      ┘
-  [-0.58, -0.32], // ai       ┐
-  [-1.72, -0.94], // community┘ 같은 실의 반대쪽 끝
-  [-1.54, 1.16], // media     ┐
-  [-0.54, 0.74], // design    ├ 필라멘트 B — A 와 권도형 곁에서 엇갈린다
-  [0.78, -0.72], // life      │
-  [1.76, -1.34], // etc       ┘
-];
+const GALAXY_SITES = [
+  // 필라멘트 A — 왼쪽 아래에서 오른쪽 위로 가로지른다
+  [0.68, 0.42],   // dev
+  [1.86, 1.06],   // study
+  [2.94, 1.72],   // docs
+  [-0.62, -0.26], // ai
+  [-1.78, -0.88], // search
+  [-2.92, -1.52], // community
+  // 필라멘트 B — A 와 권도형 곁에서 엇갈린다
+  [-1.62, 1.22],  // entertainment
+  [-0.58, 0.78],  // music
+  [0.82, -0.66],  // shopping
+  [1.92, -1.28],  // productivity
+  [3.02, -1.94],  // design
+  // 마디 밖에 떨어진 것들 — 실이 안 닿는 자리에도 은하는 있다
+  [-2.46, 0.34],  // news
+  [2.34, 0.16],   // finance
+  [0.06, -1.74],  // etc
+] as const satisfies readonly (readonly [number, number])[];
+
+/** 자리표가 카테고리 수와 **정확히** 맞는지 컴파일 타임에 확인한다.
+ *  하나라도 어긋나면 마지막 자리로 조용히 떨어져 두 은하가 포개진다 —
+ *  런타임에는 아무 티도 안 난다. */
+const _sitesCoverCategories: typeof GALAXY_SITES extends {
+  length: typeof EXPERIENCE_CATEGORIES.length;
+}
+  ? true
+  : ['GALAXY_SITES 개수가 EXPERIENCE_CATEGORIES 와 다르다'] = true;
+void _sitesCoverCategories;
 
 /** 은하끼리의 이웃 간격(궤도 단위). 위 표에서 잰 값이다 — 표를 고치면
  *  여기도 같이 봐야 한다. 은하 반경이 이 값에서 나온다. */
@@ -376,13 +411,21 @@ export function colorOfCategory(cat: string): [number, number, number] {
   return groupOfCategory(cat).color;
 }
 
-/** 이 갈래가 어느 은하에 속하는가. 색 묶음의 순서가 곧 은하의 순서(GALAXY_SITES)다.
+/** 이 갈래가 어느 은하에 속하는가. **카테고리 그대로**다 —
+ *  EXPERIENCE_CATEGORIES 의 순서가 곧 GALAXY_SITES 의 순서다.
+ *
+ *  색 묶음(여덟)으로 접었던 때가 있는데, 그러면 `search` 갈래가 `ETC` 은하에
+ *  들어가 왜 거기 있는지 알 길이 없었다 — 묶은 이유는 색이었지 자리가 아니다.
+ *
+ *  목록에 없는 값(예전 데이터, 표기 흔들림)은 마지막 칸(etc)으로 떨어진다.
+ *  색이 groupOfCategory 로 같은 곳에 떨어지는 것과 짝이다.
  *
  *  **방향은 이제 아무 뜻도 없다.** 예전에는 분야가 방향 조각(SECTOR)이었는데,
  *  분야가 은하가 되면서 그 문법이 통째로 사라졌다 — 분야는 이제 '어느 쪽'이
  *  아니라 '어디'다. 조각을 나눌 이유도, 축을 그을 이유도 없어졌다. */
 function galaxyIndexOf(t: ThreadBody): number {
-  return CAT_GROUPS.indexOf(groupOfCategory(t.category));
+  const i = EXPERIENCE_CATEGORIES.indexOf(t.category as ExperienceCategory);
+  return i < 0 ? EXPERIENCE_CATEGORIES.length - 1 : i;
 }
 
 
@@ -814,14 +857,16 @@ export function OrbitalMap({
         byGalaxy.set(i, list);
       }
       for (const [i, members] of [...byGalaxy].sort((a, b) => a[0] - b[0])) {
-        const g = CAT_GROUPS[i] ?? CAT_GROUPS[CAT_GROUPS.length - 1];
+        const cat = EXPERIENCE_CATEGORIES[i] ?? "etc";
         const site = GALAXY_SITES[i] ?? GALAXY_SITES[GALAXY_SITES.length - 1];
         galaxies.push({
-          key: g.key,
-          label: g.label,
+          // 이름은 카테고리 그대로. **색만 묶음에서 가져온다** — 같은 결끼리
+          // 같은 색이 되고(자홍 넷 = life), 무슨 일인지는 이름이 말한다.
+          key: cat,
+          label: cat,
           x: site[0],
           y: site[1],
-          color: g.color,
+          color: colorOfCategory(cat),
           members,
           kept: members.filter((t) => t.memory != null).length,
         });
