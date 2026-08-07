@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clampSentence, type ExperienceCategory } from "@na/shared";
 
 import { formatKstYmd } from "@/lib/date";
@@ -640,11 +640,25 @@ export function OrbitalMap({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /**
+   * 겨눈 것의 판독값.
+   *
+   * `rows` 가 **라벨 붙은 표**다. 예전에는 한 줄에 전부 `·` 로 이어 붙였는데
+   * (`기억 · THREAD_COMPLETE · BREAKTHROUGH · ACTIVE · DOCS · 경험 3건 · 날짜`),
+   * 값이 전부 같은 모양의 대문자 토큰이라 **어느 게 뭔지 분간이 안 됐다** —
+   * THREAD_COMPLETE 와 ACTIVE 와 DOCS 가 나란히 있는데 셋 다 다른 종류다.
+   *
+   * 값 자체는 enum 그대로 둔다. 한글 대응표를 두면 화면과 DB·프롬프트가 다른
+   * 어휘를 쓰게 되고 값이 늘 때마다 번역을 빠뜨린다(tag 주석의 규칙).
+   * 대신 **라벨**을 붙인다 — 그건 값이 아니라 "이 자리가 무엇인가"라 한글이 맞다.
+   */
   const [probe, setProbe] = useState<{
     x: number;
     y: number;
+    /** 이게 무엇인가. 제목 위에 작게 붙는다 — 은하 · 기억 · 갈래 · 경험 · 축 */
+    kind: string;
     text: string;
-    sub: string;
+    rows: { k: string; v: string }[];
     skills?: { name: string; firstTime: boolean }[];
   } | null>(null);
   const [focus, setFocus] = useState<OrbitBody | null>(null);
@@ -2617,15 +2631,21 @@ export function OrbitalMap({
         const p = found ? hit.get(found) : null;
         if (!found || !p) setProbe(null);
         else if (p.kind === "galaxy") {
-          // 은하 하나가 분야 하나다. 그 안에 무엇이 몇 개 있는지, 그리고
-          // 그중 얼마가 남았는지 — 별의 밝기가 말하는 것을 숫자로도 적는다.
+          // 은하 하나가 분야 하나다. 별의 밝기가 말하는 것을 숫자로도 적는다.
           const g = galaxyByKey.get(found.slice(4));
+          const all = g?.members.length ?? 0;
           const inDisc = g?.members.filter((t) => t.status === "active").length ?? 0;
           setProbe({
             x: p.x,
             y: p.y,
-            text: `${tag(g?.key ?? "")} · 갈래 ${g?.members.length ?? 0}건 · 그중 ${g?.kept ?? 0}건이 남았다`,
-            sub: `은하 · 진행 중 ${inDisc} · 나머지는 halo`,
+            kind: "은하",
+            text: tag(g?.key ?? ""),
+            rows: [
+              { k: "갈래", v: `${all}건` },
+              { k: "남은 것", v: `${g?.kept ?? 0}건` },
+              // 원반과 halo 는 화면에서 자리로 갈리는 것이라, 숫자로도 그렇게 읽는다.
+              { k: "진행 중", v: `${inDisc}건 · 나머지 ${all - inDisc}건은 halo` },
+            ],
           });
         } else if (p.kind === "axis") {
           const oc = found.slice(5);
@@ -2635,8 +2655,9 @@ export function OrbitalMap({
           setProbe({
             x: p.x,
             y: p.y,
-            text: `${tag(oc)} 로 끝난 경험 ${inGroup}건`,
-            sub: "이 방향의 궤도들",
+            kind: "축 · 이 방향의 경험",
+            text: tag(oc),
+            rows: [{ k: "경험", v: `${inGroup}건` }],
           });
         } else if (p.kind === "mem" || p.kind === "focus") {
           const m = orbitById.get(found);
@@ -2644,40 +2665,54 @@ export function OrbitalMap({
           // 단언으로 두면 undefined.title 에서 프레임이 죽고, try/catch 가 삼켜
           // 그 프레임의 조준점까지 통째로 안 그려진다 — 커서가 사라진다.
           if (!m) setProbe(null);
-          else setProbe({
-            x: p.x,
-            y: p.y,
-            text: clampSentence(m.title, PROBE_TEXT_LEN),
-            // **첫 단어가 이게 무엇인지를 말한다 — 기억이거나, 아직 갈래거나.**
-            //
-            // 둘 다 갈래라고 적었었다. 천체가 하나뿐이니 맞는 말이긴 한데,
-            // 그러면 화면에서 제일 밝은 것들이 무엇인지를 판독값이 답하지
-            // 못한다 — 밝기는 "많이 남았다"인데 이름은 여전히 "갈래"였다.
-            // 남은 게 있으면 그건 기억이다. 그 말을 앞에 세운다.
-            //
-            // 기억이면 남은 이유를 바로 뒤에 **전부** 붙인다. 여럿이면 그게 곧
-            // 그 기억의 성격이라, 가장 센 것 하나만 보이면 나머지를 알 길이 없다.
-            // 중요도는 안 적는다 — 광도가 이미 그 값이다.
-            //
-            // 그 뒤는 양쪽이 같다: 상태 · 분야 · 경험 수 · 날짜. 반경이 이미
-            // "시작한 지"를 말하지만 그건 상대값이라 날짜를 못 읽는다.
-            sub:
-              (m.memory ? `기억 · ${m.memory.triggers.map(tag).join(" · ")}` : "갈래") +
-              ` · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)} 시작${
-                m.completedAt ? ` → ${ymd(m.completedAt)} 완결` : ""
-              }`,
-            // 처음 쓴 스킬만. 호버는 훑는 자리라 일곱 개씩 늘어놓으면 아무것도
-            // 안 읽힌다. trigger 가 왜 그 값인지에 답하는 것도 신규 쪽이다.
-            // (전부는 눌러서 펼친 화면에 있다.)
-            skills: m.memory?.skills.filter((sk) => sk.firstTime),
-          });
+          else
+            setProbe({
+              x: p.x,
+              y: p.y,
+              // **이게 무엇인지를 먼저 말한다 — 기억이거나, 아직 갈래거나.**
+              //
+              // 둘 다 갈래라고 적었었다. 천체가 하나뿐이니 맞는 말이긴 한데,
+              // 그러면 화면에서 제일 밝은 것들이 무엇인지를 판독값이 답하지
+              // 못한다 — 밝기는 "많이 남았다"인데 이름은 여전히 "갈래"였다.
+              kind: m.memory ? "기억" : "갈래",
+              text: clampSentence(m.title, PROBE_TEXT_LEN),
+              rows: [
+                // 남은 이유는 **전부** 적는다. 여럿이면 그게 곧 그 기억의
+                // 성격이라, 가장 센 것 하나만 보이면 나머지를 알 길이 없다.
+                // 중요도는 안 적는다 — 광도가 이미 그 값이다.
+                ...(m.memory
+                  ? [{ k: "남은 이유", v: m.memory.triggers.map(tag).join(" · ") }]
+                  : []),
+                { k: "분야", v: tag(m.category) },
+                { k: "상태", v: tag(m.status) },
+                { k: "경험", v: `${m.referencedIds.length}건` },
+                // 반경이 이미 "시작한 지"를 말하지만 그건 상대값이라 날짜를 못 읽는다.
+                {
+                  k: m.completedAt ? "기간" : "시작",
+                  v: m.completedAt
+                    ? `${ymd(m.occurredAt)} → ${ymd(m.completedAt)}`
+                    : ymd(m.occurredAt),
+                },
+              ],
+              // 처음 쓴 스킬만. 호버는 훑는 자리라 일곱 개씩 늘어놓으면 아무것도
+              // 안 읽힌다. trigger 가 왜 그 값인지에 답하는 것도 신규 쪽이다.
+              // (전부는 눌러서 펼친 화면에 있다.)
+              skills: m.memory?.skills.filter((sk) => sk.firstTime),
+            });
         } else {
           const b = byId.get(found)!;
           setProbe({
             x: p.x,
             y: p.y,
+            kind: "경험",
             text: clampSentence(b.summary, PROBE_TEXT_LEN),
-            sub: `${tag(b.category)} · ${formatKstYmd(new Date(b.occurredAt), ".")} · ${tag(b.outcome)} · M${b.memoryScore}`,
+            rows: [
+              { k: "분야", v: tag(b.category) },
+              { k: "결과", v: tag(b.outcome) },
+              // 60 이 기억이 되는 문턱이다. 그 앞뒤가 곧 "이게 남았나"의 근거다.
+              { k: "기억 점수", v: `M${b.memoryScore}` },
+              { k: "날짜", v: formatKstYmd(new Date(b.occurredAt), ".") },
+            ],
           });
         }
       } else if (found && probeRef.current) {
@@ -3027,30 +3062,50 @@ export function OrbitalMap({
           className="probe"
           style={{ transform: `translate(${probe.x + 18}px, ${probe.y - 12}px)` }}
         >
-          <div className="readout mb-1.5 text-[11.5px] tracking-[0.16em] text-lum-3">{probe.sub}</div>
-          {/* 스킬을 위에, 내용을 아래에 둔다. 그 사이를 헤어라인으로 가른다 —
-              trigger 가 왜 그 값인지를 제목보다 먼저 읽어야 한다. */}
+          {/* 무엇인가 → 이름 → 값들. 위에서 아래로 좁혀 읽는다. */}
+          <div className="readout mb-1.5 text-[11.5px] tracking-[0.16em] text-lum-3">
+            {probe.kind}
+          </div>
+          <div className="font-sans text-[14.5px] leading-snug text-lum-0">{probe.text}</div>
+
+          {/* 처음 쓴 스킬. 값들보다 위에 둔다 — "왜 남았나"에 답하는 것이라
+              나머지 판독값보다 먼저 읽혀야 한다. */}
           {probe.skills && probe.skills.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {probe.skills.map((sk) => (
+                <span
+                  key={sk.name}
+                  className={[
+                    "readout rounded-sm border px-1.5 py-0.5 text-[11.5px]",
+                    sk.firstTime
+                      ? "border-[rgba(160,185,220,0.34)] text-lum-0"
+                      : "border-[rgba(160,185,220,0.12)] text-lum-3",
+                  ].join(" ")}
+                >
+                  {sk.name}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* ── 값들 ──
+              예전에는 이 전부가 한 줄에 `·` 로 이어져 있었다. 값이 죄다 같은
+              모양의 대문자 토큰이라 어느 게 분야고 어느 게 상태인지 분간이
+              안 됐다. 라벨을 왼쪽에 세우고 값을 오른쪽에 맞춘다 — 라벨 열이
+              한 줄로 서니 눈이 세로로 훑고, 값 열도 자리가 고정된다. */}
+          {probe.rows.length > 0 && (
             <>
-              <div className="mb-2 flex flex-wrap gap-1">
-                {probe.skills.map((sk) => (
-                  <span
-                    key={sk.name}
-                    className={[
-                      "readout rounded-sm border px-1.5 py-0.5 text-[11.5px]",
-                      sk.firstTime
-                        ? "border-[rgba(160,185,220,0.34)] text-lum-0"
-                        : "border-[rgba(160,185,220,0.12)] text-lum-3",
-                    ].join(" ")}
-                  >
-                    {sk.name}
-                  </span>
+              <div className="my-2 h-px" style={{ background: "rgba(160,185,220,0.16)" }} />
+              <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                {probe.rows.map((r) => (
+                  <Fragment key={r.k}>
+                    <span className="readout text-[11.5px] text-lum-4">{r.k}</span>
+                    <span className="readout text-[12px] text-lum-1">{r.v}</span>
+                  </Fragment>
                 ))}
               </div>
-              <div className="mb-2 h-px" style={{ background: "rgba(160,185,220,0.16)" }} />
             </>
           )}
-          <div className="font-sans text-[14.5px] leading-snug text-lum-0">{probe.text}</div>
         </div>
       )}
 
