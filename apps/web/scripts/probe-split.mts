@@ -12,7 +12,7 @@ import { createClient } from '@supabase/supabase-js';
 import { buildCompressedLog, normalizeEvent } from '../../extension/src/session/builder';
 import type { RawEvent, SessionDraft } from '../../extension/src/session/types';
 import {
-  MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V7, buildUserMessage, planItems, segmentsOf,
+  MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V8, buildUserMessage, planItems, segmentsOf,
 } from '../src/lib/experience-engine';
 import { experienceOutputSchema } from '../../../packages/shared/src/experience';
 
@@ -57,7 +57,7 @@ for (const t of targets) {
   const numbered = { ...log, segments: log.segments.map((s2, i) => ({ i, ...s2 })) };
 
   const res = await client.messages.create({
-    model: MODEL, max_tokens: 2048, temperature: 0, system: SYSTEM_PROMPT_V7,
+    model: MODEL, max_tokens: 2048, temperature: 0, system: SYSTEM_PROMPT_V8,
     tools: [RECORD_EXPERIENCE_TOOL], tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content: buildUserMessage(
       { primaryCategory: row.primaryCategory, durationMin: row.durationMin, closeReason: row.closeReason,

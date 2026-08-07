@@ -73,8 +73,15 @@ export const TOOL_NAME = 'record_experience';
  *  v7: 압축 로그가 구간별 체류 시간(sec)·곁가지(via)·앞부분 요약(earlier)을 싣는다.
  *      예전에는 상한 20칸이 1분 미만 경유지로 차서 긴 세션의 앞부분이 통째로
  *      잘려나갔다(실측 14/18 세션, 241분 중 234분이 안 보인 경우까지). 그 상태의
- *      판정은 세션이 아니라 끝자락에 대한 판정이다. */
-export const PROMPT_VERSION = 7;
+ *      판정은 세션이 아니라 끝자락에 대한 판정이다.
+ *  v8: 「대상별 체류 합계」를 유저 메시지에 준다. 압축 로그는 시간을 세 군데
+ *      (segments·via·earlier)에 나눠 담고 같은 대상도 나갔다 오면 구간이 새로
+ *      생겨서, "큰 대상이 둘이었나"를 알려면 모양이 다른 목록에 걸친 산수를
+ *      해야 했다 — LLM 이 특히 못하는 일이다. 실측: 183분 세션(ZEP 68분 ·
+ *      Project NA 40분)을 하나로 냈고, 그 경험이 엉뚱한 갈래에 붙어 그 갈래가
+ *      오염됐다. A/B 로 재니 분할 개수가 2.2 → 3.0 이 되고 편차도 사라졌다.
+ *      판정 규칙은 안 건드렸다(「기본은 나누지 않는다」 그대로). 골든셋 14/17 유지. */
+export const PROMPT_VERSION = 8;
 
 /** 프롬프트에 넣는 보유 스킬 목록의 최대 개수. 판정용 집합과는 다르다. */
 const PROMPT_SKILL_LIMIT = 50;
@@ -103,7 +110,7 @@ function kstYmd(date: Date): string {
 // 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
 // (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
 // 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
-export const SYSTEM_PROMPT_V7 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
+export const SYSTEM_PROMPT_V8 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
@@ -1346,7 +1353,7 @@ export async function processSession(sessionId: string, userId: string): Promise
       // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
       // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
       temperature: 0,
-      system: SYSTEM_PROMPT_V7,
+      system: SYSTEM_PROMPT_V8,
       tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [

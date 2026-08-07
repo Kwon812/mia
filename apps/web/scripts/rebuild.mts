@@ -65,8 +65,15 @@ if (!APPLY) {
 // 다른 파생 데이터와 성격이 다르다: 이건 다시 만들 수 없다. 모델이 낸 값이
 // 아니라 사람이 준 값이고, 재구축은 그걸 복원할 방법이 없다.
 //
-// experiences.session_id 가 UNIQUE 라 세션 id 를 열쇠로 다시 이을 수 있다.
-// experience_id 자체는 재구축 때마다 새로 발급되므로 쓸모가 없다.
+// 세션 id 를 열쇠로 다시 잇는다 — experience_id 자체는 재구축 때마다 새로
+// 발급되므로 쓸모가 없다.
+//
+// **한 세션이 경험 여럿을 낼 수 있다.** 예전에는 experiences.session_id 가
+// UNIQUE 라 열쇠가 하나로 떨어졌는데, 경험 분할이 들어오면서 그 제약이
+// 풀렸다(지금은 PK 뿐이다). 그래서 아래 조회에 **정렬을 걸어** 늘 같은 것이
+// 잡히게 한다 — 없으면 DB 가 주는 순서대로라 재구축마다 교정이 다른 경험에
+// 붙는다. 주 경험(가장 이른 것)에 붙인다: 분할되면 앞엣것이 그 세션의
+// 본체이고, 사람이 고친 것도 대개 그 판정이다.
 const declared = {
   corrections: await sql`
     select c.user_id, e.session_id, c.field, c.model_value, c.human_value,
@@ -139,7 +146,8 @@ console.log(`\n${ok}/${sessions.length} 처리 성공`);
   let restored = 0;
   let orphaned = 0;
   for (const q of declared.questions) {
-    const [e] = await sql`select id from experiences where session_id = ${q.session_id}`;
+    const [e] = await sql`select id from experiences where session_id = ${q.session_id}
+                             order by occurred_at, id limit 1`;
     if (!e) { orphaned += 1; continue; }
     await sql`insert into questions (user_id, experience_id, field, model_value, text, asked_at, answered_at, dismissed_at)
       values (${q.user_id}, ${e.id}, ${q.field}, ${q.model_value}, ${q.text}, ${q.asked_at}, ${q.answered_at}, ${q.dismissed_at})
@@ -147,7 +155,8 @@ console.log(`\n${ok}/${sessions.length} 처리 성공`);
     restored += 1;
   }
   for (const c of declared.corrections) {
-    const [e] = await sql`select id from experiences where session_id = ${c.session_id}`;
+    const [e] = await sql`select id from experiences where session_id = ${c.session_id}
+                             order by occurred_at, id limit 1`;
     if (!e) { orphaned += 1; continue; }
     await sql`insert into corrections (user_id, experience_id, field, model_value, human_value, source, created_at)
       values (${c.user_id}, ${e.id}, ${c.field}, ${c.model_value}, ${c.human_value}, ${c.source}, ${c.created_at})`;
@@ -160,7 +169,8 @@ console.log(`\n${ok}/${sessions.length} 처리 성공`);
   for (const c of declared.completedThreads) {
     const [e] = await sql`
       select id, thread_id, occurred_at, summary, detail, memory_score
-      from experiences where session_id = ${c.last_session_id}`;
+      from experiences where session_id = ${c.last_session_id}
+       order by occurred_at, id limit 1`;
     if (!e || !e.thread_id) { orphaned += 1; continue; }
     const [t] = await sql`select title, status from threads where id = ${e.thread_id}`;
     // 이미 완결이면 이번 재구축에서 모델이 냈다는 뜻이다. 덮지 않는다.
