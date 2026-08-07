@@ -138,6 +138,36 @@ if (!process.argv.includes('--only-c'))
     상세: `1회 후 ${before[0].n}건 → 2회 후 ${after[0].n}건 ${before[0].n === after[0].n ? '(같다)' : '(중복!)'}` });
 }
 
+// ── E. deepened: 갈래에 경험이 6건째가 되면 그 자체로 기억이 된다 ──
+if (!process.argv.includes('--only-c')) {
+  // 갈래와 **확실히 이어지는** 세션이어야 attach 가 나고, 그래야 6건째가 된다.
+  // 애매한 세션으로 재면 모델이 new 로 가서 deepened 경로를 안 밟는다.
+  const { log, events } = await logOf('aff9d471');
+  const u = await makeUser(); users.push(u);
+  const tid = randomUUID();
+  const s0 = await insertSession(u, log, events);
+  const start = new Date(events[0].at);
+  await sql`insert into threads (id, user_id, title, category, status, started_at, last_activity_at, experience_count)
+            values (${tid}, ${u}, 'Project NA 데이터베이스 스키마 설계', 'dev', 'active',
+                    ${new Date(start.getTime() - 5 * 86400_000)}, ${new Date(start.getTime() - 3600_000)}, 5)`;
+  for (let i = 0; i < 5; i++) {
+    await sql`insert into experiences (user_id, session_id, thread_id, occurred_at, summary, category, outcome, memory_score)
+              values (${u}, ${s0}, ${tid}, ${new Date(start.getTime() - (i + 1) * 3600_000)},
+                      ${'Project NA 의 Supabase 테이블 스키마를 잡고 프론트엔드에 연결했다'}, 'dev', 'partial', 20)`;
+  }
+  const s = await insertSession(u, log, events);
+  await processSession(s, u);
+  const mems = await sql`select title, trigger, triggers, importance, cardinality(experience_ids) as n
+                           from memories where user_id = ${u} and thread_id = ${tid}`;
+  const th = await sql`select experience_count from threads where id = ${tid}`;
+  results.push({
+    시나리오: 'E deepened(6건째)',
+    경험: (await sql`select count(*)::int as n from experiences where session_id = ${s}`)[0].n,
+    상세: `갈래 ${th[0]?.experience_count}건 · 기억 ${mems.length}개` +
+      (mems.length ? ` · trigger ${JSON.stringify(mems[0].triggers)} · 중요도 ${mems[0].importance}` : ' ← deepened 안 걸림'),
+  });
+}
+
 console.table(results);
 
 // ── 프롬프트에 교정이 실리는지 (LLM 0콜) ──
