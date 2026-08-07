@@ -7,6 +7,7 @@ import {
   memories,
   questions,
   sessions,
+  threads,
 } from "@na/db";
 import { strongestTrigger } from "@na/shared";
 import { db } from "@/lib/db";
@@ -16,9 +17,10 @@ import { deriveEmotion, type EmotionExperienceInput, type EmotionSkillInput } fr
 import { effective, loadCorrections } from "@/lib/corrections";
 import { loadSkillsByMemory } from "@/lib/memory-skills";
 import { NameForm } from "@/components/name-form";
+import { RECENT_LIMIT } from "@/lib/recent";
 import { MapStage } from "./map-stage";
 import type { AskQuestion } from "@/components/ask-card";
-import type { Body, MemoryBody } from "@/components/orbital-map";
+import type { Body, MemoryBody, ThreadBody } from "@/components/orbital-map";
 
 // 감정 파생에 넣는 최근 경험 표본 크기 (계획서 06장)
 const EMOTION_SAMPLE_SIZE = 5;
@@ -48,7 +50,7 @@ export default async function Home() {
   const daysTogether = kstDaysTogether(user.createdAt);
   const slot = getCurrentDialogueSlot();
 
-  const [dialogueRows, expRows, memoryRows, todaySessionRows, recentExperienceRows] =
+  const [dialogueRows, expRows, memoryRows, todaySessionRows, recentExperienceRows, threadRows] =
     await Promise.all([
       db
         .select({ text: dialogues.text })
@@ -95,6 +97,21 @@ export default async function Home() {
         .where(eq(experiences.userId, user.userId))
         .orderBy(desc(experiences.occurredAt))
         .limit(EMOTION_SAMPLE_SIZE),
+      // 갈래 전부. 기억이 된 갈래는 그 기억이 별로 서므로 궤도에 안 올리고,
+      // 나머지만 권도형 둘레를 돈다. status 는 별의 선(이어짐/끊김)이 쓴다.
+      db
+        .select({
+          id: threads.id,
+          title: threads.title,
+          category: threads.category,
+          status: threads.status,
+          experienceCount: threads.experienceCount,
+          startedAt: threads.startedAt,
+          completedAt: threads.completedAt,
+        })
+        .from(threads)
+        .where(eq(threads.userId, user.userId))
+        .orderBy(desc(threads.lastActivityAt)),
     ]);
 
   // 새 탭 진입 시 LLM 호출 없음(계획서 09장) — 캐시된 대사만 읽는다.
@@ -199,13 +216,67 @@ export default async function Home() {
   // trigger=new_skill 만 보여주면 "무슨 스킬?"에 답하는 게 화면에 없다.
   const liveMemories = memoryRows.filter((m) => m.forgottenAt == null);
 
-  // 가장 최근 경험이 속한 갈래의 기억. 그 경험 자체는 위성이라 계 화면에
-  // 안 보이고, 기억이 없는 갈래일 수도 있다(그러면 아무것도 안 뛴다).
-  const latestExp = expRows[0] ?? null;
-  const latestMemoryId =
-    latestExp?.threadId != null
-      ? (liveMemories.find((m) => m.threadId === latestExp.threadId)?.id ?? null)
-      : null;
+  // ── 갈래를 계에 올린다 ──
+  //
+  // 기억이 된 갈래는 **궤도에 안 올린다.** 그 기억이 이미 별로 서서 중심과
+  // 선으로 이어져 있으니, 갈래를 따로 그리면 같은 것이 화면에 두 번 뜬다.
+  // 궤도를 도는 것은 "아직 아무것도 안 남긴 일"뿐이다.
+  const memoryThreadIds = new Set(
+    liveMemories.map((m) => m.threadId).filter((id): id is string => id != null),
+  );
+  const abandonedThreadIds = new Set(
+    threadRows.filter((t) => t.status === "abandoned").map((t) => t.id),
+  );
+
+  const expIdsByThread = new Map<string, string[]>();
+  for (const e of expRows) {
+    if (!e.threadId) continue;
+    const list = expIdsByThread.get(e.threadId) ?? [];
+    list.push(e.id);
+    expIdsByThread.set(e.threadId, list);
+  }
+
+  const orbitThreads: ThreadBody[] = threadRows
+    .filter((t) => !memoryThreadIds.has(t.id))
+    .map((t) => ({
+      kind: "thread" as const,
+      id: t.id,
+      title: t.title,
+      category: t.category,
+      status: t.status,
+      experienceCount: t.experienceCount,
+      occurredAt: t.startedAt.getTime(),
+      completedAt: t.completedAt?.getTime() ?? null,
+      ageDays: Math.max(0, (now - t.startedAt.getTime()) / DAY_MS),
+      referencedIds: expIdsByThread.get(t.id) ?? [],
+      // 이 갈래를 시작한 경험 = 가장 오래된 것. expRows 가 내림차순이라 마지막.
+      sourceIds: [(expIdsByThread.get(t.id) ?? []).at(-1)].filter((id): id is string => id != null),
+    }));
+
+  // 최근에 들어온 경험들과, 그 경험들이 속한 갈래의 기억.
+  //
+  // 경험 하나가 아니라 셋을 표시한다 — 하나만 표시하면 "마지막 한 건"이지
+  // "요즘 뭘 하고 있나"가 아니다. 좌하단 '최근 경험' 목록과 같은 수를 쓴다
+  // (RECENT_LIMIT). 글로 적힌 셋과 지도에서 빛나는 셋이 어긋나면 안 된다.
+  //
+  // 갈래 쪽 개수는 **세지 않는다.** 셋이 한 갈래에 몰리면 하나, 흩어지면 셋이
+  // 나온다 — 경험이 어디에 붙었는지가 정하는 것이라 여기서 정할 값이 아니다.
+  // 다만 0 이 될 수도 있다: 갈래가 없는 경험(thread_id=null)과 아직 기억이
+  // 생기지 않은 갈래는 계 화면에 대응하는 천체가 없다. 그러면 계 화면에는
+  // 표식이 안 뜨고, 기억을 펼쳐 들어가야 경험 쪽 표식이 보인다.
+  const latestExps = expRows.slice(0, RECENT_LIMIT);
+  const latestExperienceIds = latestExps.map((e) => e.id);
+  const latestMemoryIds = [
+    ...new Set(
+      latestExps
+        .map((e) =>
+          e.threadId != null
+            ? liveMemories.find((m) => m.threadId === e.threadId)?.id
+            : undefined,
+        )
+        .filter((id): id is string => id != null),
+    ),
+  ];
   const skillsByMemory = await loadSkillsByMemory(user.userId, liveMemories);
 
   const moons: MemoryBody[] = liveMemories.map((m) => {
@@ -227,6 +298,9 @@ export default async function Home() {
         importance: m.importance,
         // 화면은 방향·이심률에 값 하나가 필요하다. 저장은 전부, 선택은 읽을 때.
         trigger: strongestTrigger(m.triggers, m.trigger),
+        // 놓은 갈래의 기억인가. 별은 그대로 남고 중심과의 선만 끊긴다 —
+        // "남기긴 했는데 놓았다"를 선 하나로 말한다.
+        abandoned: m.threadId != null && abandonedThreadIds.has(m.threadId),
         triggers: m.triggers.length > 0 ? m.triggers : [m.trigger],
         occurredAt: m.occurredAt.getTime(),
         ageDays: Math.max(0, (now - m.occurredAt.getTime()) / DAY_MS),
@@ -276,6 +350,7 @@ export default async function Home() {
     <MapStage
       bodies={bodies}
       memories={moons}
+      threads={orbitThreads}
       name={user.character.name}
       level={user.character.level}
       daysTogether={daysTogether}
@@ -289,8 +364,8 @@ export default async function Home() {
       }}
       todayMinutes={todayMinutes}
       todaySessions={todaySessionRows.length}
-      latestExperienceId={latestExp?.id ?? null}
-      latestMemoryId={latestMemoryId}
+      latestExperienceIds={latestExperienceIds}
+      latestMemoryIds={latestMemoryIds}
       question={question}
     />
   );

@@ -9,8 +9,11 @@ import {
   groupOfCategory,
   type Body,
   type MemoryBody,
+  type OrbitBody,
+  type ThreadBody,
 } from "@/components/orbital-map";
 import { AskCard, type AskQuestion } from "@/components/ask-card";
+import { RECENT_LIMIT } from "@/lib/recent";
 
 // 계기판. 지도가 화면 전체를 차지하고, 판독값은 네 모서리에 붙는다.
 // 카드도 패널도 없다 — 값은 여백 위에 그냥 놓여 있고 헤어라인이 구획한다.
@@ -46,12 +49,13 @@ function kstHm(ms: number): string {
   return `${p(d.getUTCMonth() + 1)}.${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
-/** 목록에 몇 줄까지. 넷을 넘으면 아래 통계와 붙어 읽히기 시작한다. */
-const RECENT_LIMIT = 3;
+// 목록 줄 수 = 지도에서 잔광을 끄는 수. 근거는 lib/recent.ts 에.
+// (넷을 넘으면 아래 통계와 붙어 읽히기 시작한다.)
 
 export function MapStage({
   bodies,
   memories,
+  threads,
   name,
   level,
   daysTogether,
@@ -61,12 +65,14 @@ export function MapStage({
   counts,
   todayMinutes,
   todaySessions,
-  latestExperienceId,
-  latestMemoryId,
+  latestExperienceIds,
+  latestMemoryIds,
   question,
 }: {
   bodies: Body[];
   memories: MemoryBody[];
+  /** 아직 기억이 없는 갈래만. 기억이 된 갈래는 그 기억이 별로 서므로 여기 없다. */
+  threads: ThreadBody[];
   name: string;
   level: number;
   daysTogether: number;
@@ -76,31 +82,46 @@ export function MapStage({
   counts: { experience: number; skill: number; memory: number };
   todayMinutes: number;
   todaySessions: number;
-  /** 가장 최근 경험과 그 경험이 속한 갈래의 기억. 둘이 같은 표식으로 뛴다 —
-   *  계에서는 기억이, 펼친 뒤에는 그 경험이. */
-  latestExperienceId: string | null;
-  latestMemoryId: string | null;
+  /** 최근 경험 셋과, 그것들이 속한 갈래의 기억들. 둘이 같은 표식(잔광)을
+   *  쓴다 — 계에서는 기억이, 펼친 뒤에는 그 경험이.
+   *  앞에 있을수록 최근이고, 잔광 길이가 그 순서를 나타낸다.
+   *  기억 쪽 개수는 경험이 어디에 붙었느냐가 정한다 — 0개일 수도 셋일 수도 있다. */
+  latestExperienceIds: string[];
+  latestMemoryIds: string[];
   /** 캐릭터가 오늘 묻는 것 (층 2). 없으면 안 그린다. */
   question: AskQuestion | null;
 }) {
-  // 기억의 색은 그 기억을 만든 경험들 중 가장 많은 분야에서 온다.
-  // 범례에는 실제로 색으로 쓰인 분야만 올린다 — 경험에만 있고 어떤 기억도
-  // 대표하지 않는 분야까지 적으면, 화면에 없는 색을 설명하는 줄이 된다.
+  // 지금 보고 있는 것 하나. 눌러서 펼쳤거나 당겨서 그 별의 계 안에 들어와
+  // 있으면 그 천체가, 계 전체를 보고 있으면 null 이 온다.
+  //
+  // 근거를 짚어보는 화면에서는 대사가 물러난다 — 캐릭터가 계속 말을 걸고
+  // 있으면 읽을 것이 둘이 되고, 그 대사는 지금 보고 있는 것이 아니라 오늘
+  // 전체에 대한 말이라 문맥도 어긋난다. '최근 경험' 목록도 같은 이유로 내린다.
+  const [viewing, setViewing] = useState<OrbitBody | null>(null);
+  const reading = viewing != null;
+
+  // 범례는 **지금 보고 있는 층의 색**을 적는다.
+  //   계 전체 — 기억들이 실제로 쓰고 있는 분야
+  //   별 하나 — 그 별에 딸린 경험들의 분야
+  // 화면에 없는 색을 설명하는 줄은 만들지 않는다. 확대해 한 별에 들어왔는데
+  // 범례가 계 전체를 설명하고 있으면, 안 보이는 색 넷을 읽게 된다.
   const memoryGroups = (() => {
     const byId = new Map(bodies.map((b) => [b.id, b]));
-    const used = new Set(
-      memories
-        .map((m) => dominantCategory(m, byId))
-        .filter((c): c is string => c != null)
-        .map((c) => groupOfCategory(c).key),
-    );
+    const used = viewing
+      ? new Set(
+          viewing.referencedIds
+            .map((id) => byId.get(id)?.category)
+            .filter((c): c is string => c != null)
+            .map((c) => groupOfCategory(c).key),
+        )
+      : new Set(
+          memories
+            .map((m) => dominantCategory(m, byId))
+            .filter((c): c is string => c != null)
+            .map((c) => groupOfCategory(c).key),
+        );
     return CAT_GROUPS.filter((g) => used.has(g.key));
   })();
-
-  // 기억 하나를 펼쳐 읽는 동안에는 대사가 물러난다. 근거를 짚어보는 화면인데
-  // 캐릭터가 계속 말을 걸고 있으면 읽을 것이 둘이 된다 — 게다가 그 대사는
-  // 지금 보고 있는 기억이 아니라 오늘 전체에 대한 말이라 문맥도 어긋난다.
-  const [reading, setReading] = useState(false);
 
   // bodies 는 occurred_at 내림차순이라(page.tsx 쿼리) 앞에서부터가 최근이다.
   const recent = bodies.slice(0, RECENT_LIMIT);
@@ -114,7 +135,7 @@ export function MapStage({
     };
   }, []);
   // OrbitalMap 의 effect 의존성에 들어가므로 매 렌더 새로 만들면 안 된다.
-  const handleFocusChange = useCallback((focused: boolean) => setReading(focused), []);
+  const handleFocusChange = useCallback((o: OrbitBody | null) => setViewing(o), []);
 
   return (
     <main className="relative h-screen w-full overflow-hidden">
@@ -123,11 +144,11 @@ export function MapStage({
         <OrbitalMap
           bodies={bodies}
           memories={memories}
-          threads={[]}
+          threads={threads}
           centerLabel={name}
           onFocusChange={handleFocusChange}
-          // 펼치면 위성 층이라 최근 경험이, 계 화면에서는 그 경험이 속한 기억이 뛴다.
-          latestId={reading ? latestExperienceId : latestMemoryId}
+          // 펼치면 위성 층이라 최근 경험이, 계 화면에서는 그 경험이 속한 기억이 잔광을 끈다.
+          latestIds={reading ? latestExperienceIds : latestMemoryIds}
         />
       </div>
 
@@ -153,10 +174,12 @@ export function MapStage({
       {/* 우상 — 궤도에 무엇이 올라 있나 */}
       <div className="pointer-events-none absolute right-8 top-8 text-right">
         <div className="settle" style={{ "--d": "80ms" } as React.CSSProperties}>
-          <div className="tick mb-2">궤도상 기억</div>
+          <div className="tick mb-2">계에 있는 것</div>
           <div className="readout text-[16px] text-lum-0">
-            {memories.length}
-            <span className="ml-1 text-[13.5px] text-lum-2">/ 경험 {counts.experience}</span>
+            별 {memories.length}
+            <span className="ml-1 text-[13.5px] text-lum-2">
+              · 도는 것 {threads.length} / 경험 {counts.experience}
+            </span>
           </div>
 
           {/* 색 범례. 궤도 축에 이름은 적혀 있지만 그건 "그 방향이 무엇인가"이지
@@ -179,13 +202,13 @@ export function MapStage({
 
           <div className="mt-3 ml-auto h-px w-28" style={{ background: "var(--color-lum-4)" }} />
           <div className="readout mt-3 text-[13px] leading-relaxed text-lum-2">
-            반경 = 경과일 · 크기 = 중요도
+            안쪽에서 도는 것 = 아직 아무것도 안 남긴 일
             <br />
-            방향·이심률 = 종류 · 색 = 근거의 주된 분야
+            바깥 별 = 남은 것 · 선이 끊긴 것은 놓은 일
             <br />
-            누르면 경험이 위성으로 · 방향 = 결과, 색 = 분야
+            별의 거리 = 경과일 · 크기 = 중요도 · 색 = 주된 분야
             <br />
-            갈래의 경험 전부 · 테두리 두른 것이 이 기억을 만든 근거
+            당기거나 누르면 그 안의 경험이 보인다
           </div>
         </div>
       </div>

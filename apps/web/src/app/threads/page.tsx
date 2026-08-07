@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { DAY_MS } from "@/lib/date";
 import { effective, loadCorrections } from "@/lib/corrections";
+import { RECENT_LIMIT } from "@/lib/recent";
 import { ThreadStage } from "./thread-stage";
 import type { Body, ThreadBody } from "@/components/orbital-map";
 
@@ -132,15 +133,22 @@ export default async function ThreadsPage() {
     sourceIds: [(expIdsByThread.get(t.id) ?? []).at(-1)].filter((id): id is string => id != null),
   }));
 
-  // 가장 최근 경험이 속한 갈래. 펼치면 그 경험 자체가 뛴다.
-  const latestExp = expRows[0] ?? null;
+  // 최근 경험 셋과 그것들이 속한 갈래. 펼치면 그 경험들 자체가 잔광을 끈다.
+  // 메인(/)과 같은 규칙이고 같은 수를 쓴다 — 화면마다 "최근"의 뜻이 달라지면
+  // 두 지도를 오갈 때 같은 표식을 다르게 읽게 된다.
+  // 여기서는 기억을 거치지 않고 갈래를 바로 가리키므로, 갈래가 없는 경험만
+  // 빠진다(메인은 "기억이 아직 없는 갈래"도 빠져 더 적을 수 있다).
+  const latestExps = expRows.slice(0, RECENT_LIMIT);
+  const latestThreadIds = [
+    ...new Set(latestExps.map((e) => e.threadId).filter((id): id is string => id != null)),
+  ];
 
   return (
     <ThreadStage
       bodies={bodies}
       threads={threadBodies}
-      latestExperienceId={latestExp?.id ?? null}
-      latestThreadId={latestExp?.threadId ?? null}
+      latestExperienceIds={latestExps.map((e) => e.id)}
+      latestThreadIds={latestThreadIds}
       centerLabel={user.character.name ?? "—"}
       activeCount={threadRows.filter((t) => t.status === "active").length}
     />

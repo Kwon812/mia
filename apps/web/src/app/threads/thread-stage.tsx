@@ -8,6 +8,7 @@ import {
   OrbitalMap,
   groupOfCategory,
   type Body,
+  type OrbitBody,
   type ThreadBody,
 } from "@/components/orbital-map";
 
@@ -25,18 +26,19 @@ export function ThreadStage({
   threads,
   centerLabel,
   activeCount,
-  latestExperienceId,
-  latestThreadId,
+  latestExperienceIds,
+  latestThreadIds,
 }: {
   /** 위성으로 펼쳐질 경험들 */
   bodies: Body[];
   threads: ThreadBody[];
   centerLabel: string;
   activeCount: number;
-  /** 가장 최근 경험과 그 경험이 속한 갈래. 계에서는 갈래가, 펼친 뒤에는 그
-   *  경험이 같은 표식으로 뛴다 — 메인과 같은 규칙이다. */
-  latestExperienceId: string | null;
-  latestThreadId: string | null;
+  /** 최근 경험 셋과 그것들이 속한 갈래들. 계에서는 갈래가, 펼친 뒤에는 그
+   *  경험이 같은 표식(잔광)을 쓴다 — 메인과 같은 규칙이다.
+   *  앞에 있을수록 최근이고, 그 순서가 잔광 길이가 된다. */
+  latestExperienceIds: string[];
+  latestThreadIds: string[];
 }) {
   const [reading, setReading] = useState(false);
 
@@ -48,7 +50,7 @@ export function ThreadStage({
     };
   }, []);
 
-  const handleFocusChange = useCallback((focused: boolean) => setReading(focused), []);
+  const handleFocusChange = useCallback((o: OrbitBody | null) => setReading(o != null), []);
 
   // 서버 액션이 revalidatePath 로 이 화면을 다시 그린다. 여기서 낙관적 갱신을
   // 하지 않는 이유 — 완결은 기억까지 만드는 일이라, 실패했는데 화면만 바뀌면
@@ -74,7 +76,7 @@ export function ThreadStage({
           centerLabel={centerLabel}
           onFocusChange={handleFocusChange}
           onComplete={handleComplete}
-          latestId={reading ? latestExperienceId : latestThreadId}
+          latestIds={reading ? latestExperienceIds : latestThreadIds}
         />
       </div>
 
