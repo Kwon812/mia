@@ -496,6 +496,24 @@ const STAR_SLOTS = 5;
  */
 const starGrowOf = (zoom: number) => Math.min(2.4, Math.max(0.28, Math.sqrt(zoom)));
 
+/** 광도가 후광을 얼마나 번지게 하나. 심(질량)은 안 건드린다 — drawStar 참고.
+ *  크기 하한(별이 제 위성보다 커야 한다)이 이 값을 되나눠야 해서 밖으로 뺐다. */
+const bloomOf = (lum: number) => 0.66 + 0.34 * Math.max(0, Math.min(1, lum));
+
+/** 별이 제 위성 중 가장 큰 것보다 이만큼은 커야 한다.
+ *  1 이면 딱 같은 크기라 위계가 안 읽힌다 — 주인이 손님보다 확실히 커야 한다. */
+const STAR_OVER_SAT = 1.3;
+
+/** 위성 알파의 천장(제 별에 대한 비율). 크기와 같은 이유다 — 근거가 제 별보다
+ *  밝으면 안 된다. 너무 낮추면 근거끼리의 밝기 차(그게 memory_score 다)가
+ *  같이 눌리므로 살짝만 깎는다. */
+const SAT_UNDER_STAR = 0.82;
+
+/** 천체를 그린 반지름 = size × 이 값. 별과 위성이 계수가 달라(3.2 vs 4.1)
+ *  size 끼리 직접 못 견준다 — 크기 하한을 풀 때 둘 다 필요하다. */
+const STAR_GLOW = 3.2;
+const SAT_GLOW = 4.1;
+
 /** 순위별 잔광이 훑는 궤도각. 배열 길이가 곧 표식할 개수다.
  *  짧고 굵으면 궤적이 아니라 천체에 붙은 불꽃으로 보인다 — 길이가 순서를
  *  나타내려면 먼저 "길다"가 읽혀야 한다. */
@@ -1225,7 +1243,7 @@ export function OrbitalMap({
       if (span == null || alpha <= 0.01) return;
       // 후광(size×3.2)보다 확실히 밖이어야 고리로 읽힌다. 안쪽이면 별이
       // 그냥 조금 커진 것처럼 보여 크기(=질량)를 잘못 읽는다.
-      const rad = size * 3.2 * (1.35 + span * 0.5);
+      const rad = size * STAR_GLOW * (1.35 + span * 0.5);
       const a = alpha * span * (0.32 + flare * 0.5);
       ctx!.strokeStyle = `rgba(${rgb.join(",")},${a})`;
       ctx!.lineWidth = 1 + span * 0.8;
@@ -1248,12 +1266,19 @@ export function OrbitalMap({
     ) {
       // 최근이라고 크기·밝기를 건드리지 않는다. 그건 잔광(drawTrail)이 맡는다 —
       // 여기서 또 밝히면 "밝다"가 광도(memoryScore)인지 최근인지 갈리지 않는다.
-      const rad = size * (lit ? 1.6 : 1) * 4.1;
+      const rad = size * (lit ? 1.6 : 1) * SAT_GLOW;
       const c = lit ? [143, 244, 228] : color;
       const gc = c.join(",");
       // 하한을 두는 이유: 점수가 0인 경험도 "있다"는 건 보여야 한다.
       // 완전히 사그라들면 근거 6건 중 몇 개가 화면에서 사라진다.
-      const peak = Math.min(1, (lit ? 1 : 0.62 + lum * 0.38) * alpha);
+      //
+      // 천장(SAT_UNDER_STAR)을 두는 이유는 다르다 — **주인보다 밝으면 안 된다.**
+      // 별 알파는 satReveal 아래로 안 내려가는데(starLumOf), 위성 알파는
+      // 그 satReveal 을 그대로 곱해 들어와서 가장 센 근거가 제 별과 알파가
+      // 같아졌다. 크기는 이미 1.3배로 벌려뒀지만 밝기까지 같으면 "이 안의
+      // 주인이 누구인가"가 한 채널 덜 말해진다.
+      // 겨눈 것(lit)은 예외다. 그건 광도가 아니라 표식이라 채널이 다르다.
+      const peak = Math.min(1, (lit ? 1 : (0.62 + lum * 0.38) * SAT_UNDER_STAR) * alpha);
 
       // 안쪽을 넓게 밝혀 심이 있는 것처럼 보이게 하되, 바깥은 여전히
       // 경계 없이 사그라든다. 가장자리를 그리지 않으면서 뚜렷해지는 방법이다.
@@ -1292,8 +1317,8 @@ export function OrbitalMap({
       // 알파만으로는 안 읽혔다. 안쪽이 흰빛으로 타는 그라디언트라 심은 어느
       // 밝기에서든 비슷하게 하얗고, 실제로 갈리는 건 바깥 후광이 어디까지
       // 번지느냐다 — 실제 별도 그렇게 보인다.
-      const bloom = 0.66 + 0.34 * Math.max(0, Math.min(1, lum));
-      const rad = radius * pulse * (lit ? 1.45 : 1) * 3.2 * bloom;
+      const bloom = bloomOf(lum);
+      const rad = radius * pulse * (lit ? 1.45 : 1) * STAR_GLOW * bloom;
 
       // 안쪽 10%만 흰빛으로 타들어가고, 거기서부터 색을 거쳐 사그라든다.
       // 정지점을 촘촘히 둬야 경계 없이도 "심이 있다"가 읽힌다.
@@ -1606,6 +1631,22 @@ export function OrbitalMap({
         0,
         Math.min(1, (zr - SAT_REVEAL_FROM) / (SAT_REVEAL_TO - SAT_REVEAL_FROM)),
       );
+
+      /**
+       * 화면에 실제로 쓰는 광도. **위성이 나올수록 1 로 올라간다.**
+       *
+       * 광도는 별끼리 견주는 값이라 별밭에서만 뜻이 있다. 그 안으로 당겨
+       * 들어가면 견줄 대상은 옆 별이 아니라 제 위성이고, 거기서는 위계
+       * (중심 > 별 > 경험)가 지켜져야 한다 — 어두운 별이 제 경험보다 흐리면
+       * 누가 주인인지 화면이 뒤집힌다.
+       *
+       * 이 식이 그걸 **증명한다**(눈으로 맞춘 값이 아니다):
+       *   위성 알파 ≤ sysAlpha · dimOf · satReveal      (drawPoint 의 peak 상한)
+       *   별   알파  = sysAlpha · dimOf · (lum + (1-lum)·satReveal)
+       *              ≥ sysAlpha · dimOf · satReveal      (lum ≥ 0 이므로)
+       * 어떤 배율에서도 별이 제 위성보다 어두워지지 않는다.
+       */
+      const starLumOf = (el: Elem) => el.lum + (1 - el.lum) * satReveal;
       // 매 프레임 지우고 아래에서 다시 정한다. 안 지우면 물러난 뒤에도 마지막
       // 별의 판독값이 위에 남는다 — 위성계를 안 그리는 배율에서는 계산 자체가
       // 안 돌기 때문이다.
@@ -1655,7 +1696,8 @@ export function OrbitalMap({
         // 중심(권도형)은 안 커진다. 당겨 들어갔다는 건 중심을 벗어났다는 뜻이라
         // 어차피 화면 밖이고, 커지면 그 계의 주인과 크기를 다툰다.
         const starGrow = starGrowOf(zr);
-        const sizeOf = (el: Elem) =>
+        /** 질량에서 나온 크기. 아래에서 위성보다 작아지지 않게 한 번 더 걸러진다. */
+        const massSizeOf = (el: Elem) =>
           el.mem.referencedIds.length > 0 ? el.size * starGrow : el.size;
 
         const placed = els.map((el) => ({ el, p: orbitPoint(el) }));
@@ -1691,6 +1733,33 @@ export function OrbitalMap({
                 })
             : [];
 
+        // ── 별은 제 위성보다 커야 한다 ──
+        //
+        // 크기는 질량(경험 수)이고 위성 크기는 그 경험의 점수라, 둘은 서로 다른
+        // 자에서 나온다 — 그냥 두면 위계가 뒤집힌다. 실측: 경험 1건짜리 어두운
+        // 별이 반경 14.5px 인데 제 위성 중 가장 큰 것이 43px 이었다.
+        // "주인이 손님보다 작다"는 건 눈이 먼저 알아채고, 그러면 확대해 들어간
+        // 것이 무엇의 안인지가 화면에서 사라진다.
+        //
+        // 위성을 깎지 않고 별에 하한을 건다. 위성 크기는 "이 근거가 얼마나
+        // 셌나"라 깎으면 뜻이 준다 — 반면 별 크기는 이미 다 견준 뒤라
+        // (이 배율에서는 옆 별이 dimOf 로 지워져 있다) 키워도 잃는 게 없다.
+        //
+        // 그린 반지름끼리 견준다. 별과 위성은 size→반지름 계수가 달라
+        // (STAR_GLOW 3.2 · SAT_GLOW 4.1) size 끼리 직접 비교하면 안 된다.
+        // 광도가 후광을 좁히는 몫(bloomOf)까지 되나눠야 실제로 그려질 반지름이
+        // 하한을 넘는다.
+        const satFloor = new Map<string, number>();
+        for (const s of starSats) {
+          const maxSat = s.sats.reduce((mx, st) => Math.max(mx, st.size), 0);
+          if (maxSat <= 0) continue;
+          const needRad = maxSat * SAT_GLOW * STAR_OVER_SAT;
+          satFloor.set(s.el.id, needRad / (STAR_GLOW * bloomOf(starLumOf(s.el))));
+        }
+        /** 화면에 실제로 그리는 크기. 판정 반경도 이걸 써야 보이는 것과 눌리는
+         *  것이 안 어긋난다. */
+        const sizeOf = (el: Elem) => Math.max(massSizeOf(el), satFloor.get(el.id) ?? 0);
+
         // ── 화면을 차지한 별 ──
         //
         // 당겨서 한 별의 계 안으로 들어가면, 누르지 않아도 그 별의 판독값이
@@ -1704,7 +1773,7 @@ export function OrbitalMap({
         let topStar: (typeof starSats)[number] | null = null;
         let topRatio = 0;
         for (const s of starSats) {
-          const rad = Math.max(s.R, sizeOf(s.el) * 3.2);
+          const rad = Math.max(s.R, sizeOf(s.el) * STAR_GLOW);
           const ow = Math.max(0, Math.min(w, s.p.x + rad) - Math.max(0, s.p.x - rad));
           const oh = Math.max(0, Math.min(h, s.p.y + rad) - Math.max(0, s.p.y - rad));
           const ratio = ((ow * oh) / (w * h)) * (Math.PI / 4);
@@ -1831,7 +1900,7 @@ export function OrbitalMap({
           // 중심 쪽이 흐리다. 별에 가까울수록 진해야 선이 별에 매달린 것으로
           // 읽힌다 — 균일하면 중심에서 뻗어나온 바퀴살이 되어 축과 헷갈린다.
           // 광도를 태운다: 어두운 별의 선도 같이 옅어야 한 천체로 읽힌다.
-          const la = sysAlpha * dimOf(el.id) * el.lum;
+          const la = sysAlpha * dimOf(el.id) * starLumOf(el);
           g.addColorStop(0, `rgba(${rgb},0)`);
           g.addColorStop(0.25, `rgba(${rgb},${(on ? 0.2 : 0.08) * la})`);
           g.addColorStop(1, `rgba(${rgb},${(on ? 0.6 : 0.28) * la})`);
@@ -1918,7 +1987,7 @@ export function OrbitalMap({
           if (p.y > cy) continue; // 앞쪽은 나중에
           if (foc && el.id === foc.id) continue; // 모핑 중인 대상은 따로 그린다
           if (!onScreen(p.x, p.y, sizeOf(el) * 4 + 40)) continue;
-          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * el.lum, el.lum, t);
+          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * starLumOf(el), starLumOf(el), t);
         }
 
         // 질량 중심
@@ -1940,7 +2009,7 @@ export function OrbitalMap({
           if (p.y <= cy) continue; // 뒤쪽은 이미 그렸다
           if (foc && el.id === foc.id) continue;
           if (!onScreen(p.x, p.y, sizeOf(el) * 4 + 40)) continue;
-          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * el.lum, el.lum, t);
+          drawStar(p.x, p.y, sizeOf(el), el.color, hovered === el.id || (litAxis != null && litAxis === axisKeyOf(el.mem)), sysAlpha * dimOf(el.id) * starLumOf(el), starLumOf(el), t);
         }
         ctx!.restore();
 
