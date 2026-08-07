@@ -1011,15 +1011,36 @@ interface LogSegment {
 export function segmentsOf(log: unknown): LogSegment[] {
   const l = log as {
     segments?: LogSegment[];
-    earlier?: { start?: string; top?: { i: number; sec: number }[] };
+    earlier?: { start?: string; top?: unknown[] };
   } | null;
   const segs = Array.isArray(l?.segments) ? [...l.segments] : [];
   const top = l?.earlier?.top;
   if (Array.isArray(top)) {
+    // earlier.top 의 판이 둘이다. 배포된 확장은 문자열("zep.us · … 46분"),
+    // 지금 빌더 코드는 {i,label,sec} 객체를 만든다. **둘 다 읽는다** —
+    // 객체만 읽던 때는 실데이터에서 earlier 를 통째로 건너뛰었고, 그러면
+    // 긴 세션의 앞부분이 분할 문턱(MIN_SPLIT_SEC)에도 시간 배분에도 안 잡혔다.
+    // buildTargetTotals 가 같은 이유로 같은 짓을 한다.
+    //
+    // 문자열 판에는 번호(i)가 없다. 순서가 곧 번호다 — 빌더가 `i: keptCount + n`
+    // 으로 매기므로, segments 뒤에 순서대로 이어 붙이면 같은 자리가 된다.
+    // 기준 길이를 먼저 잡는다 — 루프 안에서 segs 가 늘어나므로 매번 읽으면
+    // 자리가 하나씩 밀려 빈 칸이 생긴다.
+    const base = segs.length;
+    let n = 0;
     for (const p of top) {
-      if (typeof p?.i !== 'number' || typeof p?.sec !== 'number') continue;
       // 앞부분은 시각을 하나로 본다 — 어차피 순서를 잃은 합계다.
-      segs[p.i] = { start: l?.earlier?.start, end: l?.earlier?.start, sec: p.sec };
+      const at = l?.earlier?.start;
+      if (typeof p === 'string') {
+        const m = /\s(\d+)분$/.exec(p);
+        if (!m) continue;
+        segs[base + n] = { start: at, end: at, sec: Number(m[1]) * 60 };
+        n += 1;
+      } else if (p && typeof p === 'object') {
+        const o = p as { i?: number; sec?: number };
+        if (typeof o.i !== 'number' || typeof o.sec !== 'number') continue;
+        segs[o.i] = { start: at, end: at, sec: o.sec };
+      }
     }
   }
   return segs;
@@ -1092,18 +1113,41 @@ export function planItems(
 
   const totalSec = segList.reduce((acc, s) => acc + secOf(s), 0);
 
+  const valid = (i: number) => Number.isInteger(i) && i >= 0 && i < segList.length;
+
+  // ── 곁가지끼리는 배타적이어야 한다 ──
+  //
+  // 둘이 같은 구간을 다투면 그 시간이 어느 일이었는지 알 수 없다. 그건 판정을
+  // 못 하는 상태라 나누지 않는다.
   const seen = new Set<number>();
-  const assignable =
+  const restExclusive =
     rest.length > 0 &&
     totalSec > 0 &&
-    rest.every((r) => r.ids.length > 0) &&
-    [head, ...rest].every((it) =>
-      it.ids.every((i) => {
-        if (!Number.isInteger(i) || i < 0 || i >= segList.length || seen.has(i)) return false;
-        seen.add(i);
-        return true;
-      }),
+    rest.every(
+      (r) =>
+        r.ids.length > 0 &&
+        r.ids.every((i) => {
+          if (!valid(i) || seen.has(i)) return false;
+          seen.add(i);
+          return true;
+        }),
     );
+
+  // ── 주 경험이 겹치는 것은 **빼서** 받아준다 ──
+  //
+  // 모델이 주 경험에 "이 요약이 나온 구간" 이라며 세션 전체를 적고, 곁가지에
+  // 그 부분집합을 적는 일이 흔하다. 요약문이 실제로 전체를 훑으니 모델 쪽
+  // 셈으로는 맞는 말이다 — 프롬프트가 배타 배정을 시키지만 안 지켜진다.
+  //
+  // 예전에는 이걸 통째로 버렸다(seen 에 걸려 assignable=false → 하나로 되돌림).
+  // 실측: 183분 세션에서 모델이 ZEP 22분 · 쇼핑 15분을 냈고 **둘 다 문턱을
+  // 넘었는데도** 주가 [0..18] 을 다 적었다는 이유로 전부 흡수됐다.
+  //
+  // 곁가지가 더 구체적인 주장이고 주는 나머지다. 빼면 그 뜻이 그대로 산다 —
+  // "시간과 문턱은 코드가 잰다" 는 이 함수의 규칙과도 같은 방향이다.
+  head.ids = head.ids.filter((i) => valid(i) && !seen.has(i));
+
+  const assignable = restExclusive;
 
   const single = (): PlannedItem[] => {
     // 나누지 않으면 구간 배정도 남기지 않는다 — 세션 전체라는 뜻이다.
@@ -1131,6 +1175,23 @@ export function planItems(
   if (!assignable) return single();
 
   const secOfIds = (ids: number[]) => ids.reduce((acc, i) => acc + secOf(segList[i]), 0);
+
+  // ── 시간을 못 믿으면 안 나눈다 ──
+  //
+  // `sec` 이 없는 옛 세션은 secOf 가 시각 차이로 어림한다. 그 값은 주석대로
+  // "**비율로만** 쓰므로 없는 것보다 낫다" 인데, MIN_SPLIT_SEC 는 절대값(600초)
+  // 으로 쓴다 — 신뢰할 수 없는 값을 절대 문턱에 대는 것이라 어긋나 있었다.
+  //
+  // 실측: 20분짜리 옛 세션에서 네이버 구간 셋이 601초로 잡혀 1초 차이로 문턱을
+  // 넘었고, `"검색으로 전환되었다."` 라는 실체 없는 경험이 갈래까지 만들었다.
+  // 그 601초의 정체는 마지막 관측과 세션 종료(switch) 사이의 간격이다 —
+  // 네이버를 10분 본 게 아니라 거기서 다른 분야로 넘어간 것이다.
+  //
+  // 못 믿을 때는 프롬프트와 같은 편에 선다: **기본은 나누지 않는 것이다.**
+  // 나눌 근거가 확실할 때만 나눈다. sec 은 2026-08-06 부터 들어오므로 새
+  // 세션에는 해당이 없고, 옛 세션도 요약 안에 서술로는 남는다(버리지 않는다).
+  const hasReliableTime = segList.some((g) => typeof g?.sec === 'number');
+  if (!hasReliableTime) return single();
 
   // 문턱을 못 넘긴 갈래는 주된 경험으로 되돌린다. 오래 머문 것부터 보고,
   // 개수 상한을 넘긴 것도 같은 자리로 돌아간다 — 버리지 않는다.
