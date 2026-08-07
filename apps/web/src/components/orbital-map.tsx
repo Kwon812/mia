@@ -2086,16 +2086,24 @@ export function OrbitalMap({
             x: p.x,
             y: p.y,
             text: clampSentence(m.title, PROBE_TEXT_LEN),
-            // 한 줄에 상태 · 분야 · 경험 수 · 날짜. 반경이 이미 "시작한 지"를
-            // 말하지만 그건 상대값이라 날짜를 못 읽는다.
+            // **첫 단어가 이게 무엇인지를 말한다 — 기억이거나, 아직 갈래거나.**
             //
-            // 남은 게 있으면 그 이유를 **전부** 덧붙인다. 여럿이면 그게 곧 그
-            // 기억의 성격이라, 가장 센 것 하나만 보이면 나머지를 알 길이 없다.
+            // 둘 다 갈래라고 적었었다. 천체가 하나뿐이니 맞는 말이긴 한데,
+            // 그러면 화면에서 제일 밝은 것들이 무엇인지를 판독값이 답하지
+            // 못한다 — 밝기는 "많이 남았다"인데 이름은 여전히 "갈래"였다.
+            // 남은 게 있으면 그건 기억이다. 그 말을 앞에 세운다.
+            //
+            // 기억이면 남은 이유를 바로 뒤에 **전부** 붙인다. 여럿이면 그게 곧
+            // 그 기억의 성격이라, 가장 센 것 하나만 보이면 나머지를 알 길이 없다.
             // 중요도는 안 적는다 — 광도가 이미 그 값이다.
+            //
+            // 그 뒤는 양쪽이 같다: 상태 · 분야 · 경험 수 · 날짜. 반경이 이미
+            // "시작한 지"를 말하지만 그건 상대값이라 날짜를 못 읽는다.
             sub:
-              `갈래 · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)} 시작${
+              (m.memory ? `기억 · ${m.memory.triggers.map(tag).join(" · ")}` : "갈래") +
+              ` · ${tag(m.status)} · ${tag(m.category)} · 경험 ${m.referencedIds.length}건 · ${ymd(m.occurredAt)} 시작${
                 m.completedAt ? ` → ${ymd(m.completedAt)} 완결` : ""
-              }` + (m.memory ? ` · 남음 ${m.memory.triggers.map(tag).join(" · ")}` : ""),
+              }`,
             // 처음 쓴 스킬만. 호버는 훑는 자리라 일곱 개씩 늘어놓으면 아무것도
             // 안 읽힌다. trigger 가 왜 그 값인지에 답하는 것도 신규 쪽이다.
             // (전부는 눌러서 펼친 화면에 있다.)
@@ -2538,10 +2546,11 @@ export function OrbitalMap({
                 headline.completedAt ? ` → ${ymd(headline.completedAt)} 완결` : ""
               }`}
               {headline.memory && (
-                // 남았다면 왜 남았는지. 광도가 "얼마나"를 말하고 이 줄이
-                // "무엇 때문에"를 말한다.
+                // 남았다면 그건 기억이다. 판독값(호버)과 **같은 단어**를 쓴다 —
+                // 겨눴을 때와 들어왔을 때가 다른 이름으로 불리면 안 된다.
+                // 광도가 "얼마나"를 말하고 이 줄이 "무엇 때문에"를 말한다.
                 <div className="mt-1 text-lum-2">
-                  남음 · {headline.memory.triggers.map(tag).join(" · ")}
+                  기억 · {headline.memory.triggers.map(tag).join(" · ")}
                 </div>
               )}
             </div>
