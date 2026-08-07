@@ -73,7 +73,20 @@ const KIND_POOL = KINDS.flatMap((k) => Array<typeof k>(k.weight).fill(k));
 
 const OUTCOMES = ['success', 'partial', 'stuck', 'explore'] as const;
 const VERBS = ['확인했다', '정리했다', '고쳤다', '막혔다', '뜯어봤다', '되돌렸다', '비교해봤다', '끝냈다'];
-const TRIGGERS = ['new_skill', 'thread_complete', 'breakthrough', 'revival', 'comeback'];
+// 여섯 개를 다 쓴다. 'deepened' 가 빠져 있었는데, 지도가 trigger 마다 방향을
+// 한 조각씩 떼주므로 빠진 값은 그 조각이 영영 비어 있다는 뜻이 된다 —
+// "골고루"를 확인하려면 여섯 조각이 다 차야 한다.
+const TRIGGERS = ['new_skill', 'thread_complete', 'breakthrough', 'deepened', 'revival', 'comeback'];
+
+/** 지도가 방향을 정할 때 쓰는 우선순위와 같다(@na/shared 의 strongestTrigger).
+ *  스크립트라 패키지를 안 끌어오고 목록만 맞춰 둔다. */
+const TRIGGER_RANK = ['thread_complete', 'new_skill', 'breakthrough', 'deepened', 'revival', 'comeback'];
+const strongest = (ts: string[]) =>
+  [...ts].sort(
+    (a, b) =>
+      (TRIGGER_RANK.indexOf(a) < 0 ? 99 : TRIGGER_RANK.indexOf(a)) -
+      (TRIGGER_RANK.indexOf(b) < 0 ? 99 : TRIGGER_RANK.indexOf(b)),
+  )[0];
 
 const DAY = 86400000;
 const DAYS = 180;
@@ -207,14 +220,45 @@ for (const t of YEARS ? [] : threads) {
 }
 
 // 기억. 점수 60 이상이거나 갈래를 끝낸 경험에서 나온다(엔진 규칙과 같다).
-const mems = exps
-  .filter((e) => e.score >= 60 || (e.th.status === 'completed' && e.at === e.th.last))
-  .map((e, i) => ({
+//
+// **갈래당 하나로 모은다.** 예전에는 자격을 얻은 경험마다 기억을 하나씩
+// 만들었는데, 엔진은 그러지 않는다 — 같은 갈래면 있던 기억에 근거를 더하고
+// occurred_at 은 처음 것 그대로 둔다(memory-recheck 의 append 분기).
+// 지도가 "별 하나 = 갈래 하나"를 전제로 그리므로, 안 모으면 한 갈래가 별
+// 셋으로 뜬다.
+const qualified = exps.filter(
+  (e) => e.score >= 60 || (e.th.status === 'completed' && e.at === e.th.last),
+);
+const byThread = new Map<string, typeof qualified>();
+for (const e of qualified) {
+  const list = byThread.get(e.th.id) ?? [];
+  list.push(e);
+  byThread.set(e.th.id, list);
+}
+const mems = [...byThread.values()].map((list, i) => {
+  // 시간 순. 첫 번째가 이 기억이 생긴 시점이고 그 자리는 안 움직인다.
+  const sorted = [...list].sort((a, b) => a.at - b.at);
+  const triggerOf = (e: (typeof sorted)[number]) =>
+    e.th.status === 'completed' && e.at === e.th.last
+      ? 'thread_complete'
+      : e.first
+        ? 'new_skill'
+        : pick(TRIGGERS);
+  const triggers = [...new Set(sorted.map(triggerOf))];
+  return {
     id: sid(4, i),
-    exp: e,
-    trigger: e.th.status === 'completed' && e.at === e.th.last ? 'thread_complete' : e.first ? 'new_skill' : pick(TRIGGERS),
-    importance: Math.max(1, Math.min(10, Math.round(e.score / 11))),
-  }));
+    exp: sorted[0],
+    all: sorted,
+    // 방향·이심률은 가장 센 것 하나가 정한다. 저장은 전부(triggers).
+    trigger: strongest(triggers),
+    triggers,
+    // 근거가 쌓일수록 중요해진다 — 엔진의 memoryImportance 와 같은 방향이다.
+    importance: Math.max(
+      1,
+      Math.min(10, Math.round(Math.max(...sorted.map((e) => e.score)) / 11) + sorted.length - 1),
+    ),
+  };
+});
 
 console.log(`유저 ${user.id.slice(0, 8)} · ${YEARS ? '1~4년 전 (연 단위)' : `${DAYS}일치`}`);
 console.log(`  세션·경험 ${exps.length} · 갈래 ${threads.length} · 기억 ${mems.length}`);
@@ -300,11 +344,14 @@ await sql`insert into memories ${sql(
     user_id: user.id,
     thread_id: m.exp.th.id,
     experience_id: m.exp.id,
+    // 근거 전부. 화면이 테두리(sourceIds)로 "그중 뭐가 남겼나"를 가른다.
+    experience_ids: m.all.map((e) => e.id),
     occurred_at: new Date(m.exp.at),
     title: `${m.exp.th.title} — ${m.exp.outcome === 'success' ? '해냈다' : '남은 것이 있다'}`,
     body: m.exp.summary,
     importance: m.importance,
     trigger: m.trigger,
+    triggers: m.triggers,
   })),
 )}`;
 
