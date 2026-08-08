@@ -75,6 +75,9 @@ export default async function Home() {
           outcome: experiences.outcome,
           category: experiences.category,
           memoryScore: experiences.memoryScore,
+          // 판독값의 끝 시각. 세션 길이가 아니라 이 경험에 귀속된 분이라
+          // (나눴으면 그 몫만) 실제로 그 일이 차지한 구간과 같다.
+          durationMin: experiences.durationMin,
           threadId: experiences.threadId,
           isFirstTime: experiences.isFirstTime,
         })
@@ -210,6 +213,7 @@ export default async function Home() {
     outcome: effective(homeCorrections, e.id, "outcome", e.outcome),
     category: effective(homeCorrections, e.id, "category", e.category),
     memoryScore: e.memoryScore,
+    durationMin: e.durationMin,
     threadId: e.threadId,
     isFirstTime:
       effective(homeCorrections, e.id, "is_first_time", String(e.isFirstTime)) === "true",

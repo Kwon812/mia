@@ -28,6 +28,10 @@ export type Body = {
   id: string;
   summary: string;
   occurredAt: number;
+  /** 이 경험에 귀속된 분. 세션을 나눴으면 그 몫만이라 세션 길이와 다르다.
+   *  판독값의 끝 시각이 이 값에서 나온다. 옛 행은 NULL 일 수 있다
+   *  (experiences.duration_min 은 경험 분할 마이그레이션에서 붙었다). */
+  durationMin: number | null;
   ageDays: number;
   outcome: string | null;
   category: string;
@@ -334,6 +338,31 @@ const tag = (v: string | null | undefined) => (v ?? '—').toUpperCase();
 
 /** 에폭 ms → KST 날짜. 프로브와 상세가 같은 표기를 쓴다. */
 const ymd = (ms: number) => formatKstYmd(new Date(ms), ".");
+
+/** 에폭 ms → KST 'HH:MM'. UTC 게터로 읽으려고 오프셋을 더한다 —
+ *  브라우저 로컬 시각을 쓰면 KST 가 아닌 기기에서 다른 시각이 뜨고,
+ *  이 계의 시계는 전부 KST 고정이다(하루 경계·일기·성격 축). */
+const hm = (ms: number) => {
+  const d = new Date(ms + 9 * 60 * 60 * 1000);
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+};
+
+/**
+ * 경험 하나가 **언제부터 언제까지**였나 — `2026.08.08 15:20~16:41`.
+ *
+ * 날짜만으로는 하루에 여럿인 경험이 구분되지 않는다. 나뉜 경험은 같은 세션
+ * 안에서 시간대로만 갈리므로("15:20 쪽이 배포, 15:45 쪽이 관리자 페이지"),
+ * 그 구분이 판독값에 없으면 위성 둘이 같은 것으로 보인다.
+ *
+ * 끝은 duration_min 으로 잰다. **세션 길이가 아니라 이 경험에 귀속된 분**이라
+ * (나눴으면 그 몫만) 실제로 그 일이 차지한 구간과 같다. 값이 없는 옛 행은
+ * 시작 시각만 적는다 — 모르는 것을 지어내지 않는다.
+ */
+const spanLabel = (b: { occurredAt: number; durationMin: number | null }) => {
+  const start = `${ymd(b.occurredAt)} ${hm(b.occurredAt)}`;
+  if (b.durationMin == null || b.durationMin <= 0) return start;
+  return `${start}~${hm(b.occurredAt + b.durationMin * 60_000)}`;
+};
 
 // 색 묶음. 카테고리는 열셋인데 검은 배경 위 작은 후광으로 구분되는 색은
 // 여덟이 한계다 — 열셋을 다 칠하면 서로 겹쳐 보여 색이 정보가 못 된다.
@@ -2792,7 +2821,9 @@ export function OrbitalMap({
             // 갈래와 **같은 순서**다 — 날짜·분야가 먼저. 층을 오가며 같은
             // 자리에서 같은 것을 읽게 된다.
             rows: [
-              { k: "날짜", v: formatKstYmd(new Date(b.occurredAt), ".") },
+              // 날짜만으로는 하루에 여럿인 경험이 구분되지 않는다. 나뉜 경험은
+              // 같은 세션 안에서 시간대로만 갈리므로 그 구간까지 적는다.
+              { k: "시각", v: spanLabel(b) },
               { k: "분야", v: tag(b.category) },
               { k: "결과", v: tag(b.outcome) },
               // 60 이 기억이 되는 문턱이다. 그 앞뒤가 곧 "이게 남았나"의 근거다.
@@ -3310,8 +3341,9 @@ export function OrbitalMap({
         <div className="pointer-events-none absolute bottom-44 left-1/2 w-full max-w-lg -translate-x-1/2 px-6 text-center">
           <div className="settle">
             <div className="tick mb-2">
-              경험 · {formatKstYmd(new Date(picked.occurredAt), ".")} ·{" "}
-              {tag(picked.outcome)} · M{picked.memoryScore}
+              {/* 프로브와 같은 표기다. 겨눴을 때와 골랐을 때 같은 것을 다르게
+                  부르면 두 화면이 다른 경험을 말하는 것처럼 읽힌다. */}
+              경험 · {spanLabel(picked)} · {tag(picked.outcome)} · M{picked.memoryScore}
             </div>
             <p className="font-sans text-[15px] leading-relaxed text-lum-0">{picked.summary}</p>
           </div>
