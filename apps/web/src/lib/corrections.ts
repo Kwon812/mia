@@ -293,6 +293,37 @@ export async function recordCorrection(params: {
       title: params.humanValue,
     });
     if (!moved.ok) return moved;
+
+    // ── 제자리로 돌아왔으면 그 경험의 갈래 교정을 통째로 지운다 ──
+    //
+    // modelValue 는 위에서 **최초** 교정의 값을 물려받았으므로, 여기서 같다는
+    // 것은 모델이 놓은 자리로 되돌아왔다는 뜻이다 — 순효과가 0 이다.
+    //
+    // 되돌림 행만 남기고 앞의 실수 행을 두면 안 된다. 실수 행은
+    // model_value ≠ human_value 라 loadCorrectionPatterns 가 못 거르고,
+    // 되돌렸는데도 `A → B` 라는 교훈이 계속 프롬프트에 실린다. 재구축도 그
+    // 행을 재생해 옮기기를 두 번 헛돈다.
+    //
+    // 다른 세 필드는 행을 남긴다(마음 바꾼 이력 = 라벨 신뢰도 신호). 갈래만
+    // 지우는 것은 값이 열거가 아니라서다 — 제목은 매번 유일해서 `A → B (1회)`
+    // 한 줄이 통째로 남고 집계로 묻히지 않는다.
+    if (modelValue === params.humanValue) {
+      const gone = await db
+        .delete(corrections)
+        .where(
+          and(eq(corrections.experienceId, params.experienceId), eq(corrections.field, 'thread')),
+        )
+        .returning({ id: corrections.id });
+      if (gone.length > 0) {
+        if (params.questionId) {
+          await db
+            .update(questions)
+            .set({ answeredAt: new Date() })
+            .where(and(eq(questions.id, params.questionId), eq(questions.userId, params.userId)));
+        }
+        return { ok: true };
+      }
+    }
   }
 
   // 직전 교정과 같은 값이면 넣지 않는다.
