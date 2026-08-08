@@ -167,13 +167,19 @@
 <div class="wrap">
 
 <header>
-  <div class="kicker">설계 계획서 · 확정 단계</div>
+  <div class="kicker">설계 계획서 · 운영 중</div>
   <h1>Project NA</h1>
   <p class="tagline">현실의 나를 통해 성장하는 AI 육성 게임</p>
   <div class="meta">
     <span>작성 <b>2026-08-04</b></span>
-    <span>대상 <b>기획 문서 v1 기반 기술 설계</b></span>
-    <span>상태 <b>스키마 확정 · 구현 착수 전</b></span>
+    <span>개정 <b>2026-08-08</b></span>
+    <span>상태 <b>구현·배포 완료 · 실데이터 운영 중</b></span>
+  </div>
+  <div class="note" style="margin-top:26px">
+    <b>이 개정판에 대해</b> — 초판은 구현 착수 전에 쓰였다. 나흘간 실제로 돌려보며
+    바뀐 것을 반영했다. <b>실제와 다른 서술은 지웠고</b>, 아직 안 만든 것은
+    <span class="open">미구현</span>으로 표시했다. 설계가 옳았는데 구현이 다른 경우는
+    구현 쪽을 적었다 — 이 문서는 계획이 아니라 지금 도는 것의 설명이다.
   </div>
 </header>
 
@@ -219,21 +225,40 @@
   <div class="sec-num">02</div>
   <h2>아키텍처</h2>
 
-<pre><code><span class="c">[확장 프로그램]                      [서버]</span>
+<pre><code><span class="c">[확장 프로그램]                        [서버]</span>
   content script
     └ 10초 단위 활동 신호
   service worker
-    ├ Raw events        → IndexedDB
-    ├ Compression       <span class="c">(5분 알람)</span>
-    └ Session builder   <span class="c">(1분 알람)</span>
+    ├ rawEvents         → IndexedDB
+    ├ Session builder   <span class="c">(1분 알람)</span>
+    └ 마감 시 압축       <span class="c">(buildCompressedLog)</span>
          │
-         └─ POST /api/sessions ────→ Experience Engine <span class="c">(LLM 1회)</span>
-                                        ├ experiences 저장
-                                        ├ Memory Engine <span class="c">(점수 선별)</span>
-                                        ├ 감정 갱신
-                                        └ 대사 3~4개 생성
-                                            │
-<span class="c">[웹사이트] ←──── GET /api/state ─────────┘</span></code></pre>
+         ├─ POST /api/sessions ──→ Experience Engine <span class="c">(LLM 1회 · Haiku)</span>
+         │                            ├ experiences 저장 <span class="c">(1~3건)</span>
+         │                            ├ threads attach/new
+         │                            ├ Memory Engine <span class="c">(규칙 점수, LLM 없음)</span>
+         │                            └ dialogues 4개 <span class="c">(슬롯당 1개)</span>
+         │
+         └─ POST /api/raw ──────→ Storage <span class="c">(na-raw, 무손실 원본)</span>
+
+<span class="c">[웹사이트] ← 서버 컴포넌트가 DB 직접 조회 ─┘</span>
+    └ 사람 판단 → corrections / questions <span class="c">(declared)</span>
+
+<span class="c">[야간 배치] Render Cron · KST 03:00 ─ 일기 · 기억 재요약 · 성격 · 레벨 · 질문</span></code></pre>
+
+  <div class="change">
+    <div class="tag">초판에서 변경 · 압축 알람</div>
+    <div class="row was"><span class="lbl">초판</span><span>Compression (5분 알람)으로 미압축 원본을 200~500건으로 유지</span></div>
+    <div class="row"><span class="lbl">현재</span><span>압축 알람 없음 — 마감 시점의 <code>buildCompressedLog</code> 한 곳에서만 줄어든다</span></div>
+    <div class="why">중간 압축 단계를 만들어봤지만 실제로 아무것도 줄이지 않았다. <code>ingest</code>는 rawEvents 를 draft 안으로 옮기는 이사일 뿐 양을 줄이지 않는다. 알람은 제거했고(<code>chrome.alarms.clear('compress')</code>) 대신 긴 세션에서 <code>meta.currentSession</code> 이 수백 KB 까지 자라는 비용을 받아들였다.</div>
+  </div>
+
+  <div class="change">
+    <div class="tag">초판에서 변경 · 원본 보관</div>
+    <div class="row was"><span class="lbl">초판</span><span>없음 — compressed_log 가 유일한 기록</span></div>
+    <div class="row"><span class="lbl">현재</span><span><code>POST /api/raw</code> → Supabase Storage 콜드 스토리지</span></div>
+    <div class="why"><code>compressed_log</code> 는 Haiku 프롬프트 입력이라 앞으로도 작게 유지한다(구간 20칸·검색어 15개·제목 200자). 그런데 "나라는 데이터"를 몇 년 모으는 관점에서는 그 아래 원본이 유일하게 모델 해석이 안 섞인 기록이다 — experiences·dialogues·daily_logs 는 전부 LLM 생성물이라 학습에 재사용하면 그 모델을 복제할 뿐이다. 소비자가 달라서 하나로 겸할 수 없다.</div>
+  </div>
 
   <div class="change">
     <div class="tag">기획 #15에서 변경</div>
@@ -269,39 +294,58 @@
     <thead><tr><th>알람</th><th>주기</th><th>근거</th></tr></thead>
     <tbody>
       <tr><td><code>sessionCheck</code></td><td>1분</td><td>5분이면 종료 판정이 30~35분에서 흔들림</td></tr>
-      <tr><td><code>compress</code></td><td>5분</td><td>미압축 원본을 200~500건으로 유지</td></tr>
-      <tr><td><code>retry</code></td><td>10분</td><td>더 짧으면 서버 다운 시 복구 방해</td></tr>
-      <tr><td><code>diary</code></td><td>1일 · 새벽 3시</td><td>자정은 사용자가 활동 중일 수 있음</td></tr>
+      <tr><td><code>retry</code></td><td>10분</td><td>더 짧으면 서버 다운 시 복구 방해. 전송 실패분과 원본 업로드를 함께 맡는다</td></tr>
     </tbody>
   </table>
+  <p><strong>둘뿐이다.</strong> <code>compress</code>는 줄이는 게 없어서, <code>diary</code>는 일기가 서버 야간 배치로 옮겨가서 없앴다. 구버전이 등록해둔 잔재는 기동 시 <code>chrome.alarms.clear</code>로 정리한다.</p>
   <p>content script의 활동 보고는 <code>setInterval</code> 10초 — 페이지 컨텍스트라 죽지 않는다.</p>
+
+  <div class="note"><b>알람이 사라지는 경로가 있다</b> — 확장 비활성화 후 재활성화처럼 <code>onInstalled</code>도 <code>onStartup</code>도 발화하지 않는 경우다. 그러면 rawEvents 만 무한히 쌓이고 세션은 영영 마감되지 않는데 화면상 아무 증상이 없다. 그래서 <strong>워커가 깨어날 때마다</strong> 알람 존재를 확인하고 없으면 다시 등록한다.</div>
 
   <h3>이벤트 수집</h3>
   <p>탭 전환·URL 변경은 서비스 워커에서 <code>chrome.tabs</code>로 직접 잡지만, 클릭·스크롤·키 입력은 content script가 필요하다. 원본 이벤트를 보내지 않고 <strong>“10초 동안 살아있었다”는 신호</strong>만 보고한다.</p>
-<pre><code>let count = 0;
-document.addEventListener('scroll', () => count++, { passive: true });
+<pre><code>let scrolls = 0, clicks = 0, keys = 0;
+document.addEventListener('scroll',  () =&gt; scrolls++, { passive: true });
+document.addEventListener('click',   () =&gt; clicks++,  { passive: true });
+<span class="c">// 키 "횟수"만 센다 — 어떤 키인지는 절대 읽지 않는다 (키로거 금지)</span>
+document.addEventListener('keydown', () =&gt; keys++,    { passive: true });
 
-setInterval(() => {
-  if (count > 0) {
-    chrome.runtime.sendMessage({ type: 'ACTIVITY', scrolls: count });
-    count = 0;
-  }
+setInterval(() =&gt; {
+  const playing = isMediaPlaying();   <span class="c">// 보이는 탭에서 video/audio 재생 중</span>
+  if (scrolls === 0 &amp;&amp; clicks === 0 &amp;&amp; keys === 0 &amp;&amp; !playing) return;
+
+  chrome.runtime.sendMessage({
+    type: 'ACTIVITY', scrolls, clicks, keys, playing,
+    url: location.hostname,
+    visible: document.visibilityState === 'visible',
+    <span class="c">// 의도 컨텍스트 — 무엇을 읽고 무엇을 검색했나</span>
+    title: document.title, path: location.pathname, query: extractSearchQuery(),
+  });
+  scrolls = clicks = keys = 0;
 }, 10000);</code></pre>
+  <p>초판에는 스크롤 수만 있었다. <strong>제목·경로·검색어를 함께 보내는 것이 판정 품질을 갈랐다</strong> — 같은 <code>localhost</code>라도 제목이 다르면 다른 프로젝트고, 검색어 반복 횟수가 <code>stuck</code> 판정의 유일한 근거다. 입력 필드 값·페이지 본문·키 내용은 읽지 않는다.</p>
 
   <h3>전송 안정성</h3>
-<pre><code>async function flushSession(session) {
-  await db.put('pending', { id: session.id, status: 'sending' });
-  try {
-    await fetch(API, { method: 'POST', body: JSON.stringify(session) });
-    await db.put('pending', { id: session.id, status: 'done' });
-  } catch {
-    await db.put('pending', { id: session.id, status: 'failed' });
+<pre><code>async function flushSession(payload) {
+  await db.pending.put({ id: payload.id, status: 'sending', ... });
+  const res = await fetch(API, { method: 'POST', body: ... });
+
+  if (res.ok) {                        <span class="c">// 'done' 을 남기지 않고 바로 지운다</span>
+    await db.pending.delete(payload.id);
+    await db.archive.update(payload.id, { sent: true });
+    return;
   }
+  <span class="c">// 4xx 는 몇 번을 보내도 같은 답이다 — 재시도를 멈춘다(429 제외).</span>
+  <span class="c">// 안 멈추면 확장 큐와 서버 ingest_failures 가 동시에 무한 증식한다.</span>
+  if (res.status &gt;= 400 &amp;&amp; res.status &lt; 500 &amp;&amp; res.status !== 429) { ... return; }
+  <span class="c">// 실패 기록 — 다만 **이미 지워진 레코드를 되살리지 않는다**</span>
 }</code></pre>
   <ul>
-    <li>서버는 같은 <code>session_id</code>를 두 번 받아도 안전해야 한다 (PK + upsert)</li>
-    <li><code>chrome.runtime.onStartup</code>에서 고아 세션 정리 — 브라우저 종료 시 마지막 세션 유실 방지</li>
+    <li>서버는 같은 <code>session_id</code>를 두 번 받아도 안전하다 — 클라이언트 UUID PK + <code>ON CONFLICT DO NOTHING</code></li>
+    <li><code>onStartup</code>에서 고아 세션 정리. 단 마지막 활동에서 30분이 안 지났으면 <strong>끊지 않고 이어간다</strong> — 크롬 업데이트 직후 재시작에서 작업이 둘로 쪼개져 10분 필터에 버려지는 것을 막는다</li>
     <li>세션 종료 시각 ≠ 전송 시각. 서버는 <code>received_at</code>이 아니라 <code>started_at</code>으로 정렬한다</li>
+    <li>마감 순서는 <strong>archive 먼저, draft 정리 나중, 전송 맨 마지막</strong>. archive 가 유일한 내구성 기록이라 draft 를 먼저 지우면 복구 경로가 없다</li>
+    <li>흡수 순서는 <strong>저장 먼저, 삭제 나중</strong>. 최악이 "같은 이벤트를 한 번 더 흡수"(활동량이 살짝 부풀 뿐)이고, 반대 순서의 최악은 영구 유실이다</li>
   </ul>
 
   <h3>manifest</h3>
@@ -358,11 +402,12 @@ setInterval(() => {
   <p>검색·문서·AI 도구는 앞선 맥락에 흡수시켜 카테고리 판정에서 제외한다. 기획 #8의 <code>GitHub + ChatGPT + Redis Docs → "Redis 캐싱 구현"</code> 예시가 이 규칙 덕에 성립한다. 없으면 세 개로 쪼개진다.</p>
 
   <h4>예외 B — 왕복은 끊지 말고 태그</h4>
-<pre><code>if (s.switchCount &gt;= 3 &amp;&amp; s.durationMin &lt; 60) {
+<pre><code>if (s.switchCount &gt;= 3 &amp;&amp; now - s.startedAt &lt; 60*60*1000) {
   s.tag = 'scattered';
   return false;   <span class="c">// 끊지 않음</span>
 }</code></pre>
   <p>GitHub↔YouTube 왕복을 네 개로 쪼개는 대신 <code>scattered</code> 태그를 붙인다. LLM이 “집중이 잘 안 되는 날”로 요약할 수 있고, <strong>성격 축(몰입형↔산만형)의 입력</strong>이 된다. 버그를 데이터로 바꾸는 지점.</p>
+  <div class="note"><b>알려진 왜곡</b> — 조건의 뒷항이 <strong>세션 시작 후 60분</strong>이라, 태그가 붙을 수 있는 창은 처음 60분뿐이다(태그는 한 번 붙으면 안 떨어진다). 실측에서 241분·이탈 8회 세션은 태그가 없고 47분·이탈 3회 세션은 붙었다. 즉 이 태그는 “여기저기 움직였다”가 아니라 <strong>“시작하자마자 왔다갔다했다”</strong>를 뜻한다. 세션을 안 끊는 판정으로는 맞지만, 그대로 성격 축의 감점으로 들어가는 것은 어긋나 있다.</div>
 
   <h4>예외 C — 백그라운드 재생</h4>
   <p><code>music.youtube.com</code>, <code>spotify.com</code>은 활성 탭이 아니면 카테고리 판정에서 제외한다. 안 그러면 모든 코딩 세션이 음악 세션이 된다.</p>
@@ -376,10 +421,30 @@ setInterval(() => {
   return true;
 }</code></pre>
   <p>세 번째는 영상 필터다. 다만 점수 150 이상은 통과시켜 진짜 강의 시청은 살린다.</p>
-  <p><strong>결과</strong> — 하루 세션 20~30개 발생 → 전송 5~10개 → LLM 호출 3~5회.</p>
+  <p><strong>실측</strong>(나흘) — 전송된 세션 26개, 하루 5~7개. 길이 47~241분.</p>
+
+  <div class="note"><b>길이는 "쓴 시간"이 아니라 "관측 창"이다</b> — <code>duration_min</code> 은 <code>started_at → lastActivityAt</code> 이라 중간의 자리비움이 그대로 들어간다. 자리비움이 30분을 넘으면 세션이 갈라지지만, <strong>10~30분 자리비움은 세션을 안 끊고 길이만 늘린다.</strong> 그 값이 기억 점수의 '평소보다 긴 세션'(+20)과 성격의 몰입형 축에 직접 들어가서, 25분씩 자리를 비우는 사람이 붙어서 일한 사람보다 몰입형으로 찍힌다. 구간별 체류(<code>sec</code>)는 10분 상한으로 캡되는데 <code>duration_min</code> 만 캡이 없다.</div>
+
+  <h3>압축 — 무엇을 모델에게 보이나</h3>
+  <p>마감 시점에 <code>buildCompressedLog</code> 가 rawEvents 를 구간(segments)으로 접는다. 상한은 전부 <strong>개수</strong>다.</p>
+  <table>
+    <thead><tr><th>상한</th><th>값</th><th>하는 일</th></tr></thead>
+    <tbody>
+      <tr><td><code>MAX_SEGMENTS</code></td><td>20</td><td>넘으면 최신 20구간만 상세로 남기고 앞부분은 <code>earlier</code> 합계로 접는다</td></tr>
+      <tr><td><code>FOLD_UNDER_SEC</code></td><td>60초</td><td>1분도 안 머문 곳은 칸을 안 주고 앞 구간의 <code>via</code>로 접는다</td></tr>
+      <tr><td><code>MAX_QUERIES</code></td><td>15</td><td>검색어. <strong>반복 횟수와 구간을 함께</strong> 남긴다</td></tr>
+      <tr><td>제목·경로</td><td>200자</td><td>절단</td></tr>
+    </tbody>
+  </table>
+  <p>세 가지가 실측으로 드러난 뒤 붙었다.</p>
+  <ul>
+    <li><strong>구간 접기</strong> — 18세션 321구간 중 72%가 1분 미만이었다. 상한 20칸이 경유지로 차서 241분 세션에서 모델이 본 게 마지막 7분뿐인 경우까지 나왔다. 그 상태의 <code>outcome</code> 판정은 세션이 아니라 끝자락에 대한 판정이다</li>
+    <li><strong>검색어 반복 횟수</strong> — 프롬프트의 <code>stuck</code> 기준이 "같은 검색어가 반복되고"인데, 압축이 중복을 제거해 판정 근거를 판정 직전에 지우고 있었다. 여덟 번 물어도 한 번과 같은 입력이었고 실제로 <code>stuck</code>이 한 번도 안 나왔다</li>
+    <li><strong>구간별 체류 시간(<code>sec</code>)</strong> — <code>start~end</code> 는 첫 관측과 마지막 관측 사이라 관측이 하나면 0이다. 실측 세션에서 구간 span 합이 31분인데 세션 길이는 197분이었다</li>
+  </ul>
 
   <h3>검증 방법</h3>
-  <div class="note"><b>규칙을 더 늘리기 전에</b> 본인 브라우징 하루치를 IndexedDB에 쌓고, LLM 없이 규칙만 돌려 세션 분할 결과를 표로 확인한다. 하루치만 봐도 예외가 두세 개 더 나온다. 지금 앉아서 규칙 스무 개를 만드는 것보다 다섯 개로 시작해 실제 데이터로 튜닝하는 게 빠르다.</div>
+  <div class="note"><b>실제로 이렇게 했다</b> — 규칙만 돌려 세션 분할을 확인하고, 원본을 콜드 스토리지에서 다시 꺼내 새 압축기에 태워보는 스크립트(<code>replay-raw.mts</code>)를 만들었다. 저장된 <code>compressed_log</code> 로는 압축기 변경을 검증할 수 없다 — 그건 옛 압축기의 결과물이라 무엇이 달라졌는지 알 수 없기 때문이다.</div>
 </section>
 
 <!-- ══ 05 ══ -->
@@ -395,46 +460,87 @@ setInterval(() => {
   </ul>
 
   <div class="change">
+    <div class="tag">초판에서 변경 · 경험 분할 구현</div>
+    <div class="row was"><span class="lbl">초판</span><span>N:M 이라고 적어두고 스키마는 <code>session_id UNIQUE</code> — 세션당 하나로 박혀 있었다</span></div>
+    <div class="row"><span class="lbl">현재</span><span>모델이 <code>also</code> 로 갈래를 내고 <code>segment_ids</code> 로 구간을 배정한다</span></div>
+    <div class="why">실측하니 18세션 중 6건에 대상이 둘 이상이었고, 셋은 Project NA 와 Army Sim 이 한 세션에 있었다. 전부 Project NA 갈래로 흡수돼 Army Sim 은 경험 2건으로 과소 기록됐다. <strong>세션 자체는 안 나눈다</strong> — 그건 관측이고, 확장은 <code>localhost</code> 가 어느 프로젝트인지 판정할 수 없다(도메인이 아니라 제목에만 있다). 나누는 것은 해석 층의 일이다.<br><br><strong>나누는 판단은 모델이, 시간과 문턱은 코드가</strong> 잰다. 모델에게 분 단위 합산을 시키면 틀리고, 틀린 채로 저장되면 되돌릴 수 없다. 배정이 어긋나면 나누지 않고 하나로 돌아간다(구간 겹침·범위 밖·시간 없음). 문턱 10분을 못 넘긴 갈래는 <strong>버리지 않고</strong> 주된 경험의 서술로 흡수된다.</div>
+  </div>
+
+  <div class="change">
     <div class="tag">저장 방식 결정</div>
     <div class="row was"><span class="lbl">기각</span><span>하루 동안 갱신하다 자정에 저장</span></div>
     <div class="row"><span class="lbl">결정</span><span>세션 종료 시 즉시 저장, 요약은 계층으로 쌓음</span></div>
     <div class="why">자정 방식은 감정 실시간이 깨지고, 오늘 데이터를 못 보며, 결정적으로 <strong>늦게 도착하는 세션을 넣을 곳이 없다</strong>. 세션은 며칠 뒤에 도착할 수 있으므로 시간 기반 저장은 전송 모델과 구조적으로 맞지 않는다.</div>
   </div>
 
-<pre><code>sessions      확장이 만듦, 규칙 기반      하루 20~30개 (5~10개 전송)
+<pre><code>sessions      확장이 만듦, 규칙 기반      하루 5~7개 전송
    ↓
-experiences   세션 종료 시 즉시 저장       하루 3~5개   <span class="k">← 원자 단위, 불변</span>
+experiences   세션 종료 시 즉시 저장       세션당 1~3개  <span class="k">← 원자 단위, 불변</span>
    ↓
-threads       같은 작업끼리 묶음           며칠~몇 주
+threads       같은 <span class="k">대상</span>끼리 묶음         며칠~몇 주  <span class="c">(모두 갈래를 갖는다)</span>
    ↓
-memories      점수 넘은 것만               드물게</code></pre>
+memories      점수 넘은 것만               <span class="k">갈래당 하나</span>에 근거가 쌓인다</code></pre>
+  <p><strong>갈래당 기억은 하나다</strong>(<code>uq_memories_thread</code>). 예전에는 조건을 넘길 때마다 따로 생겨서 같은 갈래에 기억이 셋씩 붙었고(실데이터: 경험 9건 → 기억 3개), 셋 다 누르면 같은 위성이 떴다. 지금은 이미 있으면 <code>experience_ids</code> 에 근거를 더하고 <code>needs_resummary</code> 만 세운다 — 다시 쓰는 것은 밤의 일이다.</p>
 
   <h3>Experience Engine</h3>
   <p>세션 종료 시 LLM 1회 호출. <strong>기존 컨텍스트 주입이 필수다.</strong> 없으면 아래를 구분하지 못한다.</p>
 <pre><code>"TypeScript로 기능을 구현했다"     <span class="c">← 늘 하던 것</span>
 "처음으로 TypeScript를 써봤다"     <span class="c">← 신규 스킬 획득</span></code></pre>
-  <p>프롬프트에 현재 스킬 목록과 최근 경험 3건을 함께 넣는다. 파이프라인이 단방향이면 안 되고 Memory → Experience 역방향 연결이 필요하다.</p>
-  <p><strong>출력 제약</strong> — 대사는 40자 이내 두 문장. 초과 시 서버에서 절단. 세 줄이 넘으면 화면이 무너진다.</p>
+  <p>프롬프트에 보유 스킬 목록·최근 경험 3건·진행 중 갈래·잠긴 갈래 후보·<strong>사람이 바로잡은 판정의 집계</strong>를 함께 넣는다. 최근 경험은 <strong>이 세션보다 앞선 것만</strong> — 확장이 오프라인이었다가 사흘 뒤에 보내면 모델이 미래를 보고 판정하게 된다.</p>
+  <p><strong>출력 제약</strong> — 대사는 <strong>80자 · 슬롯당 하나씩 정확히 4개</strong>. 초과분은 <strong>문장 경계에서</strong> 자른다(한복판에서 끊으면 화면에 그대로 드러난다). 모델은 "80자 이내"라고 해도 105자를 낸다 — 길이를 지키게 하는 것보다 자르는 쪽을 고치는 게 확실하다.</p>
+
+  <div class="note"><b>검증이 폐기가 되면 안 된다</b> — 예전에는 대사 한 줄이 81자면 zod 가 출력 <strong>전체</strong>를 반려했고, 멀쩡한 summary·category·outcome·skills 까지 통째로 버려져 그 세션은 경험이 되지 못했다. 대사는 파이프라인에서 가장 안 중요한 값(슬롯당 1행씩 덮어써지는 캐시)인데 그게 가장 중요한 값을 죽였다. 지금은 자를 수 있는 것은 자르고, 개수도 강제하지 않는다.</div>
+
+  <h3>프롬프트 버전</h3>
+  <p>프롬프트를 고치면 번호를 올리고 <code>llm_outputs.prompt_version</code> 에 남긴다. "v3 에서 v4 로 바꿨더니 stuck 이 나오기 시작했다" 같은 비교가 가능해야 하기 때문이다. 현재 <strong>v9</strong>. 판정을 실제로 바꾼 것들:</p>
+  <table>
+    <thead><tr><th>버전</th><th>바꾼 것</th><th>왜</th></tr></thead>
+    <tbody>
+      <tr><td>v3</td><td><code>outcome</code> 판정 기준 명시, <code>is_first_time</code> 완화</td><td>값 네 개를 나열만 하고 언제 무엇을 고를지 안 적었더니 6건 중 5건이 <code>explore</code> 로 쏠렸다. 기준을 안 주면 모델은 가장 안전한 값으로 도망간다</td></tr>
+      <tr><td>v4</td><td>사람 판단 우선순위</td><td>교정이 들어오기 시작했는데 모델이 자기 추론으로 다시 덮으면 교정은 아무 데도 안 쓰이는 라벨 더미가 된다</td></tr>
+      <tr><td>v7</td><td>구간별 체류·곁가지·앞부분 요약</td><td>상한 20칸이 1분 미만 경유지로 차서 긴 세션의 앞부분이 통째로 잘렸다(241분 중 234분이 안 보인 경우)</td></tr>
+      <tr><td>v8</td><td>「대상별 체류 합계」를 미리 계산해 준다</td><td>시간이 세 군데(segments·via·earlier)에 흩어져 있어 "큰 대상이 둘이었나"를 알려면 모양이 다른 목록에 걸친 산수가 필요했다 — LLM 이 특히 못하는 일이다</td></tr>
+      <tr><td>v9</td><td>구간마다 번호(<code>i</code>)를 박아서 준다</td><td>프롬프트는 "구간 번호를 적으라" 했는데 <strong>번호가 없었다.</strong> 모델이 20칸 배열의 인덱스를 스스로 세다 한 칸씩 밀렸고, 그러면 그 구간들의 체류 합도 틀려 분할 문턱과 시간이 전부 어긋난다. A/B 로 3:0</td></tr>
+    </tbody>
+  </table>
 
   <h3>Memory Engine</h3>
   <p>LLM 재호출 금지. 규칙 점수로 선별한다.</p>
-<pre><code>신규 스킬 등장          +50
-해당 스킬 첫 시도        +40
-3일 이상 공백 후 복귀     +30
-세션 길이 평소의 2배      +20
-같은 패턴 반복           -30
+<pre><code>신규 스킬 등장                    +50
+해당 스킬 첫 시도                  +40
+막힘 → 성공 <span class="c">(직전 stuck, 이번 success)</span>  +35
+3일 이상 공백 후 복귀               +30
+30일 이상 안 쓴 스킬 재등장          +25
+세션 길이 평소<span class="c">(최근 20개 평균)</span>의 2배   +20
+최근 3건과 분야·주요 스킬이 모두 같음   -30
 
-임계값 초과 → 장기 기억</code></pre>
-  <p>기억의 입력은 experience가 아니라 <strong>thread의 상태 변화</strong>다. 기획 #10의 “첫 출시”는 세션 하나가 아니라 몇 주짜리 thread의 완결이다. experience 단위로 기억을 만들면 “Unity 빌드 설정을 수정했다” 같은 게 장기 기억이 된다.</p>
+<span class="k">60점 이상 → 장기 기억</span></code></pre>
+  <p>초판의 다섯 개로는 <strong>임계값을 넘을 길이 사실상 없었다.</strong> 신규 스킬과 첫 시도가 겹쳐야만 도달하는데 <code>is_first_time</code> 이 잘 안 뜨면 그 유일한 길마저 막힌다 — 하루 여섯 경험에 기억 0건이 실제로 나왔다. 문턱을 80에서 60으로 낮추고, 드물게 발동하면서 뜻이 분명한 신호 둘(막힘 돌파·휴면 스킬)을 더했다.</p>
+  <p>초판은 "기억의 입력은 experience 가 아니라 <strong>thread 의 상태 변화</strong>"라고 했다. 절반만 맞았다 — 완결(<code>thread_complete</code>)은 <strong>모델이 못 내는 값</strong>이었다. 역대 LLM 호출 75회 중 <code>completed=true</code> 가 한 번도 없었고, 프롬프트가 완결 예시로 못 박은 세션을 그대로 재현해도 false 였다. 브라우징 기록은 "무엇을 했나"를 말하는데 완결은 "더 할 게 없다"는 판단이라 <strong>안 한 일에 대한 진술</strong>이어서 기록에 흔적이 없다. 그래서 사람이 지도에서 직접 누른다.</p>
+  <p>대신 갈래에 경험이 <strong>6건</strong> 쌓이면 그 자체로 기억이 된다(<code>deepened</code>). 오래 붙들고 있는 일은 매 세션이 특별할 게 없는데도 남을 만하다 — 몇 달째 이어지는 갈래에 기억이 하나도 안 생기던 구멍을 메운다.</p>
+
+  <h3>사람 판단 — declared</h3>
+  <p>experiences·dialogues·daily_logs 가 전부 LLM 생성물(inferred)이라, 그것만으로는 1년 뒤 학습 데이터를 뽑아도 <strong>모델을 다시 학습시키는 꼴</strong>이 된다. 사람의 판단이 들어오는 통로를 따로 냈다.</p>
+  <table>
+    <thead><tr><th>테이블</th><th>담는 것</th></tr></thead>
+    <tbody>
+      <tr><td><code>corrections</code></td><td>사람이 실제로 내린 판단. <strong>append-only</strong> — 마음을 바꾼 이력 자체가 신호다</td></tr>
+      <tr><td><code>questions</code></td><td>캐릭터가 던진 질문과 그 결말. <strong>침묵도 기록</strong>한다</td></tr>
+    </tbody>
+  </table>
+  <p>둘로 나눈 이유: 하나로 합치면 <code>human_value</code> 가 NULL 인 행이 "안 물어봤다"인지 "묻고 답을 못 받았다"인지 구분되지 않는다. <strong>무응답을 동의로 세면 데이터가 조용히 오염된다</strong> — 무응답은 대개 동의가 아니라 안 본 것이다.</p>
+  <p><code>experiences</code> 는 여전히 UPDATE 하지 않는다. 유효값은 저장된 값이 아니라 <strong>읽을 때 겹쳐서 만드는 값</strong>이다 — <code>experiences</code>(inferred) + <code>corrections</code> 최신 1건(declared).</p>
 
   <h3>주기</h3>
   <table>
     <thead><tr><th>시점</th><th>처리</th></tr></thead>
     <tbody>
-      <tr><td>세션 종료 시</td><td>Experience Engine, 감정 갱신, 대사 생성, thread 부착</td></tr>
-      <tr><td>야간 · 새벽 3시</td><td>일기 생성, 성격 축 재계산, 레벨 갱신</td></tr>
+      <tr><td>세션 종료 시</td><td>Experience Engine <span class="c">(LLM 1회)</span> — 경험·갈래·기억·대사·스킬·레벨</td></tr>
+      <tr><td>야간 · KST 03:00</td><td>일기 → 기억 재요약 → 갈래 정리 → 성격 → 레벨 캐시 → 질문 생성</td></tr>
     </tbody>
   </table>
+  <p><strong>순서에 뜻이 있다.</strong> 갈래 정리가 성격보다 앞이다 — 뒤에 두면 오늘 밤 무활동 임계를 넘긴 갈래들이 성격 계산이 끝난 뒤에야 <code>abandoned</code> 가 되어 완결형 축이 늘 하루 늦는다. 질문 생성이 마지막인 것은 앞 단계가 그날 경험을 다 반영한 뒤라야 후보가 온전하고, 실패해도 일기·성격·레벨에 영향이 없기 때문이다.</p>
+  <p>야간 LLM 호출은 둘 — 일기(유저당 1회)와 기억 재요약(근거가 늘어난 기억만). 성격·레벨·질문은 전부 규칙 기반이다.</p>
   <p>성격은 세션 하나로 바뀌면 안 된다. <strong>최소 2주 이동평균</strong>.</p>
 </section>
 
@@ -463,12 +569,17 @@ memories      점수 넘은 것만               드물게</code></pre>
   <p>이제 TypeScript 82로 동일한 두 사람이 완전히 다른 성격을 가질 수 있다.</p>
 
   <h3>감정 — 실시간 파생값</h3>
-<pre><code>새 스킬 첫 등장        → 흥분
-같은 에러 3세션 반복    → 답답
-3일 공백 후 복귀        → 반가움
-세션 길이 평소의 2배    → 몰두
-오래 안 쓴 스킬 재등장  → 그리움</code></pre>
-  <p><code>emotions</code> 테이블을 만들지 않는다. 최근 경험 N건에서 매번 계산하는 파생값이며 시간에 따라 감쇠한다. 저장하면 “3주 전의 기쁨”이 남아 이상해진다.</p>
+<pre><code><span class="c">위에서부터 먼저 만족하는 규칙이 이긴다</span>
+최근 경험에 첫 시도 포함        → 흥분
+가장 최근 3건이 연달아 stuck    → 답답
+직전 경험과 3일 이상 공백       → 반가움
+30일 이상 안 쓴 스킬 재등장     → 그리움
+해당 없음                      → <span class="k">평온</span>
+
+<span class="c">가장 최근 경험이 48시간보다 이전이면 규칙과 무관하게 평온</span></code></pre>
+  <p><code>emotions</code> 테이블을 만들지 않는다. 조회 시점의 최근 경험 5건에서 매번 계산하는 순수 함수라 “3주 전의 기쁨”이 남지 않고 시간이 지나면 자연히 <strong>평온</strong>으로 감쇠한다.</p>
+  <p>초판의 '몰두'(세션 길이 2배)는 뺐다. 그건 기억 점수의 항목이지 감정의 재료가 아니고, 대신 <strong>기본값이 필요했다</strong> — 아무 규칙에도 안 걸리는 날이 대부분인데 그때 표시할 것이 없었다.</p>
+  <div class="note"><b>교정이 감정까지 닿아야 한다</b> — <code>/diary</code> 에서 "이건 막힌 게 아니라 해낸 거야"라고 세 건을 고쳤는데 홈의 캐릭터가 계속 답답해하면(원본 <code>outcome</code> 을 보므로) 아무도 안 누르고, 그러면 declared 가 쌓이지 않는다. 감정 계산도 교정을 겹친 값으로 한다.</div>
 
   <h3>레벨</h3>
 <pre><code>레벨 = min( f(경험 수, 고유 스킬 수),  가입 후 일수 / 3 )</code></pre>
@@ -487,7 +598,8 @@ memories      점수 넘은 것만               드물게</code></pre>
 <!-- ══ 07 ══ -->
 <section id="s7">
   <div class="sec-num">07</div>
-  <h2>레벨별 기능 언락</h2>
+  <h2>레벨별 기능 언락 <span class="open">미구현</span></h2>
+  <div class="note"><b>아직 안 만들었다</b> — <code>buildTools</code> 도 개별 툴도 코드에 없다. 지금 레벨은 <code>characters.level</code> 로 계산·표시만 되고 아무것도 열지 않는다(현재 Lv.2). 대화형 인터페이스 자체가 없어서 툴을 넘길 자리가 아직 없다. 아래는 설계 그대로 남긴다 — 게이팅 조건에 쓸 값(<code>experience_count</code>·<code>active_days</code>·<code>memory_count</code>·<code>oldest_memory_at</code>)은 이미 <code>characters</code> 에 캐시되고 있다.</div>
   <p>레벨업 = <strong>Prompt Builder가 LLM에게 넘기는 툴 목록이 늘어나는 것</strong>. 시스템 프롬프트는 고정, 툴만 교체한다.</p>
 
   <table>
@@ -542,10 +654,35 @@ memories      점수 넘은 것만               드물게</code></pre>
   <p>온보딩 마찰이 0이고, “AI가 태어났다”는 연출과도 맞는다. 가입 폼부터 뜨면 그 감각이 깨진다. Day 0에 사용자가 하는 행동은 <strong>이름 입력 하나뿐</strong>이어야 한다.</p>
 
   <h3>그대로 두면 DB를 둔 이유가 사라진다</h3>
-  <p>키가 <code>chrome.storage.local</code>에만 있으면 재설치·PC 교체·프로필 초기화에서 전부 유실된다. 서버에 데이터가 살아있어도 찾아올 방법이 없다. <strong>“캐릭터 유실 방지”가 DB 도입의 근거였는데 그게 무효화된다.</strong></p>
+  <p>키가 확장 스토리지에만 있으면 재설치·PC 교체·프로필 초기화에서 전부 유실된다. 서버에 데이터가 살아있어도 찾아올 방법이 없다. <strong>“캐릭터 유실 방지”가 DB 도입의 근거였는데 그게 무효화된다.</strong></p>
+
+  <div class="note">
+    <b>이 문장이 2026-08-08 에 그대로 실현됐다.</b> 확장을 삭제 후 재설치하면서 IndexedDB 와
+    <code>chrome.storage.local</code> 이 <strong>함께</strong> 사라졌고(같은 오리진이다),
+    <code>registerExtensionKey</code> 의 "이미 키가 있으면 재발급하지 않는다" 가드가 무력해져
+    새 익명 키가 발급됐다. 그 순간부터 세션이 <strong>새 계정</strong>에 쌓였다.<br><br>
+    발견이 늦은 이유가 더 나쁘다 — 사이트 쿠키는 옛 키를 가리켜 화면에 아무 표시도 안 났다.
+    "8/8 경험이 왜 하나뿐이지"로 며칠 뒤에 드러났다. 유저 둘을 다시 합치고,
+    세션을 이관해 재처리했다.
+  </div>
+
+  <h4>그래서 붙인 것</h4>
+  <ul>
+    <li><strong>미러 폴백</strong> — <code>chrome.storage.local</code> 에 써두던 사본을 이제 <strong>실제로 읽는다</strong>. 예전에는 쓰기만 하고 읽는 코드가 없었다. 다만 이번 사고(스토리지 전체 소실)는 이걸로 못 막는다. Dexie 만 깨지는 경우를 막는다</li>
+    <li><strong>발급 경고</strong> — 새 키를 발급하면 툴바에 배지를 세우고 팝업 맨 위에 배너를 띄운다. <code>[기존 캐릭터에 연결]</code> / <code>[처음 설치예요]</code>. <strong>확인할 때까지 안 사라진다</strong></li>
+  </ul>
+  <p>확장은 첫 설치와 "스토리지를 잃은 재설치"를 <strong>구분할 수 없다</strong> — <code>onInstalled</code> 의 reason 이 둘 다 <code>'install'</code> 이다. 그래서 발급 자체는 막지 않고(온보딩에 마찰을 주면 첫 사용자가 손해다) <strong>조용히 갈리지 않게만</strong> 한다. 판단은 사람이 한다.</p>
   <p>사이트를 본체로 삼기로 했으므로 사이트가 사용자를 알아볼 방법도 필요하다.</p>
 
-  <h3>계정 연결을 레벨 언락처럼 다룬다</h3>
+  <h3>지금 사이트는 쿠키로 알아본다</h3>
+  <p>OAuth 가 붙기 전까지의 다리다. 확장 키를 <code>/connect</code> 에서 한 번 받아 <strong>httpOnly 쿠키</strong>(400일)로 심고, 서버 컴포넌트는 그 쿠키로 <code>users</code> 를 조회한다. 확장이 그 페이지에 content script 를 주입해 키를 넘기므로 사용자는 아무것도 입력하지 않는다.</p>
+  <ul>
+    <li><code>localStorage</code> 에 키를 두지 않는다 — XSS 방어. 키가 곧 자격증명 전체다(비밀번호가 없다)</li>
+    <li><code>/api/connect</code> 는 <strong>Origin 검사</strong>를 한다. 쿠키를 심는 것은 로그인이고, 검사가 없으면 로그인 CSRF 가 성립한다 — 공격자가 자기 키를 피해자 브라우저에 심으면 이후 피해자의 활동이 공격자 계정에 쌓인다</li>
+    <li>오류 로그에 <code>err</code> 를 통째로 찍지 않는다 — 드리즐 오류 메시지에 바인딩 파라미터(=키 원문)가 들어 있다</li>
+  </ul>
+
+  <h3>계정 연결을 레벨 언락처럼 다룬다 <span class="open">미구현</span></h3>
 <pre><code>Day 0    설치 → 익명 키 발급 → 바로 시작
          AI: "..."  → 이름 지어주기
 
@@ -555,7 +692,7 @@ Lv.5쯤   AI: "나 이제 하루를 기억할 수 있어.
   <p>첫날 가입 폼을 들이밀면 이탈하지만, 사흘 키운 캐릭터를 잃기 싫어지는 시점에는 사용자가 자발적으로 누른다. 이 요청이 캐릭터의 대사로 나오면 UI가 아니라 서사가 된다.</p>
   <p>인증은 <strong>구글 OAuth 하나만</strong>. 비밀번호 관리·재설정 메일·해싱이 전부 사라지고, 크롬 사용자면 클릭 한 번이다.</p>
 
-  <h3>기기 분리</h3>
+  <h3>기기 분리 <span class="open">미구현</span></h3>
   <p>기기가 여러 대면 키도 여러 개다. 개발자가 주 사용자라면 노트북과 데스크톱 두 대는 기본이므로 실질적으로 필요하다.</p>
 <pre><code>CREATE TABLE devices (
   extension_key  TEXT PRIMARY KEY,
@@ -563,9 +700,14 @@ Lv.5쯤   AI: "나 이제 하루를 기억할 수 있어.
   label          TEXT,              <span class="c">-- '회사 노트북'</span>
   last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );</code></pre>
-  <p>이러면 두 기기의 세션이 같은 캐릭터로 합쳐진다. 기획에는 없던 항목이다.</p>
+  <p>이러면 두 기기의 세션이 같은 캐릭터로 합쳐진다.</p>
 
-  <div class="note"><b>구현 순서</b> — v1은 익명만 구현하고 계정 연결은 Lv.5 언락으로 붙인다. 다만 <code>users</code> 테이블은 <strong>지금부터</strong> 계정 컬럼(<code>google_id</code>, <code>email</code>, <code>linked_at</code>)을 갖고 있어야 나중에 마이그레이션이 없다.</div>
+  <div class="change">
+    <div class="tag">초판의 지시를 안 지켰다</div>
+    <div class="row was"><span class="lbl">초판</span><span><code>users</code> 는 <b>지금부터</b> <code>google_id</code>·<code>email</code>·<code>linked_at</code> 을 갖고 있어야 나중에 마이그레이션이 없다</span></div>
+    <div class="row"><span class="lbl">현재</span><span><code>users</code> = <code>id</code> · <code>extension_key</code> · <code>created_at</code> 셋뿐. <code>devices</code> 테이블 없음</span></div>
+    <div class="why">키 하나가 곧 유저 하나라, <strong>지금 구조로는 기기 둘을 합칠 방법이 없다.</strong> 08-08 사고에서 유저가 갈렸을 때도 합치는 경로가 없어 세션을 손으로 이관하고 파생 데이터를 재구축해야 했다 — <code>devices</code> 가 있었으면 키를 한 유저에 더 붙이는 것으로 끝났다. 초판이 정확히 이 상황을 예상하고 미리 만들어두라고 했는데 안 했다.</div>
+  </div>
 </section>
 
 <!-- ══ 09 ══ -->
@@ -577,14 +719,32 @@ Lv.5쯤   AI: "나 이제 하루를 기억할 수 있어.
   <table>
     <thead><tr><th>화면</th><th>내용</th></tr></thead>
     <tbody>
-      <tr><td>홈</td><td>캐릭터, 오늘의 대사, 오늘 세션 요약</td></tr>
-      <tr><td>기억</td><td>memories 타임라인 — 이 프로젝트의 진짜 자산</td></tr>
-      <tr><td>일기</td><td>날짜별 일기</td></tr>
-      <tr><td>스킬</td><td>스킬 트리, 성장 그래프</td></tr>
-      <tr><td>성격</td><td>2주 단위 축 이동 추이</td></tr>
+      <tr><td>홈 <code>/</code></td><td><strong>궤도 지도</strong> — 캐릭터, 대사, 오늘 세션, 최근 경험, 캐릭터 질문</td></tr>
+      <tr><td>기억 <code>/memories</code></td><td>memories 타임라인 — 이 프로젝트의 진짜 자산</td></tr>
+      <tr><td>일기 <code>/diary</code></td><td>날짜별 일기 + <strong>판정 교정 칩</strong></td></tr>
+      <tr><td>스킬 <code>/skills</code></td><td>스킬 목록, 갈래(programming·art·life)별 묶음</td></tr>
+      <tr><td>성격 <code>/personality</code></td><td>2주 단위 축 이동 추이</td></tr>
+      <tr><td>연결 <code>/connect</code></td><td>확장 키 → 쿠키. 확장이 자동으로 채운다</td></tr>
     </tbody>
   </table>
   <p>기억 아카이브가 핵심이다. 몇 년 치가 쌓였을 때 “2026년 8월”을 눌러 읽는 경험이 기획 #21의 감정을 만든다. 새 탭 한 줄로는 나오지 않는다.</p>
+
+  <h3>홈 — 천체는 한 종류다</h3>
+  <div class="maxim">갈래 하나가 별 하나. 기억은 그 별의 광도이고 색온도다.</div>
+  <p>처음엔 둘이었다 — <strong>기억이 별이고 갈래가 도는 것</strong>이었다. 그런데 갈래당 기억이 하나라 같은 것이 화면에 두 번 뜨고, 방향 문법이 두 벌이었다(기억은 <code>trigger</code>, 갈래는 분야). 한 계에 어휘가 둘이면 어느 것도 못 읽는다. 합치면 기억은 사라지는 게 아니라 <strong>별의 성질</strong>이 된다.</p>
+  <table>
+    <thead><tr><th>화면 요소</th><th>데이터</th></tr></thead>
+    <tbody>
+      <tr><td>은하</td><td>분야(category) — 카테고리 열넷이 각자 제 자리</td></tr>
+      <tr><td>별</td><td>갈래 하나</td></tr>
+      <tr><td>별의 크기</td><td>그 갈래에 쌓인 경험 수</td></tr>
+      <tr><td>별의 광도</td><td>남은 기억의 중요도. 안 남았으면 어두운 별</td></tr>
+      <tr><td>별의 색온도</td><td>가장 센 <code>trigger</code></td></tr>
+      <tr><td>나선팔 / 그 밖</td><td>진행 중 / 끝냈거나 놓은 것</td></tr>
+      <tr><td>위성</td><td>당기면 그 갈래의 경험들이 펼쳐진다</td></tr>
+    </tbody>
+  </table>
+  <p><strong>조건 없이 전부 올린다.</strong> 아직 아무것도 안 남긴 일은 안 보이는 게 아니라 어두운 별이다.</p>
 
   <h3>접점 문제</h3>
   <p>사이트는 사용자가 기억해서 찾아와야 한다. 이것이 유일한 약점이며, 당장의 해결책은 확장 아이콘 배지다.</p>
@@ -615,7 +775,8 @@ chrome.storage.local.get('dialogue').then(render);  <span class="c">// 그 다�
     </tbody>
   </table>
   <p>비용 5배 차이보다 심각한 문제가 둘 있다. <strong>대사가 매번 바뀌면</strong> 같은 하루인데 말이 달라져 기억이 있는 존재로 느껴지지 않는다. 그리고 <strong>1~3초 로딩 스피너</strong>가 보이는 순간 사용자가 이탈한다.</p>
-  <p>세션 종료 시 시간대별 대사 3~4개를 미리 생성해두면 호출 1회로 하루 종일 살아있는 것처럼 보인다.</p>
+  <p>세션 종료 시 시간대별 대사 <strong>4개</strong>(morning·afternoon·evening·night)를 미리 만들어둔다. PK 가 <code>(user_id, slot)</code> 이라 유저당 정확히 4행이고, 홈은 <strong>현재 슬롯 1행만</strong> 읽는다. 경험 판정과 같은 LLM 호출 하나에 들어 있어 대사만 따로 부르지 않는다.</p>
+  <div class="note"><b>네 슬롯이 전부 같은 세션을 말한다</b> — 아침에 열어도 그 대사는 어젯밤 세션에서 나온 것이다. 시간대별 <i>어감</i>을 미리 준비해두고 꺼내 쓰는 방식이라 내용은 최신 세션 하나에 매인다. 의도한 트레이드오프다.</div>
 </section>
 
 <!-- ══ 10 ══ -->
@@ -629,19 +790,33 @@ chrome.storage.local.get('dialogue').then(render);  <span class="c">// 그 다�
   <table>
     <thead><tr><th>테이블</th><th>성격</th><th>비고</th></tr></thead>
     <tbody>
-      <tr><td><code>users</code> / <code>devices</code></td><td>원본</td><td>익명 키 + 구글 계정</td></tr>
+      <tr><td><code>users</code></td><td>원본</td><td>익명 키. <code>devices</code>·계정 컬럼은 <span class="open">미구현</span></td></tr>
       <tr><td><code>characters</code></td><td>파생 캐시</td><td>툴 게이팅이 JOIN 없이 한 행만 읽도록</td></tr>
       <tr><td><code>sessions</code></td><td>원본</td><td>PK = 클라이언트 UUID</td></tr>
-      <tr><td><code>experiences</code></td><td>원본 · 불변</td><td>모든 파생의 근원</td></tr>
-      <tr><td><code>experience_skills</code></td><td>원본</td><td>조인 테이블</td></tr>
-      <tr><td><code>user_skills</code></td><td>파생 캐시</td><td>재계산 가능</td></tr>
-      <tr><td><code>threads</code></td><td>파생</td><td>status 전이가 기억 트리거</td></tr>
-      <tr><td><code>memories</code></td><td>파생</td><td><code>forgotten_at</code> 마킹, 삭제 안 함</td></tr>
+      <tr><td><code>experiences</code></td><td>원본 · 불변</td><td>모든 파생의 근원. <code>segment_ids</code>·<code>duration_min</code> 추가</td></tr>
+      <tr><td><code>experience_skills</code></td><td>원본</td><td>조인 테이블. <code>domain</code> 을 모델이 스킬마다 고른다</td></tr>
+      <tr><td><code>user_skills</code></td><td>파생 캐시</td><td><code>domain</code> 은 위 열의 최빈값 — 순서와 무관해 재구축해도 같다</td></tr>
+      <tr><td><code>threads</code></td><td>파생</td><td>모든 경험이 갈래를 갖는다. <code>title</code> 은 창설 시 고정, <code>category</code> 는 매번 재계산</td></tr>
+      <tr><td><code>memories</code></td><td>파생</td><td><strong>갈래당 하나</strong>에 근거가 쌓인다. <code>forgotten_at</code> 마킹, 삭제 안 함</td></tr>
       <tr><td><code>personality_snapshots</code></td><td>파생 · append</td><td>갱신 아님</td></tr>
       <tr><td><code>daily_logs</code></td><td>파생</td><td><code>prompt_version</code>으로 재생성</td></tr>
-      <tr><td><code>dialogues</code></td><td>캐시</td><td>길이 CHECK 제약</td></tr>
+      <tr><td><code>dialogues</code></td><td>캐시</td><td>PK <code>(user_id, slot)</code> — 4행 고정. 길이 CHECK 80자</td></tr>
+      <tr><td><code>corrections</code></td><td><strong>원본 · declared</strong></td><td>사람이 내린 판단. append-only</td></tr>
+      <tr><td><code>questions</code></td><td><strong>원본 · declared</strong></td><td>캐릭터가 물은 것. <strong>침묵도 기록</strong></td></tr>
+      <tr><td><code>llm_outputs</code></td><td>이력</td><td>모델 원본 출력. 검증 실패분도 <code>valid=false</code> 로</td></tr>
+      <tr><td><code>ingest_failures</code></td><td>이력</td><td>운영 알림 — 경험이 될 수 있었는데 못 된 것</td></tr>
+      <tr><td>Storage <code>na-raw</code></td><td>원본 · observed</td><td>압축 전 관측. private 버킷, service_role 로만 쓴다</td></tr>
     </tbody>
   </table>
+
+  <h3>왜 실패와 원본을 따로 남기나</h3>
+  <p><code>ingest_failures</code> 는 "실패"만 남긴다. 그래서 <strong>성공한 판정의 근거가 어디에도 없었다</strong> — <code>outcome</code> 이 왜 <code>explore</code> 였는지 나중에 물으면 세션을 다시 LLM 에 태우는 것 말고 답할 방법이 없었고, 그마저 비교 대상인 이전 출력은 이미 <code>experiences</code> 로 가공된 뒤였다. <code>llm_outputs</code> 에 <code>tool_use.input</code> 을 가공 전 그대로 넣고 모델·프롬프트 버전을 함께 남긴다.</p>
+
+  <h3>assertion class — 무엇을 믿을 것인가</h3>
+<pre><code>declared  사람이 직접 말한 것      corrections · questions · thread 완결
+observed  센서가 본 것            sessions · Storage 원본
+inferred  모델이 추론한 것        experiences · dialogues · daily_logs · memories</code></pre>
+  <p>이 위계가 프롬프트에도 들어간다. 충돌하면 <strong>declared &gt; observed &gt; inferred</strong> 순으로 믿는다. 이걸 안 적으면 모델이 사람이 고쳐놓은 값을 자기 추론으로 다시 덮는다.</p>
 
   <h3>설명이 필요한 결정</h3>
   <p><strong><code>sessions.id</code>를 클라이언트가 만든다.</strong> 서버 생성 UUID면 재시도 시 같은 세션이 두 번 들어간다. 클라이언트 UUID를 PK로 두면 <code>ON CONFLICT DO NOTHING</code> 한 줄로 멱등성이 끝난다.</p>
@@ -655,15 +830,38 @@ chrome.storage.local.get('dialogue').then(render);  <span class="c">// 그 다�
   <div class="sec-num">11</div>
   <h2>미결정 · 리스크</h2>
 
+  <h3>확정된 것</h3>
+  <table>
+    <thead><tr><th>항목</th><th>결정</th></tr></thead>
+    <tbody>
+      <tr><td>thread 부착 시점</td><td><strong>세션 종료 시</strong>. LLM 이 이미 컨텍스트를 보고 있어 호출이 안 늘어난다</td></tr>
+      <tr><td>스킬 이름 정규화</td><td>테이블을 안 만들고 <strong>프롬프트로</strong> — 보유 목록을 주고 "겹치면 동일 표기 재사용". 갈래(<code>domain</code>)는 스킬마다 모델이 직접 고른다</td></tr>
+      <tr><td>도메인 → 카테고리 사전</td><td>확장 내부에 <strong>335개</strong>. 다만 이건 <i>참고값</i>이고 최종 분야는 모델이 내용으로 다시 판정한다</td></tr>
+      <tr><td>대화 방향성</td><td><strong>AI 가 먼저 묻는다</strong> — 단 하루 2건 예산의 <b>판정 확인</b>만(층 2). 자유 대화는 아직 없다</td></tr>
+    </tbody>
+  </table>
+
   <h3>미결정 <span class="open">open</span></h3>
   <table>
-    <thead><tr><th>항목</th><th>선택지</th><th>비고</th></tr></thead>
+    <thead><tr><th>항목</th><th>지금 상태</th><th>비고</th></tr></thead>
     <tbody>
-      <tr><td>대화 방향성</td><td>단방향 / 양방향</td><td>양방향이면 Relationship이 의미를 갖지만 “그냥 챗봇”과 경계가 흐려진다. 절충: 답장은 되되 AI가 먼저 묻지 않음</td></tr>
-      <tr><td>스킬 이름 정규화</td><td>enum 제한 / <code>skill_catalog</code> 테이블</td><td>LLM이 자유롭게 뱉으면 <code>TS</code>·<code>타입스크립트</code>·<code>TypeScript</code>가 각각 다른 행이 된다</td></tr>
-      <tr><td>도메인 → 카테고리 사전</td><td>수동 50~500개</td><td>본인 브라우징으로 시작</td></tr>
-      <tr><td>Activity Score 가중치</td><td>기획 #7 기준값</td><td>실데이터로 튜닝</td></tr>
-      <tr><td>thread 부착 시점</td><td>야간 배치 / 세션 종료 시</td><td>후자는 LLM이 이미 최근 경험을 보고 있어 호출이 안 늘어난다</td></tr>
+      <tr><td>Activity Score 가중치</td><td>임의 초기값</td><td>스크롤1·클릭2·키1·탭전환5·재생틱0.5. 아직 실데이터로 안 맞췄다</td></tr>
+      <tr><td>망각(Lv.80)</td><td>스키마·인덱스·읽기 경로는 있는데 <strong><code>forgotten_at</code> 을 세우는 코드가 없다</strong></td><td>기억이 안 사라지므로 지도는 계속 밝아진다</td></tr>
+      <tr><td>갈래 증식</td><td>새 갈래 생성률이 높다</td><td>"애매하면 new" 규칙 때문에 목록이 길수록 새 갈래가 더 는다 — 자기강화 루프</td></tr>
+      <tr><td>갈래 제목</td><td>창설 시 고정, 갱신 경로 없음</td><td>내용 최빈값으로 다시 지으면 오배정된 경험이 제목을 끌고 가 연쇄 오염이 된다. <strong>안 바뀌는 게 닻</strong>이라 그대로 둔다</td></tr>
+      <tr><td>교정 전파</td><td>화면·프롬프트·기억 재판정에는 닿는데 <strong>성격·일기·질문 순위는 원본을 본다</strong></td><td>고쳐도 그쪽은 안 따라온다</td></tr>
+    </tbody>
+  </table>
+
+  <h3>알려진 어긋남</h3>
+  <table>
+    <thead><tr><th>자리</th><th>증상</th></tr></thead>
+    <tbody>
+      <tr><td>재생 틱과 유휴 시계</td><td>보이는 탭의 영상 재생이 <code>lastActivityAt</code> 을 밀어올린다. 듀얼 모니터에 영상을 띄워두고 자리를 뜨면 idle 이 영영 안 걸리고 maxlen 4시간까지 간다 — 그 세션은 활동 점수가 높아 필터를 다 통과한다. 반대로 순수 시청 10분은 점수 30점이라 걸러진다</td></tr>
+      <tr><td>레벨 계산 인자</td><td>엔진은 경과 시간을 24로 나누고 배치는 날 경계를 센다. 공식은 공유하는데 입력이 달라 밤에 오른 레벨이 다음 세션에 내려갈 수 있다</td></tr>
+      <tr><td>성격 스냅샷 중복 방지</td><td>비교 기준이 실행 시각이라 조건이 절대 성립하지 않는다 — 하루에 두 번 돌리면 점이 둘 찍힌다</td></tr>
+      <tr><td><code>corrections</code>·<code>questions</code> RLS</td><td>다른 테이블은 전부 켰는데 이 둘만 빠졌다. 이 시스템에서 <strong>유일하게 다시 만들 수 없는 데이터</strong>다</td></tr>
+      <tr><td><code>dialogues</code> 역행</td><td><code>user_skills</code>·<code>threads</code> 는 <code>GREATEST</code> 로 시각 역행을 막는데 여기만 무조건 덮는다. 오프라인 사흘치를 몰아 보내면 가장 오래된 세션의 대사가 남을 수 있다</td></tr>
     </tbody>
   </table>
 
@@ -678,14 +876,26 @@ chrome.storage.local.get('dialogue').then(render);  <span class="c">// 그 다�
 <section id="s12">
   <div class="sec-num">12</div>
   <h2>다음 단계</h2>
+  <p>초판의 여섯 항목은 전부 끝났다. 지금 남은 것은 순서대로다.</p>
   <ol>
-    <li><strong>세션 분할 로직 단독 구현 + 본인 데이터 검증</strong> — LLM 없이 규칙만. 여기서 예외 규칙과 카테고리 사전이 나온다</li>
-    <li><strong>경험 압축 프롬프트 + 출력 스키마</strong> — 결과물의 모양이 정해져야 스킬 이름 정규화도 결정된다</li>
-    <li><strong>DB 마이그레이션 작성</strong></li>
-    <li><strong>API 스펙 확정</strong> — <code>POST /api/sessions</code>, <code>GET /api/state</code>, <code>POST /api/register</code></li>
-    <li><strong>확장 <code>sw.js</code> 구현</strong></li>
-    <li><strong>사이트 v1</strong></li>
+    <li><strong>RLS 두 줄</strong> — <code>corrections</code>·<code>questions</code>. 보안이고 한 줄씩이다</li>
+    <li><strong>재생 틱이 유휴 시계를 리셋하지 않게</strong> — 유령 4시간 세션을 막는다. 카테고리 투표와 활동 점수에는 그대로 남겨야 순수 시청 세션이 안 죽는다</li>
+    <li><strong>레벨 인자 통일 · 성격 스냅샷 중복 방지 · <code>dialogues</code> 역행</strong> — 각각 한 줄</li>
+    <li><strong>실제로 쓴 시간(<code>attended_min</code>)</strong> — <code>duration_min</code> 은 관측 창이라 자리비움이 들어간다. 기억 점수와 몰입형 축만 새 값을 보게 한다</li>
+    <li><strong>교정 전파</strong> — 성격·일기·질문 순위가 교정을 겹친 값을 보게. 설계 결정이 필요하다</li>
+    <li><strong>망각 구현</strong> — 읽는 쪽은 다 있고 <code>forgotten_at</code> 을 세우는 곳만 없다</li>
+    <li><strong>계정 연결(OAuth) · <code>devices</code></strong> — 08-08 사고가 이유다. 키 하나가 유저 하나인 한 기기를 못 합친다</li>
   </ol>
+
+  <h3>운영하며 배운 것</h3>
+  <div class="maxim">모델에게 세게 하지 마라. 숫자를 세게 하면 틀린다.</div>
+  <p>구간 번호를 안 주고 "몇 번째인지 적어라" 했더니 한 칸씩 밀렸고, 흩어진 시간을 더하라고 했더니 큰 대상을 놓쳤다. 둘 다 미리 계산해서 주니 해결됐다. 판정은 맡기고 산수는 코드가 한다.</p>
+  <div class="maxim">기준을 안 주면 모델은 가장 안전한 값으로 도망간다.</div>
+  <p><code>explore</code> 로 쏠린 것도, <code>is_first_time</code> 이 안 뜬 것도, <code>completed</code> 가 한 번도 안 나온 것도 같은 실패였다. 값을 나열만 하고 언제 무엇을 고를지 안 적었다.</p>
+  <div class="maxim">자를 수 있는 것을 폐기 사유로 삼지 마라.</div>
+  <p>대사 한 줄이 81자라고 경험 전체를 버리던 자리가 있었다. 가장 안 중요한 값이 가장 중요한 값을 죽이면 안 된다.</p>
+  <div class="maxim">조용히 틀리는 것보다 드러나는 편이 낫다.</div>
+  <p><code>also</code> 가 잘려도 검증을 통과해 경험이 소리 없이 하나로 줄던 자리, 계정이 갈렸는데 화면에 아무 표시도 안 나던 자리 — 둘 다 며칠 뒤에야 발견됐다. 실패는 크게 실패해야 한다.</p>
 
   <h3>핵심 원칙</h3>
   <div class="maxim">AI는 시간을 학습하지 않는다. 경험을 학습한다.</div>
@@ -693,10 +903,11 @@ chrome.storage.local.get('dialogue').then(render);  <span class="c">// 그 다�
   <div class="maxim">LLM은 AI가 아니다. LLM은 말을 만드는 엔진이고, 진짜 AI는 Memory Engine이다.</div>
   <div class="maxim">서비스 워커는 언제든 죽는다. 메모리에 아무것도 남기지 마라.</div>
   <div class="maxim">규칙은 다섯 개로 시작해서 실제 데이터로 늘린다.</div>
+  <div class="maxim">파생은 언제든 다시 만들 수 있다. 원본과 사람이 말한 것만 지킨다.</div>
 </section>
 
 <footer>
-  Project NA · 설계 계획서 · 2026-08-04 · 기획 문서 v1 기반
+  Project NA · 설계 계획서 · 초판 2026-08-04 · 개정 2026-08-08 · 실데이터 운영 반영
 </footer>
 
 </div>
