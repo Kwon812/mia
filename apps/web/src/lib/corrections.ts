@@ -213,6 +213,28 @@ async function resyncThread(tx: Tx, threadId: string): Promise<void> {
     ) s
     where t.id = ${threadId}`);
 
+  // ── 비었으면 기억을 떼고 갈래를 지운다 ──
+  //
+  // 예전에는 기억이 있으면 그냥 뒀는데, 실측으로 대가가 드러났다. 재구축 4회차
+  // 뒤 경험 0건인데 기억을 문 갈래가 셋 남았다:
+  //
+  //   "Army Sim 개발 상태 확인" · "KT Cloud TECH UP 2기 팀 프로젝트" ·
+  //   "대한항공 마일리지 활용"   — 전부 new_skill 기억 1개씩
+  //
+  // 교정이 경험을 빼가면서 빈 것이다. 근거 경험은 다른 갈래로 갔으니 그
+  // 갈래는 아무것도 안 가리키는 유령인데, 후보 목록에는 계속 올라와 다음
+  // 판정을 끌어당긴다.
+  //
+  // **갈래 기억(deepened·thread_complete)은 안 건드린다.** 그건 그 갈래에
+  // 대한 진술이라 갈래가 사라지면 뜻이 없어진다 — 그런 기억이 붙어 있으면
+  // 갈래를 살려둔다. 경험 기반 기억(new_skill·breakthrough…)은 갈래가
+  // 부수적이므로 thread_id 만 떼면 기억 자체는 온전히 남는다.
+  await tx.execute(sql`
+    update ${memories} m set thread_id = null
+     where m.thread_id = ${threadId}
+       and not exists (select 1 from ${experiences} e where e.thread_id = ${threadId})
+       and not (m.triggers && array['deepened','thread_complete'])`);
+
   await tx.execute(sql`
     delete from ${threads} t
      where t.id = ${threadId}
