@@ -227,8 +227,38 @@ async function resyncThread(tx: Tx, threadId: string): Promise<void> {
   //
   // **갈래 기억(deepened·thread_complete)은 안 건드린다.** 그건 그 갈래에
   // 대한 진술이라 갈래가 사라지면 뜻이 없어진다 — 그런 기억이 붙어 있으면
-  // 갈래를 살려둔다. 경험 기반 기억(new_skill·breakthrough…)은 갈래가
-  // 부수적이므로 thread_id 만 떼면 기억 자체는 온전히 남는다.
+  // 갈래를 살려둔다.
+  //
+  // 경험 기반 기억(new_skill·breakthrough…)은 **근거 경험을 따라간다.**
+  // 처음엔 그냥 thread_id 를 NULL 로 뗐는데, 지도가 갈래 없는 기억을 통째로
+  // 버린다(thread-memories.ts: `if (m.threadId == null) continue`). 근거 경험은
+  // 멀쩡히 새 갈래에 있는데 기억만 화면에서 사라졌다.
+  //
+  // 근거가 여러 갈래에 흩어졌으면 가장 많은 쪽으로 간다(동률이면 id 순 —
+  // 결정적이라야 재구축마다 안 흔들린다).
+  await tx.execute(sql`
+    update ${memories} m set thread_id = tgt.tid
+      from (
+        select m2.id, (
+          select e.thread_id from ${experiences} e
+           where e.id = any(m2.experience_ids) and e.thread_id is not null
+           group by e.thread_id order by count(*) desc, e.thread_id limit 1
+        ) as tid
+        from ${memories} m2 where m2.thread_id = ${threadId}
+      ) tgt
+     where m.id = tgt.id
+       and tgt.tid is not null
+       and not exists (select 1 from ${experiences} e where e.thread_id = ${threadId})
+       and not (m.triggers && array['deepened','thread_complete'])
+       -- uq_memories_thread(user_id, thread_id) 는 갈래당 기억 하나만 허용한다.
+       -- 목적지에 이미 기억이 있으면 못 간다 — 아래에서 NULL 로 떨어진다.
+       and not exists (
+         select 1 from ${memories} m3
+          where m3.thread_id = tgt.tid and m3.user_id = m.user_id
+            and m3.id <> m.id and m3.forgotten_at is null)`);
+
+  // 갈 곳이 없었던 것만 뗀다 — 근거 경험이 전부 갈래 없이 남았거나, 목적지
+  // 갈래에 이미 기억이 있는 경우다. 기억 자체는 온전히 남는다.
   await tx.execute(sql`
     update ${memories} m set thread_id = null
      where m.thread_id = ${threadId}
