@@ -72,14 +72,31 @@ if (!APPLY) {
 //
 // **한 세션이 경험 여럿을 낼 수 있다.** 예전에는 experiences.session_id 가
 // UNIQUE 라 열쇠가 하나로 떨어졌는데, 경험 분할이 들어오면서 그 제약이
-// 풀렸다(지금은 PK 뿐이다). 그래서 아래 조회에 **정렬을 걸어** 늘 같은 것이
-// 잡히게 한다 — 없으면 DB 가 주는 순서대로라 재구축마다 교정이 다른 경험에
-// 붙는다. 주 경험(가장 이른 것)에 붙인다: 분할되면 앞엣것이 그 세션의
-// 본체이고, 사람이 고친 것도 대개 그 판정이다.
+// 풀렸다(지금은 PK 뿐이다).
+//
+// 그래서 세션 안 **순번**까지 함께 보관한다. 예전에는 무조건 주 경험(가장
+// 이른 것)에 붙였는데, 실측으로 대가가 드러났다:
+//
+//   세션 08-06 23:52 · 경험 3건
+//     1번째(주) "ZEP 메타버스 행사에 참여하면서…"      → 갈래교정 "KT Cloud TECH UP 2기"
+//     2번째     "Claude 와 ChatGPT 를 통해 Project NA…" → 갈래교정 "Project NA 개발"
+//
+// 둘 다 주 경험에 몰리면 1번째가 KT Cloud 로 갔다가 곧바로 Project NA 로 다시
+// 옮겨지고, 2번째의 의도는 통째로 사라진다. 라벨 필드도 마찬가지다 — 2번째의
+// category 교정이 1번째에 덮인다.
+//
+// 순번이 맞는 경험이 없으면(분할 개수가 달라졌다) 주 경험으로 떨어뜨리되
+// 세어서 알린다. 조용히 어긋나는 것이 제일 나쁘다.
 const declared = {
   corrections: await sql`
     select c.user_id, e.session_id, c.field, c.model_value, c.human_value,
-           c.source, c.created_at
+           c.source, c.created_at,
+           -- 순번은 **경험** 위에서 세야 한다. row_number 를 이 조인 결과에
+           -- 걸면 교정 행의 번호가 나온다 — 한 경험에 교정이 둘이면 그 하나가
+           -- 0·1 두 자리를 차지하고, 교정 없는 경험은 아예 안 세어진다.
+           (select count(*) from experiences e2
+             where e2.session_id = e.session_id
+               and (e2.occurred_at, e2.id) < (e.occurred_at, e.id))::int as ordinal
     from corrections c join experiences e on e.id = c.experience_id`,
   questions: await sql`
     select q.user_id, e.session_id, q.field, q.model_value, q.text,
@@ -140,6 +157,18 @@ const mainExperience = async (sessionId: string) => {
   return e ?? null;
 };
 
+/** 그 세션의 n 번째 경험(0-base). 없으면 주 경험으로 떨어뜨리고 알린다.
+ *  분할 개수는 재구축마다 달라질 수 있다 — 프롬프트가 바뀌었으면 특히. */
+let misordered = 0;
+const nthExperience = async (sessionId: string, ordinal: number) => {
+  const rows = await sql`select id from experiences where session_id = ${sessionId}
+                          order by occurred_at, id`;
+  if (rows.length === 0) return null;
+  if (ordinal < rows.length) return rows[ordinal];
+  misordered += 1;
+  return rows[0];
+};
+
 let ok = 0;
 let restored = 0;
 let orphaned = 0;
@@ -169,7 +198,9 @@ for (const [i, s] of sessions.entries()) {
   // 세션을 시간순으로 돌므로 여기서 되돌리면 다음 세션이 그것을 본다.
   // 라이브에서 쌓인 순서와 같아진다.
   for (const c of bySession.get(s.id) ?? []) {
-    const e = await mainExperience(c.session_id);
+    // 세션 안 순번으로 되찾는다. 한 세션이 경험 여럿을 내면 주 경험에 몰아넣던
+    // 예전 방식은 서로 다른 경험의 교정을 한 자리에 겹쳐 쓴다.
+    const e = await nthExperience(c.session_id, c.ordinal ?? 0);
     if (!e) { orphaned += 1; continue; }
     await sql`insert into corrections (user_id, experience_id, field, model_value, human_value, source, created_at)
       values (${c.user_id}, ${e.id}, ${c.field}, ${c.model_value}, ${c.human_value}, ${c.source}, ${c.created_at})`;
@@ -256,7 +287,10 @@ console.log(`\n${ok}/${sessions.length} 처리 성공`);
 
   console.log(
     `사람 판단 복원: ${restored}건 · 완결 갈래 ${threadsBack}건` +
-      `${orphaned ? ` · 세션 매칭 실패 ${orphaned}건 (백업 파일에 남아있다)` : ''}`,
+      `${orphaned ? ` · 세션 매칭 실패 ${orphaned}건 (백업 파일에 남아있다)` : ''}` +
+      // 분할 개수가 달라져 순번이 안 맞은 것. 주 경험으로 떨어뜨렸으니
+      // 교정이 엉뚱한 경험에 붙었을 수 있다 — 조용히 넘어가면 안 된다.
+      `${misordered ? ` · ⚠ 순번 어긋남 ${misordered}건 (주 경험으로 대체)` : ''}`,
   );
 }
 
