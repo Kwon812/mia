@@ -255,7 +255,33 @@ export async function recordCorrection(params: {
 
   if (!row) return { ok: false, error: '그 경험을 찾을 수 없어.' };
 
-  const modelValue = modelValueOf(row, params.field);
+  let modelValue = modelValueOf(row, params.field);
+
+  // ── thread 는 "모델이 낸 값"을 experiences 에서 못 읽는다 ──
+  //
+  // 나머지 셋은 experiences 가 불변이라 몇 번을 고쳐도 model_value 가 늘
+  // 모델의 원래 판정이다. 그래서 A→B 로 고쳤다가 A 로 되돌리면 두 번째 행이
+  // model_value === human_value 가 되고, loadCorrectionPatterns 가 그걸
+  // "확인이지 교정이 아니다"로 걸러 프롬프트에 안 들어간다.
+  //
+  // thread 는 thread_id 를 실제로 옮기므로 두 번째 교정 때 B 가 읽힌다.
+  // 그대로 두면 `thread: B → A` 라는 **정반대 교훈**이 프롬프트에 남는다 —
+  // 되돌린 것뿐인데 모델은 "B 의 일은 A 에 넣으라"로 읽는다.
+  //
+  // 앞선 교정이 있으면 그 model_value 가 모델의 원래 판정이다. 그걸 물려받아
+  // 다른 필드와 같은 성질로 되돌린다. 되돌린 이력 자체는 행으로 남는다 —
+  // 마음을 바꾼 횟수는 라벨 신뢰도 신호라 지우지 않는다.
+  if (params.field === 'thread') {
+    const [first] = await db
+      .select({ modelValue: corrections.modelValue })
+      .from(corrections)
+      .where(
+        and(eq(corrections.experienceId, params.experienceId), eq(corrections.field, 'thread')),
+      )
+      .orderBy(corrections.createdAt)
+      .limit(1);
+    if (first) modelValue = first.modelValue;
+  }
 
   // thread 는 기록만으로 끝나지 않는다 — 실제로 옮겨야 후보 목록과 "최근:" 줄이
   // 바뀌고, 그래야 다음 세션의 판정이 달라진다. 옮기기가 실패하면 교정 행도
