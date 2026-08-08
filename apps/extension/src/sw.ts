@@ -51,6 +51,29 @@ const RAW_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
  *  (IndexedDB 는 null 을 인덱싱하지 않는다). */
 const RAW_UNASSIGNED = '';
 
+/** 새 키 발급 사실을 담아두는 meta 키. 사용자가 확인하면 지운다.
+ *  자세한 이유는 snapshot.ts 의 SnapshotKeyNotice 주석에 있다. */
+const KEY_NOTICE = 'keyNotice';
+
+async function loadKeyNotice(): Promise<{ issuedAt: number } | null> {
+  const row = await db.meta.get(KEY_NOTICE);
+  const v = row?.value as { issuedAt?: unknown } | undefined;
+  return typeof v?.issuedAt === 'number' ? { issuedAt: v.issuedAt } : null;
+}
+
+/** 툴바 아이콘의 경고 표시. 배지는 브라우저를 재시작하면 사라지므로
+ *  워커가 깨어날 때마다 meta 를 보고 다시 세운다. */
+async function syncKeyNoticeBadge(): Promise<void> {
+  try {
+    const notice = await loadKeyNotice();
+    await chrome.action.setBadgeText({ text: notice ? '!' : '' });
+    if (notice) await chrome.action.setBadgeBackgroundColor({ color: '#a9600f' });
+  } catch (err) {
+    // 배지는 부가 표시다. 실패해도 수집·전송에는 영향이 없어야 한다.
+    console.error('[NA] 배지 갱신 실패', err);
+  }
+}
+
 
 function registerAlarms(): void {
   // 계획서 03장의 compress(5분) 알람은 없다.
@@ -73,15 +96,31 @@ async function registerExtensionKey(): Promise<void> {
     // 이미 키가 있으면 절대 재발급하지 않는다 — onInstalled 는 확장 새로고침
     // 때마다 발화하므로, 이 가드가 없으면 새로고침마다 새 유저(=캐릭터 리셋)가 된다.
     const existing = await getExtensionKey();
-    if (existing) return;
+    if (existing) {
+      // 미러가 비어 있으면 채워둔다. 미러 코드가 붙기 전에 발급받은 키는
+      // Dexie 에만 있어서, 정작 복구가 필요한 순간(IndexedDB 소실)에 폴백이
+      // 빈손이다 — 백업은 필요해지기 전에 만들어져 있어야 쓸모가 있다.
+      const { extensionKey } = await chrome.storage.local.get('extensionKey');
+      if (extensionKey !== existing) {
+        await chrome.storage.local.set({ extensionKey: existing });
+      }
+      return;
+    }
 
     const res = await fetch(`${API_BASE}/api/register`, { method: 'POST' });
     if (!res.ok) return;
     const { extension_key } = (await res.json()) as { extension_key: string };
     await db.meta.put({ key: 'extensionKey', value: extension_key });
     // chrome.storage.local 에도 미러링 — 사이트 /connect 페이지의 수동 안내
-    // (콘솔에서 키 확인)가 Dexie 보다 훨씬 쉬워서다. 진실은 meta 쪽.
+    // (콘솔에서 키 확인)가 Dexie 보다 훨씬 쉬워서다. 진실은 meta 쪽이지만,
+    // meta 가 비면 getExtensionKey 가 이 미러로 되돌린다.
     await chrome.storage.local.set({ extensionKey: extension_key });
+
+    // **발급했다는 사실을 남긴다.** 첫 설치면 배너 한 줄이 스쳐갈 뿐이지만,
+    // 스토리지를 잃은 재설치면 이게 유일한 경고다 — 확장은 둘을 구분할 수
+    // 없으니 양쪽 모두에 알리고 판단은 사람이 한다.
+    await db.meta.put({ key: KEY_NOTICE, value: { issuedAt: Date.now() } });
+    await syncKeyNoticeBadge();
   } catch {
     // 실패해도 죽지 않는다 — retry 알람 핸들러(handleRetry)가 미등록 상태를
     // 감지해 재시도하는 것으로 커버된다는 전제.
@@ -112,6 +151,9 @@ void (async () => {
     console.warn('[NA] sessionCheck 알람이 없어 다시 등록한다');
     registerAlarms();
   }
+  // 배지는 브라우저 재시작으로 사라진다. 경고는 사용자가 확인할 때까지
+  // 살아 있어야 하므로 워커가 깨어날 때마다 meta 를 보고 다시 세운다.
+  await syncKeyNoticeBadge();
 })();
 
 // ── meta 테이블 헬퍼 (currentSession draft, extensionKey) ──
@@ -129,9 +171,36 @@ async function saveCurrentSession(draft: SessionDraft | null): Promise<void> {
   }
 }
 
+/**
+ * 확장 키 — **Dexie 가 진실이지만 유일한 사본은 아니다.**
+ *
+ * 예전에는 meta 한 곳만 봤다. 그런데 이 키가 곧 계정 전체다(비밀번호가 없다).
+ * IndexedDB 가 비면 registerExtensionKey 의 `if (existing) return` 가드가
+ * 무력해져 새 키를 발급받고, 그 순간 **캐릭터가 통째로 갈린다.**
+ *
+ * 실제로 났다 — 2026-08-08 14:48 에 유저가 둘로 쪼개졌고, 그 뒤 세션은 전부
+ * 이름 없는 새 계정에 쌓였다(사이트 쿠키는 옛 키라 화면에는 안 보였다).
+ * registerExtensionKey 는 처음부터 chrome.storage.local 에 미러를 써두고
+ * 있었는데 **읽는 코드가 없었다.** 백업이 바로 옆에 있는데 안 쓴 셈이다.
+ *
+ * 미러가 살아 있으면 Dexie 쪽도 되돌려놓는다 — 다음 호출부터는 한 번에 끝난다.
+ */
 async function getExtensionKey(): Promise<string | undefined> {
   const row = await db.meta.get('extensionKey');
-  return row?.value as string | undefined;
+  if (typeof row?.value === 'string' && row.value.length > 0) return row.value;
+
+  try {
+    const { extensionKey } = await chrome.storage.local.get('extensionKey');
+    if (typeof extensionKey === 'string' && extensionKey.length > 0) {
+      console.warn('[NA] meta 에 키가 없어 storage.local 미러로 복구한다');
+      await db.meta.put({ key: 'extensionKey', value: extensionKey });
+      return extensionKey;
+    }
+  } catch (err) {
+    // storage 접근 실패는 삼킨다 — 여기서 던지면 마감·전송 경로가 통째로 멈춘다.
+    console.error('[NA] storage.local 미러 조회 실패', err);
+  }
+  return undefined;
 }
 
 /**
@@ -473,12 +542,13 @@ async function handleStartup(): Promise<void> {
  *    그대로 태워야 맞는다. 팝업에 규칙을 복제하면 그 미리보기가 언젠가 거짓말을 한다.
  */
 async function buildSessionSnapshot(now: number): Promise<SessionSnapshot> {
-  const [draft, pendings, archived, rawEventCount, extensionKey] = await Promise.all([
+  const [draft, pendings, archived, rawEventCount, extensionKey, keyNotice] = await Promise.all([
     loadCurrentSession(),
     db.pending.toArray(),
     db.archive.toArray(), // 3일치라 수십 건 규모 — 전량을 읽어도 부담이 없다
     db.rawEvents.count(),
     getExtensionKey(),
+    loadKeyNotice(),
   ]);
 
   let snapshotDraft: SnapshotDraft | null = null;
@@ -538,6 +608,7 @@ async function buildSessionSnapshot(now: number): Promise<SessionSnapshot> {
     },
     rawEvents: rawEventCount,
     connected: Boolean(extensionKey),
+    keyNotice,
   };
 }
 
@@ -546,7 +617,19 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   // 스택만 찍히고 어느 단계에서 죽었는지 알 수 없다 — handleSessionCheck 은
   // archive.put(quota 초과 가능)까지 await 하므로 조용히 죽을 수 있다.
   // 다음 알람이 1분 뒤 다시 돌아 자체 복구되지만, 반복되면 알아야 한다.
-  const report = (name: string) => (err: unknown) => console.error(`[NA] ${name} 실패`, err);
+  // err 를 그대로 넘기면 콘솔에 "[object Object]" 로만 찍힌다 — Dexie 의
+  // DexieError 도 DOMException 도 Error 를 상속하지 않아서 기본 표시가 그렇다.
+  // 정작 원인은 name(QuotaExceededError·DatabaseClosedError 등)에 있으므로
+  // 먼저 풀어서 한 줄로 남기고, 원본은 뒤에 붙여 펼쳐볼 수 있게 둔다.
+  const report = (name: string) => (err: unknown) => {
+    const e = err as { name?: string; message?: string; inner?: unknown };
+    const inner = e?.inner as { name?: string; message?: string } | undefined;
+    console.error(
+      `[NA] ${name} 실패: ${e?.name ?? 'Error'}: ${e?.message ?? String(err)}` +
+        (inner ? ` (inner: ${inner.name}: ${inner.message})` : ''),
+      err,
+    );
+  };
   switch (alarm.name) {
     case ALARM_SESSION_CHECK:
       void handleSessionCheck().catch(report('sessionCheck'));
@@ -589,6 +672,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // (알람이 도는 시점은 그대로다). 팝업을 열어보는 행위가 데이터에 영향을 주면 안 된다.
   if (message?.type === 'GET_SESSION_SNAPSHOT') {
     void buildSessionSnapshot(Date.now()).then(sendResponse);
+    return true;
+  }
+
+  // 팝업에서 "이걸 봤다" — 새 키 발급 경고를 내린다. 배지도 함께 끈다.
+  // 여기서만 지운다: 시간이 지났다고 자동으로 사라지면 경고가 아니다.
+  if (message?.type === 'ACK_KEY_NOTICE') {
+    void db.meta
+      .delete(KEY_NOTICE)
+      .then(() => syncKeyNoticeBadge())
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => {
+        console.error('[NA] 키 경고 해제 실패', err);
+        sendResponse({ ok: false });
+      });
     return true;
   }
 

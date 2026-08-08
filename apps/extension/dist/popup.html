@@ -106,6 +106,59 @@
         font-variant-numeric: tabular-nums;
       }
 
+      /* ── 새 키 발급 경고 ── */
+
+      .notice {
+        padding: 12px 16px 13px;
+        background: var(--drop-bg);
+        border-bottom: 1px solid var(--rule);
+      }
+
+      .notice-t {
+        font-weight: 700;
+        color: var(--drop);
+        margin-bottom: 4px;
+      }
+
+      .notice-s {
+        font-size: 12px;
+        color: var(--sub);
+        line-height: 1.55;
+      }
+
+      .notice-actions {
+        display: flex;
+        gap: 6px;
+        margin-top: 10px;
+      }
+
+      .btn {
+        flex: 1;
+        padding: 6px 8px;
+        font: inherit;
+        font-size: 12px;
+        color: var(--fg);
+        background: var(--bg);
+        border: 1px solid var(--rule);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      .btn:hover {
+        border-color: var(--faint);
+      }
+
+      .btn-main {
+        font-weight: 650;
+        color: var(--bg);
+        background: var(--drop);
+        border-color: var(--drop);
+      }
+
+      .btn-main:hover {
+        opacity: 0.88;
+      }
+
       /* ── 전송 미리보기 ── */
 
       .verdict {

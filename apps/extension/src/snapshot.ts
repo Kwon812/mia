@@ -59,6 +59,27 @@ export interface SnapshotQueue {
   skippedItems: { at: number; durationMin: number; closeReason: string; skipReason: string }[];
 }
 
+/**
+ * **새 익명 키를 발급했다**는 사실. 사용자가 확인할 때까지 안 사라진다.
+ *
+ * 이 키가 곧 계정 전체다(비밀번호가 없다). 확장 스토리지가 통째로 날아가면
+ * — 삭제 후 재설치, unpacked 경로 변경 — 확장은 그게 첫 설치인지 재설치인지
+ * 구분할 방법이 없다. `onInstalled` 의 reason 은 둘 다 'install' 이고,
+ * chrome.storage.local 미러도 같은 오리진이라 함께 사라진다.
+ *
+ * 그래서 발급 자체는 막지 않는다(온보딩에 마찰을 주면 첫 사용자가 손해다).
+ * 대신 **조용히 갈리지 않게** 한다 — 배지와 팝업 배너로 알리고, 기존 캐릭터가
+ * 있으면 사이트에서 다시 연결하도록 안내한다.
+ *
+ * 실제로 2026-08-08 14:48 에 이렇게 계정이 둘로 쪼개졌고, 사이트 쿠키는 옛
+ * 키를 가리켜 화면에 아무 표시도 안 났다. 며칠 뒤 "경험이 왜 하나뿐이지"로
+ * 발견됐다 — 그 며칠이 이 배너가 없앨 시간이다.
+ */
+export interface SnapshotKeyNotice {
+  /** 발급 시각(epoch ms) */
+  issuedAt: number;
+}
+
 export interface SessionSnapshot {
   /** 서비스 워커가 스냅샷을 만든 시각 — 팝업의 경과 시간 계산 기준 */
   now: number;
@@ -70,4 +91,6 @@ export interface SessionSnapshot {
   rawEvents: number;
   /** extensionKey 발급 여부 */
   connected: boolean;
+  /** 새 키를 발급했고 아직 사용자가 확인하지 않았으면 그 기록. 아니면 null. */
+  keyNotice: SnapshotKeyNotice | null;
 }

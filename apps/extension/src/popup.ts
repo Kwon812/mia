@@ -13,6 +13,11 @@ import type { SessionSnapshot } from './snapshot';
 // 남은 시간·경과 시간이 매초 흘러야 살아있는 화면이 된다.
 const REFRESH_MS = 1000;
 
+/** 사이트 주소. config.ts 의 API_BASE 와 같은 값을 **리터럴로** 적는다 —
+ *  이 파일이 값 import 를 하는 순간 sw.js 와 공유 청크가 생긴다(파일 상단 주석).
+ *  config.ts 를 바꾸면 여기도 바꾼다. */
+const SITE_BASE = 'https://mia-web-nine.vercel.app';
+
 /** 마감 사유. 버려진 세션이 왜 그 길이였는지를 말해준다 —
  *  switch 로 잘린 조각인지, 그냥 짧게 끝난 것인지. */
 const CLOSE_REASON_LABEL: Record<string, string> = {
@@ -93,6 +98,59 @@ function row(label: string, value: string, valueClass = 'row-v'): HTMLElement {
 }
 
 // ── 렌더 ──
+
+/**
+ * 새 익명 키를 발급했다는 경고 배너 — **맨 위, 닫기 전까지 계속.**
+ *
+ * 확장은 첫 설치와 "스토리지를 잃은 재설치"를 구분할 수 없다(onInstalled 의
+ * reason 이 둘 다 'install' 이고, storage.local 미러도 같은 오리진이라 함께
+ * 사라진다). 그래서 발급은 그대로 하고 사람에게 묻는다.
+ *
+ * 자동으로 사라지지 않는다. 시간이 지나 없어지면 경고가 아니라 알림이 된다 —
+ * 실제로 이 사고는 며칠 뒤 "경험이 왜 하나뿐이지"로 발견됐다.
+ */
+function renderKeyNotice(root: HTMLElement, snap: SessionSnapshot): void {
+  if (!snap.keyNotice) return;
+
+  const box = el('div', 'notice');
+  box.append(
+    el('div', 'notice-t', '새 캐릭터로 시작했어요'),
+    el(
+      'div',
+      'notice-s',
+      `${formatClock(snap.keyNotice.issuedAt)}에 이 브라우저에 새 신원이 발급됐어요. ` +
+        '확장을 처음 설치한 거면 그대로 두면 돼요. 전에 키우던 캐릭터가 있다면 ' +
+        '지금부터의 기록이 그쪽에 안 쌓이니 다시 연결해주세요.',
+    ),
+  );
+
+  const actions = el('div', 'notice-actions');
+
+  const connect = el('button', 'btn btn-main', '기존 캐릭터에 연결');
+  connect.addEventListener('click', () => {
+    // /connect 는 connect-content.js 가 주입되는 곳이라, 열기만 하면 지금 키로
+    // 쿠키가 다시 세팅된다. 옛 키로 되돌리는 것은 사람이 그 화면에서 한다.
+    void chrome.tabs.create({ url: `${SITE_BASE}/connect` });
+  });
+
+  const dismiss = el('button', 'btn', '처음 설치예요');
+  dismiss.addEventListener('click', () => {
+    try {
+      chrome.runtime.sendMessage({ type: 'ACK_KEY_NOTICE' }, () => {
+        // lastError 를 읽지 않으면 콘솔에 경고가 쌓인다. 실패해도 다음 새로고침에
+        // 배너가 그대로 남을 뿐이라 따로 알리지 않는다.
+        void chrome.runtime.lastError;
+        refresh();
+      });
+    } catch {
+      /* 확장 컨텍스트 무효화 — 다음에 다시 뜬다 */
+    }
+  });
+
+  actions.append(connect, dismiss);
+  box.append(actions);
+  root.append(box);
+}
 
 function renderNoSession(root: HTMLElement, snap: SessionSnapshot): void {
   const empty = el('div', 'empty');
@@ -236,6 +294,9 @@ function render(snap: SessionSnapshot): void {
   const root = document.getElementById('app');
   if (!root) return;
   root.replaceChildren();
+
+  // 세션보다 먼저다 — 신원이 갈렸으면 그 아래 숫자는 다 엉뚱한 계정 것이다.
+  renderKeyNotice(root, snap);
 
   if (snap.draft) renderDraft(root, snap);
   else renderNoSession(root, snap);
