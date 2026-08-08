@@ -3132,22 +3132,10 @@ export function OrbitalMap({
   const dominant = useMemo(() => dominantBody(dominantId, threads), [dominantId, threads]);
   const headline: OrbitBody | null = focus ?? dominant;
 
-  // 중심 천체가 쓰고 있는 색이 어느 분야인지. 범례에서 이것만 테를 두른다 —
-  // 중심도 위성과 같은 팔레트를 쓰는데 표시가 없으면 "가운데 저 색은 뭔가"에
-  // 답이 없다. 캔버스 안의 배분과 같은 함수를 써야 색이 어긋나지 않는다.
-  const focusDominantGroup = headline ? groupOfCategory(headline.category).key : null;
-
-  // 이 갈래의 경험에 등장하는 색 묶음만. 카테고리 단위로 적으면 같은 색인
-  // 항목이 둘 나란히 놓여 "왜 같은 색이 둘이지"가 된다 — 색의 범례이므로
-  // 색 단위로 적는다. 정확한 카테고리는 위성을 겨누면 판독값에 나온다.
-  const focusGroups = (() => {
-    if (!headline) return [] as typeof CAT_GROUPS;
-    const known = new Set(headline.referencedIds);
-    const keys = new Set(
-      bodies.filter((b) => known.has(b.id)).map((b) => groupOfCategory(b.category).key),
-    );
-    return CAT_GROUPS.filter((g) => keys.has(g.key));
-  })();
+  // 색 범례와 그것이 쓰던 focusDominantGroup·focusGroups 는 없다.
+  // 갈래를 펼친 화면에서 뺐다 — 분야는 위성을 겨누면 판독값이 이름으로
+  // 말하고, 은하 이름도 분야라 색점을 다시 늘어놓을 자리가 아니었다.
+  // 스킬 칩 목록도 같은 자리에서 함께 뺐다.
 
   return (
     <div ref={wrapRef} className="relative h-full w-full">
@@ -3287,60 +3275,6 @@ export function OrbitalMap({
                 {completing ? "…" : "끝"}
               </button>
             )}
-
-            {/* 이 갈래에 남은 기억의 근거. 제목 바로 아래에 둔다 —
-                무엇이 처음이었나가 먼저, 무슨 일이 있었나가 그다음이다. */}
-            {headline.memory && headline.memory.skills.length > 0 && (
-              <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1.5">
-                {headline.memory.skills.map((sk) => (
-                  <span
-                    key={sk.name}
-                    className={[
-                      "readout rounded-sm border px-1.5 py-0.5 text-[12px]",
-                      sk.firstTime
-                        ? "border-[rgba(160,185,220,0.34)] text-lum-0"
-                        : "border-[rgba(160,185,220,0.12)] text-lum-3",
-                    ].join(" ")}
-                  >
-                    {sk.name}
-                  </span>
-                ))}
-              </div>
-            )}
-
-
-
-            {/* 색 범례 — 색만 칠하고 무슨 뜻인지 안 적으면 그냥 알록달록한 점이 된다.
-                무엇의 범례인지도 적어야 한다. 색점만 늘어놓으면 태그로 읽힌다. */}
-            <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
-              <span className="tick" style={{ color: "var(--color-lum-3)" }}>
-                색 = 분야
-              </span>
-              {focusGroups.map((g) => {
-                const col = g.color;
-                const isCenter = g.key === focusDominantGroup;
-                return (
-                  <span key={g.key} className="flex items-center gap-2">
-                    <span
-                      className="inline-block h-1.5 w-1.5 rounded-full"
-                      style={{
-                        background: `rgb(${col.join(",")})`,
-                        boxShadow: isCenter
-                          ? `0 0 0 3px rgba(${col.join(",")},.28), 0 0 10px 2px rgba(${col.join(",")},.6)`
-                          : `0 0 8px 1px rgba(${col.join(",")},.5)`,
-                      }}
-                    />
-                    <span
-                      className="tick"
-                      style={{ color: isCenter ? "var(--color-lum-0)" : "var(--color-lum-2)" }}
-                      title={isCenter ? "주된 분야 — 중심이 쓰는 색" : undefined}
-                    >
-                      {g.label}
-                    </span>
-                  </span>
-                );
-              })}
-            </div>
 
           </div>
         </div>
