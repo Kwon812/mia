@@ -596,6 +596,11 @@ interface ActiveThreadRow {
   experienceCount: number;
   /** 그 작업에서 마지막으로 한 일. 제목만으로는 무엇을 하던 작업인지 모른다. */
   lastSummary?: string;
+  /** 마지막 활동 이후 지난 날. 목록이 더는 최근순이 아니라서 필요하다 —
+   *  어휘가 겹치면 조용했던 갈래도 올라오므로(findRelevantActiveThreads),
+   *  이게 없으면 모델은 뒤쪽 항목도 방금까지 하던 일로 읽는다.
+   *  옵셔널인 것은 재처리·평가 스크립트가 이 값을 안 만들기 때문이다. */
+  idleDays?: number;
 }
 
 /** tsquery 에 넣지 않는 말. 흔해서 어느 갈래에나 걸린다. */
@@ -725,10 +730,12 @@ async function upsertThreadMemory(
   return 'appended';
 }
 
-async function findDormantCandidates(
-  userId: string,
-  session: SessionRow,
-): Promise<DormantThreadRow[]> {
+/**
+ * 이 세션의 어휘로 만든 tsquery. 후보 검색 두 군데(잠긴 갈래·진행 중 갈래)가
+ * 함께 쓴다 — 같은 어휘로 뽑아야 "왜 저건 올라오고 이건 안 올라오나"가 안 생긴다.
+ * 어휘가 없으면 null.
+ */
+function sessionTsQuery(session: SessionRow): string | null {
   // queries 는 지금 {q, n, first, last} 객체 목록이다(builder.ts 의 CompressedQuery).
   // 옛 세션에는 문자열 배열로 들어 있어 둘 다 받는다 — 객체를 그대로 join 하면
   // 검색어가 통째로 "[object Object]" 가 되어 이 후보 검색에서 사라진다.
@@ -748,10 +755,18 @@ async function findDormantCandidates(
         .filter((w) => w.length >= 2 && !CANDIDATE_STOPWORDS.has(w)),
     ),
   ].slice(0, 40);
-  if (tokens.length === 0) return [];
+  if (tokens.length === 0) return null;
 
   // OR 로 잇는다. tsquery 문법에 쓰이는 글자는 위 split 이 이미 걸러냈다.
-  const query = tokens.join(' | ');
+  return tokens.join(' | ');
+}
+
+async function findDormantCandidates(
+  userId: string,
+  session: SessionRow,
+): Promise<DormantThreadRow[]> {
+  const query = sessionTsQuery(session);
+  if (!query) return [];
 
   const rows = await db.execute<{
     id: string;
@@ -783,6 +798,75 @@ async function findDormantCandidates(
     idleDays: r.idle_days,
     lastSummary: r.last_summary ?? undefined,
   }));
+}
+
+/** 진행 중 갈래 후보 중 **최근 활동순**으로 채우는 몫. */
+const ACTIVE_THREAD_RECENT = 5;
+/** 어휘가 겹쳐 **추가로** 올리는 몫. 최근순에서 밀려난 갈래를 되살린다. */
+const ACTIVE_THREAD_RELEVANT = 3;
+
+/**
+ * 어휘가 겹치는 진행 중 갈래 — **최근순 목록에서 밀려난 것만** 뽑는다.
+ *
+ * 최근 활동순 5개만 주면, 조용했던 갈래는 딱 맞아도 모델 눈에 안 띈다.
+ * 프롬프트가 "목록이 비었으면 무조건 new" 라고 하니 모델은 규칙대로 새로
+ * 만들고, 그러면 그 새 갈래가 최근순 위쪽을 차지해 원래 갈래는 더 밀린다.
+ *
+ * 실측:
+ *   08-07 08:19  "ChatGPT 에서 프롬프트 캐싱 효율성을 조사했다" → new
+ *   08-07 11:43  "Claude 의 주간 한도·referral 조사했다"        → new
+ * 둘 다 ai 분야이고 이미 "AI 도구 활용법 탐색"(ai) 이 있었는데, 마지막 활동이
+ * 08-04 라 각각 6위/7위로 밀려 후보에 없었다. 앞엣것이 갈래를 만들면서
+ * 뒤엣것 차례엔 원래 갈래가 한 칸 더 내려갔다.
+ *
+ * 잠긴 갈래(findDormantCandidates)와 **같은 어휘·같은 랭킹**을 쓴다. 잠겼다는
+ * 이유로 되살릴 수 있는 것을 살아 있다는 이유로 못 찾는 건 앞뒤가 안 맞는다.
+ */
+async function findRelevantActiveThreads(
+  userId: string,
+  session: SessionRow,
+  /** 최근순으로 이미 올라간 갈래. 두 번 적으면 목록이 같은 줄로 찬다. */
+  alreadyListed: readonly string[],
+): Promise<ActiveThreadRow[]> {
+  const query = sessionTsQuery(session);
+  if (!query) return [];
+
+  const rows = await db.execute<{
+    id: string;
+    title: string;
+    category: string;
+    experience_count: number;
+    idle_days: number;
+    last_summary: string | null;
+  }>(sql`
+    select t.id, t.title, t.category, t.experience_count,
+           extract(day from now() - t.last_activity_at)::int as idle_days,
+           (select e2.summary from ${experiences} e2
+             where e2.thread_id = t.id order by e2.occurred_at desc limit 1) as last_summary
+      from ${threads} t
+      join ${experiences} e on e.thread_id = t.id
+     where t.user_id = ${userId}
+       and t.status = 'active'
+       and (to_tsvector('simple', e.summary) @@ to_tsquery('simple', ${query})
+         or to_tsvector('simple', t.title)  @@ to_tsquery('simple', ${query}))
+     group by t.id, t.title, t.category, t.experience_count, t.last_activity_at
+     order by sum(ts_rank(to_tsvector('simple', e.summary), to_tsquery('simple', ${query}))) desc
+     limit ${ACTIVE_THREAD_RECENT + ACTIVE_THREAD_RELEVANT}`);
+
+  // 제외는 SQL 이 아니라 여기서 한다. 상한이 한 자리라 넘겨받아 거르는 편이
+  // uuid 배열 바인딩보다 단순하고, SQL 쪽 limit 이 제외분을 미리 덮어준다.
+  const listed = new Set(alreadyListed);
+  return rows
+    .filter((r) => !listed.has(r.id))
+    .slice(0, ACTIVE_THREAD_RELEVANT)
+    .map((r) => ({
+      id: r.id,
+      title: r.title,
+      category: r.category,
+      experienceCount: r.experience_count,
+      idleDays: r.idle_days,
+      lastSummary: r.last_summary ?? undefined,
+    }));
 }
 
 /**
@@ -895,7 +979,10 @@ function buildActiveThreadsList(activeThreads: ActiveThreadRow[]): string {
   // 된다. 마지막으로 한 일을 함께 줘야 "이번 세션이 그 다음 단계인가"를 볼 수 있다.
   return activeThreads
     .map((t, i) => {
-      const head = `${i + 1}. id=${t.id} · "${t.title}" (카테고리: ${t.category}, 경험 ${t.experienceCount}건)`;
+      // 마지막 활동을 함께 적는다. 목록이 최근순만이 아니게 됐으므로(어휘가
+      // 겹치면 조용했던 갈래도 올라온다) 없으면 뒤쪽 항목을 방금 하던 일로 읽는다.
+      const idle = t.idleDays === undefined ? '' : `, 마지막 활동 ${t.idleDays}일 전`;
+      const head = `${i + 1}. id=${t.id} · "${t.title}" (카테고리: ${t.category}, 경험 ${t.experienceCount}건${idle})`;
       return t.lastSummary ? `${head}\n   최근: ${t.lastSummary}` : head;
     })
     .join('\n');
@@ -956,7 +1043,7 @@ export function buildUserMessage(
     ...(patternList
       ? ['### 네가 바로잡힌 판정 (사람이 고친 것)', patternList, '']
       : []),
-    '### 진행 중인 작업(thread) 목록 (최근 활동순, 최대 5개)',
+    '### 진행 중인 작업(thread) 목록 (최근 활동순 + 이번 세션과 어휘가 겹치는 것)',
     buildActiveThreadsList(activeThreads),
     '',
     // 잠긴 작업은 후보가 있을 때만 넣는다. 없으면 절 자체가 사라져 지금까지와
@@ -1389,16 +1476,29 @@ export async function processSession(sessionId: string, userId: string): Promise
            where e2.thread_id = ${threads.id}
            order by e2.occurred_at desc limit 1
         )`,
+        idleDays: sql<number>`extract(day from now() - ${threads.lastActivityAt})::int`,
       })
       .from(threads)
       .where(and(eq(threads.userId, userId), eq(threads.status, 'active')))
       .orderBy(desc(threads.lastActivityAt))
-      .limit(5);
+      .limit(ACTIVE_THREAD_RECENT);
     // null → undefined. 잠긴 갈래 쪽(findDormantCandidates)과 같은 모양으로 맞춘다.
-    const activeThreadRows: ActiveThreadRow[] = activeThreadRaw.map((t) => ({
+    const recentThreadRows: ActiveThreadRow[] = activeThreadRaw.map((t) => ({
       ...t,
       lastSummary: t.lastSummary ?? undefined,
     }));
+
+    // 최근순에서 밀려났지만 이번 세션과 어휘가 겹치는 갈래를 뒤에 붙인다.
+    // 최근순만 주면 조용했던 갈래는 딱 맞아도 안 보이고, 모델은 규칙대로
+    // 새로 만든다 — 그 새 갈래가 다음번엔 위쪽을 차지해 원래 갈래를 더 밀어낸다.
+    const activeThreadRows: ActiveThreadRow[] = [
+      ...recentThreadRows,
+      ...(await findRelevantActiveThreads(
+        userId,
+        session,
+        recentThreadRows.map((t) => t.id),
+      )),
+    ];
 
     // 잠긴 작업 후보. 3년 전 갈래도 다시 이어질 수 있어야 한다 —
     // 사람 기억에 "끝"은 드물고, 대개는 한동안 안 건드릴 뿐이다.
