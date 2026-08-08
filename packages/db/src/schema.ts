@@ -454,14 +454,8 @@ export const llmOutputs = pgTable(
 // 사람의 판단이 시스템에 들어오는 유일한 통로다.
 // ============================================================
 
-/** 교정 가능한 필드 — 이산값만 받는다. 자유 서술은 받지 않는다(사용자 결정).
- *
- *  `thread` 만 성격이 다르다. 나머지 셋은 라벨이라 human_value 가 열거값이고
- *  읽을 때 겹치면 끝이지만, 갈래는 **관계**라 human_value 가 갈래 **제목**이고
- *  experiences.thread_id 를 실제로 옮긴다(lib/corrections.ts 의
- *  moveExperienceToThread 참고). id 가 아니라 제목인 것은 재구축이 threads 를
- *  다시 만들어 uuid 가 매번 새로 발급되기 때문이다 — 제목이라야 다시 이어진다. */
-export const CORRECTION_FIELDS = ['outcome', 'category', 'is_first_time', 'thread'] as const;
+/** 교정 가능한 필드 — 이산값만 받는다. 자유 서술은 받지 않는다(사용자 결정). */
+export const CORRECTION_FIELDS = ['outcome', 'category', 'is_first_time'] as const;
 export const CORRECTION_SOURCES = ['diary', 'ask'] as const;
 
 /**
@@ -491,7 +485,7 @@ export const questions = pgTable(
   },
   (t) => [
     index('idx_questions_open').on(t.userId, t.askedAt.desc()),
-    check('questions_field_check', sql`${t.field} in ('outcome','category','is_first_time','thread')`),
+    check('questions_field_check', sql`${t.field} in ('outcome','category','is_first_time')`),
     unique('questions_unique_target').on(t.experienceId, t.field),
   ],
 );
@@ -529,7 +523,7 @@ export const corrections = pgTable(
   (t) => [
     index('idx_corrections_latest').on(t.experienceId, t.field, t.createdAt.desc()),
     index('idx_corrections_user_time').on(t.userId, t.createdAt.desc()),
-    check('corrections_field_check', sql`${t.field} in ('outcome','category','is_first_time','thread')`),
+    check('corrections_field_check', sql`${t.field} in ('outcome','category','is_first_time')`),
     check('corrections_source_check', sql`${t.source} in ('diary','ask')`),
   ],
 );

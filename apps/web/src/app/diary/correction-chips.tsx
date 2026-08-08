@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { correctExperience } from "@/app/actions";
-import { FIELD_OPTIONS, FIELD_TITLE, NO_THREAD_LABEL, labelOf } from "@/lib/labels";
+import { FIELD_OPTIONS, labelOf } from "@/lib/labels";
 import type { CorrectionField } from "@/lib/corrections";
 
 // 층 1 — 판정 교정 UI.
@@ -21,27 +21,9 @@ type Values = {
   category: string;
   outcome: string;
   is_first_time: string;
-  /** 지금 붙어 있는 갈래 제목. 안 붙었으면 빈 문자열. */
-  thread: string;
 };
 
-// 갈래를 맨 끝에 둔다. 앞의 셋은 이 경험 자체에 대한 판정이고 갈래만 다른
-// 경험들과의 관계라, 섞으면 무엇을 고치는 건지 헷갈린다.
-const FIELD_ORDER: CorrectionField[] = ["category", "outcome", "is_first_time", "thread"];
-
-/** 갈래 제목 상한 — actions.ts 의 MAX_THREAD_TITLE_LENGTH 와 같은 값. */
-const MAX_THREAD_TITLE_LENGTH = 100;
-/** 칩에 들어갈 갈래 제목 길이. 넘으면 한 줄이 칩 하나로 다 찬다. */
-const CHIP_TITLE_LEN = 12;
-
-/** 칩에 적을 글자. 앞의 셋은 열거라 라벨표를 쓰고, 갈래는 제목 그 자체다. */
-function chipText(field: CorrectionField, values: Values): string {
-  if (field !== "thread") return labelOf(field, values[field]);
-  if (!values.thread) return NO_THREAD_LABEL;
-  return values.thread.length > CHIP_TITLE_LEN
-    ? `${values.thread.slice(0, CHIP_TITLE_LEN)}…`
-    : values.thread;
-}
+const FIELD_ORDER: CorrectionField[] = ["category", "outcome", "is_first_time"];
 
 export function CorrectionRow({
   experienceId,
@@ -49,7 +31,6 @@ export function CorrectionRow({
   summary,
   values,
   corrected,
-  threadTitles,
 }: {
   experienceId: string;
   time: string;
@@ -57,8 +38,6 @@ export function CorrectionRow({
   values: Values;
   /** 사람이 손댄 필드 집합 */
   corrected: Partial<Record<CorrectionField, boolean>>;
-  /** 고를 수 있는 기존 갈래 제목들. 여기 없는 이름을 적으면 새로 만든다. */
-  threadTitles: readonly string[];
 }) {
   const [open, setOpen] = useState<CorrectionField | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +81,7 @@ export function CorrectionRow({
               type="button"
               onClick={() => setOpen((v) => (v === field ? null : field))}
               disabled={pending}
-              aria-label={`${FIELD_TITLE[field]} 고치기 — 지금 ${chipText(field, values)}`}
+              aria-label={`${FIELD_OPTIONS[field].title} 고치기 — 지금 ${labelOf(field, values[field])}`}
               aria-expanded={open === field}
               className={[
                 "readout rounded-sm border px-1.5 py-0.5 text-[12px] transition-colors",
@@ -115,7 +94,7 @@ export function CorrectionRow({
                 pending ? "opacity-40" : "",
               ].join(" ")}
             >
-              {chipText(field, values)}
+              {labelOf(field, values[field])}
               {corrected[field] && <span className="ml-1 text-lum-4">·</span>}
             </button>
           ))}
@@ -127,60 +106,22 @@ export function CorrectionRow({
           ref={panelRef}
           className="ml-[3.25rem] flex flex-wrap items-center gap-1 border-l border-[rgba(160,185,220,0.12)] py-1.5 pl-3"
         >
-          <span className="readout mr-1 text-[11.5px] text-lum-4">{FIELD_TITLE[open]}</span>
-          {open === "thread"
-            ? // 갈래는 선택지가 고정이 아니다 — 기존 갈래를 고르거나 새 이름을
-              // 적는다. 적는 쪽이 있어야 "지금 목록에 없는 일"을 표현할 수 있고,
-              // 잘못 뭉친 갈래를 풀어내는 건 대개 그 경우다.
-              threadTitles.map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => choose("thread", t)}
-                  title={t}
-                  className={[
-                    "readout max-w-[16rem] truncate rounded-sm px-1.5 py-0.5 text-[12px] transition-colors",
-                    t === values.thread
-                      ? "bg-[rgba(160,185,220,0.14)] text-lum-0"
-                      : "text-lum-2 hover:bg-[rgba(160,185,220,0.1)] hover:text-lum-0",
-                  ].join(" ")}
-                >
-                  {t}
-                </button>
-              ))
-            : FIELD_OPTIONS[open].options.map((o) => (
-                <button
-                  key={o.value}
-                  type="button"
-                  onClick={() => choose(open, o.value)}
-                  className={[
-                    "readout rounded-sm px-1.5 py-0.5 text-[12px] whitespace-nowrap transition-colors",
-                    o.value === values[open]
-                      ? "bg-[rgba(160,185,220,0.14)] text-lum-0"
-                      : "text-lum-2 hover:bg-[rgba(160,185,220,0.1)] hover:text-lum-0",
-                  ].join(" ")}
-                >
-                  {o.label}
-                </button>
-              ))}
-          {open === "thread" && (
-            <input
-              type="text"
-              defaultValue=""
-              placeholder="새 갈래 이름"
-              maxLength={MAX_THREAD_TITLE_LENGTH}
-              disabled={pending}
-              // Enter 로만 확정한다. onBlur 로 확정하면 훑어보다 다른 데를
-              // 눌렀을 뿐인데 갈래가 바뀐다 — 되돌리기 어려운 쪽 실수다.
-              onKeyDown={(e) => {
-                if (e.key !== "Enter") return;
-                e.preventDefault();
-                const v = e.currentTarget.value.trim();
-                if (v) choose("thread", v);
-              }}
-              className="readout min-w-[9rem] flex-1 rounded-sm border border-[rgba(160,185,220,0.14)] bg-transparent px-1.5 py-0.5 text-[12px] text-lum-1 outline-none placeholder:text-lum-4 focus:border-[rgba(160,185,220,0.4)]"
-            />
-          )}
+          <span className="readout mr-1 text-[11.5px] text-lum-4">{FIELD_OPTIONS[open].title}</span>
+          {FIELD_OPTIONS[open].options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => choose(open, o.value)}
+              className={[
+                "readout rounded-sm px-1.5 py-0.5 text-[12px] whitespace-nowrap transition-colors",
+                o.value === values[open]
+                  ? "bg-[rgba(160,185,220,0.14)] text-lum-0"
+                  : "text-lum-2 hover:bg-[rgba(160,185,220,0.1)] hover:text-lum-0",
+              ].join(" ")}
+            >
+              {o.label}
+            </button>
+          ))}
           <button
             type="button"
             onClick={() => setOpen(null)}

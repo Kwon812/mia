@@ -24,8 +24,6 @@ process.env.DATABASE_URL ||= readEnv('DATABASE_URL');
 process.env.ANTHROPIC_API_KEY ||= readEnv('ANTHROPIC_API_KEY');
 
 const { processSession } = await import('../src/lib/experience-engine');
-// 위와 같은 이유로 env 를 세운 **뒤에** 불러온다 — db 커넥션을 모듈 최상단에서 만든다.
-const { moveExperienceToThread } = await import('../src/lib/corrections');
 
 const APPLY = process.argv.includes('--apply');
 const sql = postgres(process.env.DATABASE_URL!, { prepare: false });
@@ -237,25 +235,6 @@ for (const [i, s] of sessions.entries()) {
     if (!e) { orphaned += 1; continue; }
     await sql`insert into corrections (user_id, experience_id, field, model_value, human_value, source, created_at)
       values (${c.user_id}, ${e.id}, ${c.field}, ${c.model_value}, ${c.human_value}, ${c.source}, ${c.created_at})`;
-    // ── 갈래 교정은 **행을 되돌리는 것만으로는 아무 일도 안 일어난다** ──
-    //
-    // 나머지 세 필드는 읽을 때 겹쳐서 유효값이 되지만, 갈래는 관계라
-    // experiences.thread_id 를 실제로 옮겨야 한다. 그 UPDATE 는 재구축이
-    // 지운 것이므로 여기서 다시 적용한다. 안 하면 사람이 고쳐놓은 갈래가
-    // 재구축 한 번에 원래대로 돌아가고, 교정은 아무 데도 안 쓰이는 라벨
-    // 더미가 된다 — 이 기능을 만든 이유가 정확히 그것이었다.
-    //
-    // 다음 세션들이 이걸 보고 판정하므로 순서가 중요하다. 세션을 시간순으로
-    // 돌기 때문에, 여기서 옮기면 뒤이은 세션의 갈래 후보 목록에 그 갈래가
-    // 이미 올라와 있고 옛 갈래의 "최근:" 줄에서도 빠져 있다. 실측된 연쇄
-    // 오염(08-04 잘못 붙음 → 08-05·08-06 이 그 줄을 보고 따라 붙음)이
-    // 끊기는 지점이 바로 이 자리다.
-    if (c.field === 'thread') {
-      const moved = await moveExperienceToThread({
-        userId: c.user_id, experienceId: e.id, title: c.human_value,
-      });
-      if (!moved.ok) console.warn(`  ⚠ 갈래 교정 반영 실패: ${c.human_value} — ${moved.error}`);
-    }
     restored += 1;
   }
 

@@ -30,10 +30,6 @@ export function AskCard({ question }: { question: AskQuestion }) {
   const [pending, startTransition] = useTransition();
 
   if (gone) return null;
-  // 갈래는 이 카드로 못 묻는다 — 선택지가 열려 있어서 "맞아/아니야" 모양에
-  // 안 들어간다. 배치도 갈래 질문을 만들지 않으므로 실제로는 안 오지만,
-  // 타입이 열려 있으니 여기서 닫는다.
-  if (question.field === "thread") return null;
 
   const { options } = FIELD_OPTIONS[question.field];
 

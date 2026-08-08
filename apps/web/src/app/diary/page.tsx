@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { desc, eq, inArray } from "drizzle-orm";
-import { dailyLogs, experiences, threads } from "@na/db";
+import { dailyLogs, experiences } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { Head, Shell, Empty } from "@/components/shell";
@@ -41,24 +41,11 @@ export default async function DiaryPage() {
           category: experiences.category,
           outcome: experiences.outcome,
           isFirstTime: experiences.isFirstTime,
-          // 갈래만 조인해서 가져온다. 나머지 셋과 달리 겹쳐 읽지 않고 실제로
-          // 옮기므로(lib/corrections.ts), 여기 값이 곧 유효값이다.
-          threadTitle: threads.title,
         })
         .from(experiences)
-        .leftJoin(threads, eq(threads.id, experiences.threadId))
         .where(inArray(experiences.id, experienceIds))
         .orderBy(experiences.occurredAt)
     : [];
-
-  // 고를 수 있는 갈래 목록. 완결된 것도 넣는다 — 끝난 일에 뒤늦게 경험을
-  // 붙이는 것도 정당한 교정이다.
-  const threadRows = await db
-    .select({ title: threads.title })
-    .from(threads)
-    .where(eq(threads.userId, user.userId))
-    .orderBy(desc(threads.lastActivityAt));
-  const threadTitles = [...new Set(threadRows.map((t) => t.title))];
 
   // declared 를 inferred 위에 겹친다. experiences 는 건드리지 않는다 —
   // 유효값은 저장된 값이 아니라 읽을 때 만드는 값이다.
@@ -126,19 +113,11 @@ export default async function DiaryPage() {
                             experienceId={e.id}
                             time={formatKstTime(e.occurredAt)}
                             summary={e.summary}
-                            values={{
-                              category,
-                              outcome,
-                              is_first_time: first,
-                              // 겹치지 않는다 — 옮겨진 결과가 이미 조인에 들어 있다.
-                              thread: e.threadTitle ?? "",
-                            }}
-                            threadTitles={threadTitles}
+                            values={{ category, outcome, is_first_time: first }}
                             corrected={{
                               category: isCorrected(corrections, e.id, "category"),
                               outcome: isCorrected(corrections, e.id, "outcome"),
                               is_first_time: isCorrected(corrections, e.id, "is_first_time"),
-                              thread: isCorrected(corrections, e.id, "thread"),
                             }}
                           />
                         );

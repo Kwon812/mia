@@ -578,12 +578,6 @@ interface RecentExperienceRow {
    *  is_first_time 은 기억(memories) 생성 경로를 여닫는 값이고 v3 에서 판정
    *  기준을 완화한 자리라, 사람 교정이 특히 값진 필드이기도 하다. */
   isFirstTime?: boolean;
-  /** 이 경험이 붙은 갈래 제목. 안 붙었으면 null.
-   *
-   *  갈래 후보 목록과 겹치는 정보로 보이지만 방향이 반대다. 후보 목록은
-   *  "이런 작업들이 있다"이고, 이 줄은 "직전 세 건이 각각 어디로 갔다"다 —
-   *  갈래 교정이 붙은 경험에서 그 차이가 드러난다. */
-  threadTitle?: string | null;
   /** 이 경험의 판정을 사람이 고쳤는가. 프롬프트에서 declared 로 표시된다 —
    *  표시가 없으면 모델은 자기가 예전에 낸 값과 구분하지 못한다. */
   corrected?: boolean;
@@ -1024,9 +1018,7 @@ export function buildUserMessage(
             // 교정 가능한 세 필드를 전부 적는다. 하나라도 빠지면 그 필드만
             // 고쳤을 때 표시는 붙는데 줄은 그대로라, 무엇이 고쳐졌는지 알 수 없다.
             const first = e.isFirstTime === undefined ? '' : `/${e.isFirstTime ? '처음' : '해봄'}`;
-            // 갈래는 값이 문장이라 대괄호 안에 넣으면 앞의 열거값들과 섞인다.
-            const th = e.threadTitle ? ` → 갈래 "${e.threadTitle}"` : '';
-            return `${i + 1}. [${e.category}/${e.outcome ?? '-'}${first}]${mark} ${e.summary}${th}`;
+            return `${i + 1}. [${e.category}/${e.outcome ?? '-'}${first}]${mark} ${e.summary}`;
           })
           .join('\n')
       : '(아직 기록된 경험 없음)';
@@ -1379,13 +1371,8 @@ export async function processSession(sessionId: string, userId: string): Promise
         outcome: experiences.outcome,
         isFirstTime: experiences.isFirstTime,
         occurredAt: experiences.occurredAt,
-        // 어느 갈래의 일이었는지. 이 줄이 없으면 갈래를 고친 경험에 [사람이
-        // 고침] 표시만 붙고 무엇이 고쳐졌는지는 안 보인다 — 나머지 세 필드를
-        // 다 적는 것과 같은 이유다.
-        threadTitle: threads.title,
       })
       .from(experiences)
-      .leftJoin(threads, eq(threads.id, experiences.threadId))
       // **이 세션보다 앞선 것만.** 확장이 오프라인이었다가 사흘 뒤에 세션을
       // 보내면, 유저 조건만 걸었을 때 "최근 경험 3건"에 그 세션보다 나중에
       // 일어난 경험이 들어간다 — 모델이 미래를 보고 판정하는 셈이다.
@@ -1409,14 +1396,10 @@ export async function processSession(sessionId: string, userId: string): Promise
       outcome: effective(recentCorrections, e.id, 'outcome', e.outcome ?? ''),
       isFirstTime:
         effective(recentCorrections, e.id, 'is_first_time', String(e.isFirstTime)) === 'true',
-      // 갈래만 겹치지 않는다 — 교정이 experiences.thread_id 를 실제로 옮기므로
-      // 조인해서 읽은 값이 이미 유효값이다.
-      threadTitle: e.threadTitle,
       corrected:
         isCorrected(recentCorrections, e.id, 'category') ||
         isCorrected(recentCorrections, e.id, 'outcome') ||
-        isCorrected(recentCorrections, e.id, 'is_first_time') ||
-        isCorrected(recentCorrections, e.id, 'thread'),
+        isCorrected(recentCorrections, e.id, 'is_first_time'),
     }));
 
     // 최근 경험 3건 각각의 "주요 스킬"(weight 최댓값) — 반복 패턴 판정용.

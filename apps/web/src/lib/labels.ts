@@ -32,15 +32,3 @@ export const FIELD_OPTIONS = {
 export function labelOf(field: keyof typeof FIELD_OPTIONS, value: string): string {
   return FIELD_OPTIONS[field].options.find((o) => o.value === value)?.label ?? value;
 }
-
-/** 필드 이름 표기. FIELD_OPTIONS 와 따로 두는 것은 thread 때문이다 — 값이
- *  열거가 아니라 갈래 제목이라 선택지 표를 못 만든다. */
-export const FIELD_TITLE = {
-  outcome: "결과",
-  category: "분야",
-  is_first_time: "처음인가",
-  thread: "갈래",
-} as const;
-
-/** 갈래가 아직 안 붙은 경험도 있다. 칩에 빈 문자열을 쓰면 누를 데가 없어진다. */
-export const NO_THREAD_LABEL = "갈래 없음";
