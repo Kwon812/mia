@@ -1,8 +1,11 @@
 import 'server-only';
 
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { corrections, experiences, memories, questions, threads, type CORRECTION_FIELDS } from '@na/db';
 import { db } from './db';
+// memory-score 는 순수 계산이라 여기서 불러도 순환이 안 생긴다.
+// experience-engine 쪽 upsertThreadMemory 를 쓰면 순환이다 — 그쪽이 이 파일을 쓴다.
+import { memoryImportance } from './memory-score';
 
 // ============================================================
 // 사람 판단(declared) 읽기·쓰기
@@ -177,11 +180,9 @@ export async function moveExperienceToThread(params: {
     if (from === targetId) return { ok: true }; // 이미 거기 있다
 
     await tx.update(experiences).set({ threadId: targetId }).where(eq(experiences.id, exp.id));
-    // 기억은 따라오지 않는다. memories 에 갈래당 하나(uq_memories_thread)라는
-    // 제약이 걸려 있어 옮기면 대상 갈래에 이미 기억이 있을 때 터진다. 그리고
-    // 갈래 기억('deepened'·완결)은 애초에 그 **갈래**에 대한 진술이라, 경험
-    // 하나가 빠져나가도 그 갈래에 남는 게 맞다. 근거 목록은 experience_ids 로
-    // 따로 들고 있으므로 어느 경험에서 나왔는지는 그대로 남는다.
+    // 기억은 여기서 안 건드린다. 갈래가 **비었을 때만** 따라간다(resyncThread) —
+    // 경험 하나가 빠져도 갈래에 다른 경험이 남아 있으면 그 기억은 여전히 그
+    // 갈래의 것이고, 근거 목록(experience_ids)은 그대로다.
 
     await resyncThread(tx, targetId);
     if (from) await resyncThread(tx, from);
@@ -213,57 +214,115 @@ async function resyncThread(tx: Tx, threadId: string): Promise<void> {
     ) s
     where t.id = ${threadId}`);
 
-  // ── 비었으면 기억을 떼고 갈래를 지운다 ──
+  // ── 비었으면 기억을 옮기고 갈래를 지운다 ──
   //
-  // 예전에는 기억이 있으면 그냥 뒀는데, 실측으로 대가가 드러났다. 재구축 4회차
-  // 뒤 경험 0건인데 기억을 문 갈래가 셋 남았다:
+  // 이 시스템에서 **갈래 없는 기억은 없다.** 기억을 만드는 두 경로가 전부
+  // 갈래를 요구한다 — `upsertThreadMemory(threadId: string)` 이고,
+  // memory-recheck 는 아예 `if (!exp.threadId) return` 으로 막는다("갈래에
+  // 안 붙은 경험은 모을 자리가 없다"). `uq_memories_thread` 도 갈래당 하나다.
+  // 경험이 갈래에 모이고, 그 갈래가 기억이 된다.
   //
-  //   "Army Sim 개발 상태 확인" · "KT Cloud TECH UP 2기 팀 프로젝트" ·
-  //   "대한항공 마일리지 활용"   — 전부 new_skill 기억 1개씩
+  // 그런데 갈래 교정이 **경험이 갈래에서 빠지는** 새 상태를 만들었다. 원래
+  // 갈래가 비면 그 갈래는 아무것도 안 가리키는 유령인데 후보 목록에는 계속
+  // 올라와 다음 판정을 끌어당긴다. 지워야 하지만 기억이 물고 있다.
   //
-  // 교정이 경험을 빼가면서 빈 것이다. 근거 경험은 다른 갈래로 갔으니 그
-  // 갈래는 아무것도 안 가리키는 유령인데, 후보 목록에는 계속 올라와 다음
-  // 판정을 끌어당긴다.
+  // 처음엔 thread_id 를 NULL 로 떼고 지웠는데 그건 위 규칙을 어긴 것이었다.
+  // 지도가 갈래 없는 기억을 통째로 버려(thread-memories.ts 의
+  // `if (m.threadId == null) continue`) 기억 둘이 화면에서 사라졌다.
   //
-  // **갈래 기억(deepened·thread_complete)은 안 건드린다.** 그건 그 갈래에
-  // 대한 진술이라 갈래가 사라지면 뜻이 없어진다 — 그런 기억이 붙어 있으면
-  // 갈래를 살려둔다.
-  //
-  // 경험 기반 기억(new_skill·breakthrough…)은 **근거 경험을 따라간다.**
-  // 처음엔 그냥 thread_id 를 NULL 로 뗐는데, 지도가 갈래 없는 기억을 통째로
-  // 버린다(thread-memories.ts: `if (m.threadId == null) continue`). 근거 경험은
-  // 멀쩡히 새 갈래에 있는데 기억만 화면에서 사라졌다.
-  //
-  // 근거가 여러 갈래에 흩어졌으면 가장 많은 쪽으로 간다(동률이면 id 순 —
-  // 결정적이라야 재구축마다 안 흔들린다).
-  await tx.execute(sql`
-    update ${memories} m set thread_id = tgt.tid
-      from (
-        select m2.id, (
-          select e.thread_id from ${experiences} e
-           where e.id = any(m2.experience_ids) and e.thread_id is not null
-           group by e.thread_id order by count(*) desc, e.thread_id limit 1
-        ) as tid
-        from ${memories} m2 where m2.thread_id = ${threadId}
-      ) tgt
-     where m.id = tgt.id
-       and tgt.tid is not null
-       and not exists (select 1 from ${experiences} e where e.thread_id = ${threadId})
-       and not (m.triggers && array['deepened','thread_complete'])
-       -- uq_memories_thread(user_id, thread_id) 는 갈래당 기억 하나만 허용한다.
-       -- 목적지에 이미 기억이 있으면 못 간다 — 아래에서 NULL 로 떨어진다.
-       and not exists (
-         select 1 from ${memories} m3
-          where m3.thread_id = tgt.tid and m3.user_id = m.user_id
-            and m3.id <> m.id and m3.forgotten_at is null)`);
+  // 옳은 답은 **기억이 근거 경험을 따라가는 것**이다. 경험이 새 갈래로 갔으면
+  // 기억도 그 갈래의 것이 된다. 그러면 "갈래 = 기억의 주체"가 유지된다.
+  const orphans = await tx
+    .select({
+      id: memories.id,
+      userId: memories.userId,
+      experienceIds: memories.experienceIds,
+      triggers: memories.triggers,
+      trigger: memories.trigger,
+    })
+    .from(memories)
+    .where(eq(memories.threadId, threadId));
 
-  // 갈 곳이 없었던 것만 뗀다 — 근거 경험이 전부 갈래 없이 남았거나, 목적지
-  // 갈래에 이미 기억이 있는 경우다. 기억 자체는 온전히 남는다.
-  await tx.execute(sql`
-    update ${memories} m set thread_id = null
-     where m.thread_id = ${threadId}
-       and not exists (select 1 from ${experiences} e where e.thread_id = ${threadId})
-       and not (m.triggers && array['deepened','thread_complete'])`);
+  for (const m of orphans) {
+    const [{ n }] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(experiences)
+      .where(eq(experiences.threadId, threadId));
+    if (n > 0) break; // 아직 안 비었다
+
+    // 갈래 기억은 그 **갈래**에 대한 진술이라 옮길 데가 없다. 갈래를 살려둔다.
+    const trs = m.triggers.length > 0 ? m.triggers : [m.trigger];
+    if (trs.some((t) => t === 'deepened' || t === 'thread_complete')) continue;
+
+    // 근거가 여러 갈래에 흩어졌으면 가장 많은 쪽. 동률이면 id 순 —
+    // 결정적이라야 재구축마다 안 흔들린다.
+    //
+    // 원시 sql 의 `any(${배열})` 은 못 쓴다. drizzle 이 배열을 파라미터 하나로
+    // 묶지 않고 펼쳐 넣어서 `malformed array literal` 이 난다. inArray 를 쓴다.
+    if (m.experienceIds.length === 0) continue;
+    const [dst] = await tx
+      .select({ tid: experiences.threadId })
+      .from(experiences)
+      .where(and(inArray(experiences.id, m.experienceIds), isNotNull(experiences.threadId)))
+      .groupBy(experiences.threadId)
+      .orderBy(desc(sql`count(*)`), experiences.threadId)
+      .limit(1);
+    // 갈 곳이 없다 — 갈래를 살려둔다. 기억을 잃는 것보다 낫다.
+    if (!dst?.tid) continue;
+
+    const [host] = await tx
+      .select({
+        id: memories.id,
+        experienceIds: memories.experienceIds,
+        triggers: memories.triggers,
+        trigger: memories.trigger,
+      })
+      .from(memories)
+      .where(
+        and(
+          eq(memories.threadId, dst.tid),
+          eq(memories.userId, m.userId),
+          isNull(memories.forgottenAt),
+        ),
+      )
+      .limit(1);
+
+    if (!host) {
+      await tx.update(memories).set({ threadId: dst.tid }).where(eq(memories.id, m.id));
+      continue;
+    }
+
+    // 목적지에 이미 기억이 있다(uq_memories_thread). NULL 로 떨어뜨리지 않고
+    // **합친다** — 같은 갈래에 조건이 또 걸렸을 때 upsertThreadMemory 가 하는
+    // 일과 같다. 근거를 더하고, 이유를 합치고, 중요도를 다시 잰다.
+    const ids = [...new Set([...host.experienceIds, ...m.experienceIds])];
+    const hostTrs = host.triggers.length > 0 ? host.triggers : [host.trigger];
+    const merged = [...new Set([...hostTrs, ...trs])];
+    const [{ cnt }] = await tx
+      .select({ cnt: sql<number>`count(*)::int` })
+      .from(experiences)
+      .where(eq(experiences.threadId, dst.tid));
+    const scores = await tx
+      .select({ s: experiences.memoryScore })
+      .from(experiences)
+      .where(inArray(experiences.id, ids));
+
+    await tx
+      .update(memories)
+      .set({
+        experienceIds: ids,
+        triggers: merged,
+        importance: memoryImportance({
+          evidenceScores: scores.map((r) => r.s),
+          threadExperienceCount: cnt,
+        }),
+        // 근거가 늘었으니 밤 배치가 다시 요약한다. 여기서 LLM 을 부르면
+        // 교정 한 번이 모델 호출을 끌고 온다.
+        needsResummary: true,
+      })
+      .where(eq(memories.id, host.id));
+    await tx.delete(memories).where(eq(memories.id, m.id));
+  }
 
   await tx.execute(sql`
     delete from ${threads} t
