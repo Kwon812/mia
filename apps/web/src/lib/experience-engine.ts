@@ -1292,16 +1292,50 @@ export function planItems(
   // 문턱을 못 넘긴 갈래는 주된 경험으로 되돌린다. 오래 머문 것부터 보고,
   // 개수 상한을 넘긴 것도 같은 자리로 돌아간다 — 버리지 않는다.
   const kept: typeof rest = [];
+  const absorbed: typeof rest = [];
   for (const r of [...rest].sort((a, b) => secOfIds(b.ids) - secOfIds(a.ids))) {
     if (secOfIds(r.ids) >= MIN_SPLIT_SEC && kept.length < MAX_ITEMS_PER_SESSION - 1) {
       kept.push(r);
-      continue;
+    } else {
+      absorbed.push(r);
     }
+  }
+
+  // ── 되돌아갈 거면 head 를 건드리기 전에 ──
+  //
+  // 예전에는 위 루프가 head.detail·skills 를 먼저 고쳐놓고 single() 을 불렀다.
+  // 그런데 single() 은 [head, ...rest] 를 **다시** 합치므로, 흡수된 요약이
+  // detail 에 두 번 들어가고 스킬도 두 번 더해졌다(dedupeSkills 가 weight 를
+  // 합산해 10 으로 포화시킨다). 판정 하나가 두 번 세어지는 셈이었다.
+  if (kept.length === 0) return single();
+
+  for (const r of absorbed) {
     head.detail = [head.detail, r.summary].filter(Boolean).join(' ');
     head.skills.push(...r.skills);
-    head.ids.push(...r.ids);
   }
-  if (kept.length === 0) return single();
+
+  // ── 주 경험의 구간 ──
+  //
+  // **빈 배열은 "세션 전체"라는 뜻이다** — 프롬프트가 그렇게 시키고
+  // (`segment_ids`: "세션 전체가 하나의 일이었으면 빈 배열로 둔다"), 컬럼
+  // 주석도 그렇게 적혀 있다. 그런데 예전에는 여기에 흡수분을 그냥 push 했다.
+  // 전체를 말하던 값이 곁가지 크기로 쪼그라들고, toItem 이 그 크기로 시간을
+  // 재니 나머지가 통째로 증발한다.
+  //
+  // 실측(세션 5dc6a1a0, 2026-08-08): 모델이 head 에 `segment_ids: []`(전체)를
+  // 주고 곁가지 둘을 5분·12분으로 냈다. 5분짜리가 문턱(10분) 미달로 흡수되며
+  // head.ids 가 [] → [5,6] 이 됐고, **130분 세션의 주 경험이 5분짜리가 됐다.**
+  // Render 크론 설정·OpenAI 사용량·Vercel 배포 확인 77분이 아무 경험에도
+  // 안 들어갔다.
+  //
+  // head 가 전체를 말했으면 **갈라져 나간 몫만 빼고** 나머지를 전부 준다.
+  // 모델이 head 에 구간을 적었는데 그게 전부 곁가지와 겹쳐 비어버린 경우도
+  // 같다 — 둘 다 "나머지가 주 경험"이라는 뜻이라 한 갈래로 처리한다.
+  const keptIds = new Set(kept.flatMap((k) => k.ids));
+  head.ids =
+    head.ids.length === 0
+      ? segList.map((_, i) => i).filter((i) => !keptIds.has(i))
+      : [...head.ids, ...absorbed.flatMap((r) => r.ids)];
 
   const toItem = (it: (typeof head) | (typeof rest)[number]): PlannedItem => {
     const ids = [...it.ids].sort((a, b) => a - b);
