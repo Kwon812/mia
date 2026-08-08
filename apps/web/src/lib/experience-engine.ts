@@ -80,8 +80,16 @@ export const TOOL_NAME = 'record_experience';
  *      해야 했다 — LLM 이 특히 못하는 일이다. 실측: 183분 세션(ZEP 68분 ·
  *      Project NA 40분)을 하나로 냈고, 그 경험이 엉뚱한 갈래에 붙어 그 갈래가
  *      오염됐다. A/B 로 재니 분할 개수가 2.2 → 3.0 이 되고 편차도 사라졌다.
- *      판정 규칙은 안 건드렸다(「기본은 나누지 않는다」 그대로). 골든셋 14/17 유지. */
-export const PROMPT_VERSION = 8;
+ *      판정 규칙은 안 건드렸다(「기본은 나누지 않는다」 그대로). 골든셋 14/17 유지.
+ *  v9: 구간마다 **번호(i)를 박아서 준다**(withSegmentIndex). 여태 segments 에는
+ *      i 가 없었는데 프롬프트는 "구간 번호(i)를 적는다"고 시켰다 — 모델이 20칸
+ *      배열의 인덱스를 스스로 세야 했고, 실측에서 그게 전부 어긋났다(세션
+ *      5dc6a1a0: 곁가지 배정이 한 칸씩 밀리고 주 경험은 [20..35]로 범위를 넘김).
+ *      i 가 명시된 earlier.top 만 정확했던 것이 그대로 증거다.
+ *      배정이 틀리면 그 구간들의 sec 합도 틀리고, 그게 곧 분할 문턱과
+ *      duration_min·occurred_at 이다 — 26분짜리 곁가지가 5분으로 잡혀
+ *      나뉘어야 할 것이 안 나뉘었다. 판정 규칙은 안 건드렸다. */
+export const PROMPT_VERSION = 9;
 
 /** 프롬프트에 넣는 보유 스킬 목록의 최대 개수. 판정용 집합과는 다르다. */
 const PROMPT_SKILL_LIMIT = 50;
@@ -110,7 +118,7 @@ function kstYmd(date: Date): string {
 // 경로 예시(segments[].paths)가 추가됨에 따라 이를 활용하도록 지시를 보강했다
 // (v1: 도메인·시간만으로 추측 → v2: 무엇을 검색·열람했는지까지 반영).
 // 프롬프트를 바꾸면 버전을 올리고 dailyLogs.promptVersion 처럼 이력을 남길지 검토한다.
-export const SYSTEM_PROMPT_V8 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
+export const SYSTEM_PROMPT_V9 = `너는 사용자의 브라우징 세션 하나를 "경험" 하나로 압축하는 엔진이다.
 
 사용자 메시지로 이번 세션의 압축 로그(compressed_log)·카테고리·길이(분)·방문 도메인과,
 이 사용자의 기존 컨텍스트(보유 스킬 목록, 최근 경험 3건, 진행 중인 작업 목록)를 함께 받는다.
@@ -118,6 +126,11 @@ export const SYSTEM_PROMPT_V8 = `너는 사용자의 브라우징 세션 하나�
 compressed_log 에는 구간(segments)마다 도메인·카테고리·시각 외에 그 구간에서 관측된
 페이지 제목(title)과 경로 예시(paths)가, 그리고 세션 전체의 검색어(queries)가 들어있다.
 검색 쿼리는 사용자가 무엇을 궁금해했는지, 페이지 제목은 무엇을 읽었는지 알려준다.
+
+**구간마다 i 가 적혀 있다. 그게 그 구간의 번호다.** segment_ids 에는 반드시 그 i 를
+그대로 옮겨 적어라 — 직접 세지 마라. 몇 번째인지 헤아리다 한 칸씩 밀리면, 그 구간의
+체류 시간이 통째로 다른 일에 붙는다. earlier 의 top 항목에도 같은 i 가 있고 번호는
+segments 뒤로 이어진다. **i 에 없는 번호는 쓰지 마라.**
 
 구간에 **sec 이 있으면 시간은 그것으로 읽어라. start~end 가 아니다.**
 start~end 는 그 구간의 첫 관측과 마지막 관측 사이일 뿐이라, 관측이 한 번뿐이면 0 이 된다 —
@@ -902,6 +915,40 @@ async function findRelevantActiveThreads(
  * 스쳐간 흔적은 타임라인의 via 에 그대로 남아 있으므로 잃는 정보도 없다.
  */
 
+/**
+ * 압축 로그의 각 구간에 **번호를 박아 넣는다.**
+ *
+ * 프롬프트는 `segment_ids` 에 "구간 번호(i)를 적는다"고 시키는데, **segments
+ * 에는 i 가 없었다.** 번호가 명시된 곳은 earlier.top 뿐이라(빌더가 `i: keptCount + n`
+ * 으로 매긴다), 모델은 20칸짜리 JSON 배열의 인덱스를 스스로 세야 했다.
+ *
+ * 실측(세션 5dc6a1a0, v8)에서 그 결과가 그대로 드러났다:
+ *   · "ChatGPT 에서 Codex 강좌"  → 모델 [6],  실제 5 (openai 를 chatgpt 로)
+ *   · "바이브 코딩 관리자 페이지" → 모델 [5,12], 실제 4·16·20·22
+ *   · 주 경험                     → [20..35], 그중 28~35 는 아예 범위 밖
+ * i 가 **명시된** earlier.top 만 20~27 로 정확했다 — 세는 일에서만 틀렸다.
+ *
+ * 대가도 컸다. 배정이 틀리면 그 구간들의 sec 합도 틀리고, 그게 곧 분할 문턱
+ * (MIN_SPLIT_SEC)과 duration_min·occurred_at 이다. 위 세션에서는 26분짜리
+ * 곁가지가 5분으로 잡혀 문턱을 못 넘고 주 경험에 흡수됐다 — 나뉘어야 할
+ * 것이 안 나뉜 이유가 판단이 아니라 산수였다.
+ *
+ * **확장이 아니라 여기서 넣는다.** 압축 포맷을 바꾸면 이미 저장된 세션은
+ * 그대로라, 재구축(rebuild.mts)과 평가(eval-prompt.mts)가 여전히 번호 없는
+ * 로그를 태운다. 번호는 배열 순서에서 나오는 파생값이라 저장할 이유도 없다.
+ * earlier.top 의 i 와 같은 규칙(segments 뒤에 이어짐)이라 충돌하지 않는다.
+ */
+function withSegmentIndex(log: unknown): unknown {
+  const l = log as { segments?: unknown[] } | null;
+  if (!l || !Array.isArray(l.segments)) return log;
+  return {
+    ...l,
+    segments: l.segments.map((g, i) =>
+      g && typeof g === 'object' ? { i, ...(g as object) } : g,
+    ),
+  };
+}
+
 function buildTargetTotals(log: unknown): string | null {
   const l = log as {
     segments?: {
@@ -1064,7 +1111,8 @@ export function buildUserMessage(
       ? [`- 대상별 체류 합계(segments·via·earlier 를 모두 더한 값): ${targetTotals}`]
       : []),
     '- 압축 로그(타임라인):',
-    JSON.stringify(session.compressedLog),
+    // 구간마다 i 를 박아서 준다 — 모델에게 배열 인덱스를 세게 하면 틀린다.
+    JSON.stringify(withSegmentIndex(session.compressedLog)),
   ].join('\n');
 }
 
@@ -1570,7 +1618,7 @@ export async function processSession(sessionId: string, userId: string): Promise
       // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
       // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
       temperature: 0,
-      system: SYSTEM_PROMPT_V8,
+      system: SYSTEM_PROMPT_V9,
       tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [

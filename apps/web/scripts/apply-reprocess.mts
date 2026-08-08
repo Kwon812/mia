@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import postgres from 'postgres';
 import Anthropic from '@anthropic-ai/sdk';
-import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V8, buildUserMessage } from '../src/lib/experience-engine';
+import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V9, buildUserMessage } from '../src/lib/experience-engine';
 
 const PASSES = 3;
 const FIRST_TIME_POINTS = 40;
@@ -71,7 +71,7 @@ for (const r of rows) {
   for (let i = 0; i < PASSES; i++) {
     const res = await client.messages.create({
       model: MODEL, max_tokens: 1024, temperature: 0,
-      system: SYSTEM_PROMPT_V8, tools: [RECORD_EXPERIENCE_TOOL],
+      system: SYSTEM_PROMPT_V9, tools: [RECORD_EXPERIENCE_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [{ role: 'user', content }],
     });

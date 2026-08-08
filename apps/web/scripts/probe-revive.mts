@@ -14,7 +14,7 @@ import {
   MODEL,
   TOOL_NAME,
   RECORD_EXPERIENCE_TOOL,
-  SYSTEM_PROMPT_V8,
+  SYSTEM_PROMPT_V9,
   buildUserMessage,
 } from '../src/lib/experience-engine';
 
@@ -83,7 +83,7 @@ async function ask(label: string, block: string | null, extraRule: string) {
     model: MODEL,
     max_tokens: 1024,
     temperature: 0,
-    system: SYSTEM_PROMPT_V8 + extraRule,
+    system: SYSTEM_PROMPT_V9 + extraRule,
     tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [
@@ -204,7 +204,7 @@ const out2: Record<string, unknown>[] = [];
 for (const t of TARGETS) {
   const res = await client.messages.create({
     model: MODEL, max_tokens: 1024, temperature: 0,
-    system: SYSTEM_PROMPT_V8 + RULE,
+    system: SYSTEM_PROMPT_V9 + RULE,
     tools: [RECORD_EXPERIENCE_TOOL], tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content: withDormant(
       buildUserMessage(t.sess,
@@ -284,7 +284,7 @@ const out3: Record<string, unknown>[] = [];
 for (const c of NEAR_CASES) {
   const res = await client.messages.create({
     model: MODEL, max_tokens: 1024, temperature: 0,
-    system: SYSTEM_PROMPT_V8 + RULE,
+    system: SYSTEM_PROMPT_V9 + RULE,
     tools: [RECORD_EXPERIENCE_TOOL], tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content: withDormant(
       buildUserMessage(c.sess,

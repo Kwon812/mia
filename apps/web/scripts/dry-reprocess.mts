@@ -13,7 +13,7 @@ import {
   MODEL,
   TOOL_NAME,
   RECORD_EXPERIENCE_TOOL,
-  SYSTEM_PROMPT_V8,
+  SYSTEM_PROMPT_V9,
   buildUserMessage,
 } from '../src/lib/experience-engine';
 
@@ -55,7 +55,7 @@ for (const [i, r] of rows.entries()) {
     // 바뀐다 — 실제로 explore↔success↔partial 이 4/7 건 흔들렸다.
     // 창작(대사)도 같은 호출에 섞여 있지만, 흔들려선 안 되는 쪽을 우선한다.
     temperature: 0,
-    system: SYSTEM_PROMPT_V8,
+    system: SYSTEM_PROMPT_V9,
     tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{

@@ -6,7 +6,7 @@
 // temperature 0 이어도 실행마다 답이 갈리므로 여러 번 돌려 안정성도 함께 본다.
 import fs from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
-import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V8, buildUserMessage } from '../src/lib/experience-engine';
+import { MODEL, TOOL_NAME, RECORD_EXPERIENCE_TOOL, SYSTEM_PROMPT_V9, buildUserMessage } from '../src/lib/experience-engine';
 
 const RUNS = Number(process.argv[2] ?? 3);
 /** 두 번째 인자로 케이스 이름 일부를 주면 그것만 돌린다 — 한 케이스를 파고들 때
@@ -283,7 +283,70 @@ const CASES: Case[] = [
           seg('github.com','dev','drizzle-team/drizzle-orm — src/relations.ts',14,39,14) ] } },
     expect: { category: 'study' },
   },
+  {
+    // v9 — 구간 번호(i) 배정의 정확도. **골든셋에 이걸 재는 자리가 없었다.**
+    //
+    // segment_ids 는 라벨이 아니라 **좌표**다. 여기가 틀리면 그 구간들의 sec 합이
+    // 틀리고, 그게 곧 분할 문턱(MIN_SPLIT_SEC)·duration_min·occurred_at 이다.
+    // 실측(세션 5dc6a1a0)에서 26분짜리 곁가지가 5분으로 잡혀 문턱을 못 넘었다 —
+    // 나뉘어야 할 것이 안 나뉜 이유가 판단이 아니라 산수였다.
+    //
+    // **실제로 깨진 모양을 그대로 쓴다.** 처음엔 구간 5개로 짰는데 i 를 빼도
+    // 3/3 으로 통과했다 — 다섯 개는 그냥 세어진다. 실제로 배정이 어긋난 세션은
+    // segments 20 + earlier.top 8 = 28칸이었다. 세는 부담이 그만큼 있어야
+    // 이 케이스가 무언가를 재게 된다.
+    //
+    // 대상은 둘이고 둘 다 문턱(10분)을 넉넉히 넘는다. 정답은 하나뿐이다:
+    //   Army Sim  → 6, 13, 17   (11+12+13 = 36분)
+    //   프로젝트 A → 나머지 전부
+    // Army Sim 을 뒤쪽 흩어진 자리에 둔 것은, 앞머리에 몰아두면 세지 않고도
+    // 맞기 때문이다. 나머지 칸은 1~4분짜리 잡동사니로 채워 "세어야만 닿는"
+    // 자리를 만든다.
+    //
+    // 제목은 대상마다 통일한다. buildTargetTotals 가 `도메인 · 제목` 으로 묶어서,
+    // 같은 프로젝트라도 페이지마다 제목이 다르면 "큰 대상이 둘"이라는 신호가
+    // 잘게 흩어진다(그렇게 짰다가 모델이 아예 안 쪼갰다). 여기서 재려는 것은
+    // 분할 여부가 아니라 **번호 정확도**라, 분할 신호는 뚜렷하게 준다.
+    name: 'segment_ids — 구간 번호를 정확히 짚는다 (i 배정)',
+    검증: 'segment_ids',
+    session: { primaryCategory: 'dev', durationMin: 96, domains: { 'github.com': 2400, localhost: 2160, 'vercel.com': 900, 'platform.openai.com': 720 },
+      compressedLog: { tags: [], queries: [],
+        segments: [
+          seg('github.com','dev','프로젝트 A — 배포 워크플로',13,0,4),
+          seg('vercel.com','dev','프로젝트 A — 배포 워크플로',13,4,3),
+          seg('github.com','dev','프로젝트 A — 배포 워크플로',13,7,5),
+          seg('platform.openai.com','dev','프로젝트 A — 배포 워크플로',13,12,2),
+          seg('github.com','dev','프로젝트 A — 배포 워크플로',13,14,4),
+          seg('vercel.com','dev','프로젝트 A — 배포 워크플로',13,18,3),
+          seg('localhost','dev','Army Sim — 유닛 밸런스',13,21,11),
+          seg('github.com','dev','프로젝트 A — 배포 워크플로',13,32,4),
+          seg('platform.openai.com','dev','프로젝트 A — 배포 워크플로',13,36,3),
+          seg('github.com','dev','프로젝트 A — 배포 워크플로',13,39,2),
+          seg('vercel.com','dev','프로젝트 A — 배포 워크플로',13,41,4),
+          seg('github.com','dev','프로젝트 A — 배포 워크플로',13,45,3),
+          seg('platform.openai.com','dev','프로젝트 A — 배포 워크플로',13,48,2),
+          seg('localhost','dev','Army Sim — 유닛 밸런스',13,50,12),
+          seg('github.com','dev','프로젝트 A — 배포 워크플로',14,2,4),
+          seg('vercel.com','dev','프로젝트 A — 배포 워크플로',14,6,3),
+          seg('github.com','dev','프로젝트 A — 배포 워크플로',14,9,2),
+          seg('localhost','dev','Army Sim — 유닛 밸런스',14,11,13),
+          seg('github.com','dev','프로젝트 A — 배포 워크플로',14,24,4),
+          seg('vercel.com','dev','프로젝트 A — 배포 워크플로',14,28,2),
+        ] } },
+    // 주 경험이 어느 쪽이든 상관없다 — 물어보는 것은 **두 덩어리를 번호로 정확히
+    // 갈랐는가** 하나다. 채점은 아래 SEGMENT_CASE 블록이 따로 한다.
+    expect: {},
+  },
 ];
+
+/** 위 케이스의 정답 배정. 두 집합 중 하나가 주(主), 나머지가 곁가지다.
+ *  Army Sim 이 6·13·17, 프로젝트 A 가 나머지 열일곱 칸. */
+const SEGMENT_CASE = {
+  name: 'segment_ids — 구간 번호를 정확히 짚는다 (i 배정)',
+  /** 곁가지로 갈라져 나와야 하는 집합. 주 경험 쪽은 나머지라 굳이 안 적는다 —
+   *  모델이 주에 "세션 전체"(빈 배열)를 적을 수도 있고 그게 틀린 것도 아니다. */
+  branch: [6, 13, 17],
+};
 
 const get = (o: any, path: string) => path.split('.').reduce((a, k) => a?.[k], o);
 /** 기대값은 단일 값이거나 허용 집합이다. 애매한 세션은 정답이 하나가 아니다 —
@@ -306,8 +369,12 @@ async function run(c: Case) {
     (c.dormant ?? []) as any,
   );
   const res = await client.messages.create({
-    model: MODEL, max_tokens: 1024, temperature: 0,
-    system: SYSTEM_PROMPT_V8 + EXTRA_RULE, tools: [RECORD_EXPERIENCE_TOOL],
+    // **프로덕션과 같은 값이어야 한다.** 1024 였는데 엔진은 2048 이다 —
+    // 그 차이가 정확히 `also` 가 잘리는 지점이라(출력 끝에 오고 optional 이라
+    // 잘려도 검증을 통과한다), 분할을 재는 케이스가 프롬프트 탓이 아니라
+    // 상한 탓에 떨어진다. 골든셋이 프로덕션과 다른 조건을 재면 안 된다.
+    model: MODEL, max_tokens: 2048, temperature: 0,
+    system: SYSTEM_PROMPT_V9 + EXTRA_RULE, tools: [RECORD_EXPERIENCE_TOOL],
     tool_choice: { type: 'tool', name: TOOL_NAME },
     messages: [{ role: 'user', content }],
   });
@@ -384,6 +451,25 @@ for (const c of CASES.filter((c) => !ONLY || c.name.includes(ONLY))) {
     row['실제'] = got.map((g) => String(g).slice(0, 12)).join('/');
     row['일치'] = `${hit}/${RUNS}`;
   }
+  // ── segment_ids 는 값 비교로 못 잰다 ──
+  //
+  // 주 경험이 어느 덩어리를 맡을지는 자유다. 물어보는 것은 **두 덩어리를 번호로
+  // 정확히 갈랐는가** 하나라, 주/곁가지를 합친 집합이 정답 분할과 같은지를 본다.
+  // 순서도 어느 쪽이 주인지도 안 따진다.
+  if (c.name === SEGMENT_CASE.name) {
+    const key = (ids: number[]) => [...ids].sort((a, b) => a - b).join(',');
+    const want = key(SEGMENT_CASE.branch);
+    // 갈라져 나온 것 중 **정답 집합과 정확히 같은 게 하나라도 있는가.**
+    // 주 경험이 나머지를 어떻게 적든(전체를 뜻하는 빈 배열이어도) 상관없다 —
+    // 재려는 것은 "그 대상의 구간을 정확히 짚었는가" 하나다.
+    const gots = outs.map((o) => (o.also ?? []).map((a: any) => key(a.segment_ids ?? [])));
+    const hit = gots.filter((g) => g.includes(want)).length;
+    if (hit !== RUNS) allPass = false;
+    row['기대'] = want;
+    row['실제'] = gots.map((g) => (g.length ? g.join('+') : '분할없음')).join(' // ');
+    row['일치'] = `${hit}/${RUNS}`;
+  }
+
   row['판정'] = allPass ? 'PASS' : 'FAIL';
   // 참고용 부가 정보
   row['category'] = outs[0].category;
