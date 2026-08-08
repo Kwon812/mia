@@ -250,7 +250,15 @@ export function MapStage({
                     왜 기억이 안 됐는지 읽힌다. */}
                 <span className="truncate text-[11.5px] text-lum-4">
                   {b.category.toUpperCase()} · {(b.outcome ?? "—").toUpperCase()} · M{b.memoryScore}
-                  {b.remembered && <span className="ml-1.5 text-lum-2">기억에 붙음</span>}
+                  {/* 붙었다는 사실만으로는 왜 남았는지가 안 보인다. 그건 지도에서
+                      색온도로만 말하던 값이라, 글로도 적어야 둘이 이어진다 —
+                      "기억에 붙음"과 그 별의 색이 같은 것을 말하고 있다는 게
+                      드러나야 한다. 가장 센 이유 하나는 서버가 골라 보낸다. */}
+                  {b.remembered && (
+                    <span className="ml-1.5 text-lum-2">
+                      기억에 붙음{b.memoryTrigger ? ` · ${b.memoryTrigger.toUpperCase()}` : ""}
+                    </span>
+                  )}
                 </span>
               </div>
             ))}

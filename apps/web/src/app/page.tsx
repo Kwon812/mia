@@ -9,6 +9,7 @@ import {
   sessions,
   threads,
 } from "@na/db";
+import { strongestTrigger } from "@na/shared";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { getCurrentDialogueSlot, getKstDayBoundary, kstDaysTogether, DAY_MS } from "@/lib/date";
@@ -201,8 +202,18 @@ export default async function Home() {
   // ── 궤도 요소로 넘길 형태 ──
   // 경험 → 그 경험이 기억이 됐나(그리고 잊혔나). 기억 하나가 경험 여럿을
   // 품으므로 펼쳐서 넣는다.
+  //
+  // 잊혔는지와 **왜 남았는지**를 함께 싣는다. 좌하단 '최근 경험' 목록이
+  // "기억에 붙음"만 적으면 무엇 때문에 남았는지가 안 보이는데, 그건 지도에서
+  // 색온도로만 말하고 있던 값이라 글로도 한 번 적어야 둘이 이어진다.
+  // 가장 센 이유 하나를 고르는 규칙(strongestTrigger)은 지도와 같은 것을 쓴다.
   const memoryByExp = new Map(
-    memoryRows.flatMap((m) => m.experienceIds.map((id) => [id, m.forgottenAt] as const)),
+    memoryRows.flatMap((m) =>
+      m.experienceIds.map(
+        (id) =>
+          [id, { forgottenAt: m.forgottenAt, trigger: strongestTrigger(m.triggers, m.trigger) }] as const,
+      ),
+    ),
   );
   const now = Date.now();
   const bodies: Body[] = expRows.map((e) => ({
@@ -218,7 +229,8 @@ export default async function Home() {
     isFirstTime:
       effective(homeCorrections, e.id, "is_first_time", String(e.isFirstTime)) === "true",
     remembered: memoryByExp.has(e.id),
-    forgotten: memoryByExp.get(e.id) != null,
+    forgotten: memoryByExp.get(e.id)?.forgottenAt != null,
+    memoryTrigger: memoryByExp.get(e.id)?.trigger ?? null,
   }));
 
   const liveMemories = memoryRows.filter((m) => m.forgottenAt == null);
