@@ -852,8 +852,6 @@ export function OrbitalMap({
       y: number;
       color: [number, number, number];
       members: ThreadBody[];
-      /** 그중 기억이 남은 것 */
-      kept: number;
     };
 
     const galaxies: Galaxy[] = [];
@@ -877,7 +875,6 @@ export function OrbitalMap({
           y: site[1],
           color: colorOfCategory(cat),
           members,
-          kept: members.filter((t) => t.memory != null).length,
         });
       }
     }
@@ -2694,25 +2691,43 @@ export function OrbitalMap({
           const g = galaxyByKey.get(found.slice(4));
           const ms = g?.members ?? [];
           const n = (st: string) => ms.filter((t) => t.status === st).length;
+          // 진행 중인 것만 기억 유무로 가른다. 끝냈거나 놓은 갈래는 아래
+          // 두 줄이 이미 세므로 여기서 빼야 줄끼리 안 겹친다.
+          const running = ms.filter((t) => t.status === "active");
+          const withMemory = running.filter((t) => t.memory != null).length;
           setProbe({
             x: p.x,
             y: p.y,
             kind: "은하",
             text: tag(g?.key ?? ""),
-            // **halo 를 화면에 안 쓴다.** 코드 용어가 그대로 새어 나갔었다
+            // **줄끼리 겹치지 않는다.** 예전에는 넷이 전부 '갈래' 안에 든
+            // 부분집합이었다 — `갈래 2건 · 기억 2건 · 끝냄 0건` 이 "넷이 있나"
+            // 또는 "기억만큼 갈래가 부풀었나" 로 읽혔다. 나란히 선 숫자는
+            // 더해서 읽히는데 실제로는 포함관계였으니, 읽는 사람 탓이 아니다.
+            //
+            // 그래서 한 갈래가 **정확히 한 줄에만** 들어가게 나눈다. 네 줄을
+            // 더하면 그 은하의 별 수가 된다.
+            //
+            //   기억    진행 중이고 기억이 남았다      ← 밝은 별
+            //   갈래    진행 중이고 아직 안 남았다     ← 어두운 별
+            //   끝냄    completed                      ← 팔 안쪽 halo
+            //   잊혀짐  abandoned                      ← 팔 바깥 halo
+            //
+            // 상태가 먼저다. 끝냈거나 놓은 갈래는 기억이 있든 없든 나선팔
+            // **밖**에 있고, 화면에서 자리로 갈리는 것이라 숫자도 그 자리를
+            // 따라야 한다. 그러지 않으면 "기억 2건" 이라는데 팔 안에 밝은 별이
+            // 하나뿐인 상황이 생긴다.
+            //
+            // **halo 는 화면에 안 쓴다.** 코드 용어가 그대로 새어 나갔었다
             // ("나머지 0건은 halo") — 범례는 이미 한국어로 "팔 밖으로 밀려난 것 =
-            // 끝냈거나 놓은 일" 이라 말하고 있는데 여기만 다른 어휘였다.
-            // 상태 셋을 각 줄로 푼다. 화면에서 자리로 갈리는 것이니 숫자로도
-            // 그렇게 읽는다 — 진행 중은 나선팔, 나머지 둘은 그 밖이다.
+            // 끝냈거나 놓은 일" 이라 말하는데 여기만 다른 어휘였다.
+            // status 가 'abandoned' 인 것을 '잊혀짐' 이라 부르는 것도 같은 이유다 —
+            // 사람이 놓은 게 아니라 손이 안 가서 밀려난 것이라(야간 배치가
+            // 30일 무활동으로 넘긴다) 그쪽이 실제에 가깝다.
             rows: [
-              { k: "갈래", v: `${ms.length}건` },
-              { k: "기억", v: `${g?.kept ?? 0}건` },
-              // 진행 중은 안 적는다 — 갈래에서 나머지 둘을 뺀 값이라 화면에
-              // 이미 있는 정보고, 나선팔에 있느냐 밖에 있느냐로 더 잘 읽힌다.
+              { k: "기억", v: `${withMemory}건` },
+              { k: "갈래", v: `${running.length - withMemory}건` },
               { k: "끝냄", v: `${n("completed")}건` },
-              // status 는 'abandoned' 지만 화면에서는 '잊혀짐' 이라 부른다.
-              // 사람이 놓은 게 아니라 손이 안 가서 밀려난 것이라(야간 배치가
-              // 30일 무활동으로 넘긴다) 그쪽이 실제에 가깝다.
               { k: "잊혀짐", v: `${n("abandoned")}건` },
             ],
           });
