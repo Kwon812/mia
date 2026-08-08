@@ -1,7 +1,7 @@
 import 'server-only';
 
-import { and, desc, eq, inArray } from 'drizzle-orm';
-import { corrections, experiences, questions, type CORRECTION_FIELDS } from '@na/db';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { corrections, experiences, memories, questions, threads, type CORRECTION_FIELDS } from '@na/db';
 import { db } from './db';
 
 // ============================================================
@@ -14,6 +14,19 @@ import { db } from './db';
 //
 // 그래서 "현재 값"은 저장된 값이 아니라 **읽을 때 겹쳐서 만드는 값**이다.
 //   experiences(inferred)  +  corrections(declared 최신 1건)  =  유효값
+//
+// ── thread 하나만 예외다 ──
+//
+// 갈래는 라벨이 아니라 **관계**다. 프롬프트의 갈래 후보 목록도, 각 후보의
+// "최근:" 줄도, 경험 개수도 전부 experiences.thread_id 조인에서 나온다.
+// 겹쳐 읽기로만 처리하면 그 조인 지점을 하나도 빠짐없이 고쳐야 하고, 하나만
+// 놓쳐도 교정이 아무 데도 안 쓰이는 라벨 더미가 된다 — 이 파일이 반복해서
+// 경고하는 바로 그 상태다. 그래서 thread_id 는 실제로 옮긴다.
+//
+// 불변식의 **이유**는 그대로 지켜진다: model_value 에 옮기기 전 갈래 제목을
+// 박제하므로 (모델 출력, 사람 정답) 쌍이 남는다. 그리고 재처리가 딛고 선
+// 것은 판정 필드(summary·category·outcome…)의 불변성이지 thread_id 가
+// 아니다 — 그 컬럼은 스키마 주석부터 "나중에 부착. 유일한 UPDATE 대상"이다.
 // ============================================================
 
 export type CorrectionField = (typeof CORRECTION_FIELDS)[number];
@@ -71,9 +84,12 @@ export function isCorrected(map: CorrectionMap, experienceId: string, field: Cor
   return map.has(key(experienceId, field));
 }
 
-/** 모델이 낸 값을 문자열로 통일한다. is_first_time 은 boolean 이라 'true'/'false' 로 눕힌다. */
+/** 모델이 낸 값을 문자열로 통일한다. is_first_time 은 boolean 이라 'true'/'false' 로 눕힌다.
+ *
+ *  thread 는 uuid 가 아니라 **제목**이다. 재구축이 threads 를 통째로 다시 만들어
+ *  id 가 매번 새로 발급되므로, id 를 박제하면 다음 재구축에서 아무것도 못 가리킨다. */
 export function modelValueOf(
-  row: { outcome: string | null; category: string; isFirstTime: boolean },
+  row: { outcome: string | null; category: string; isFirstTime: boolean; threadTitle?: string | null },
   field: CorrectionField,
 ): string {
   switch (field) {
@@ -83,7 +99,125 @@ export function modelValueOf(
       return row.category;
     case 'is_first_time':
       return String(row.isFirstTime);
+    case 'thread':
+      // 갈래가 아직 안 붙은 경험도 있다(엔진이 붙이기 전, 또는 붙이기 실패).
+      // 빈 문자열이면 loadCorrectionPatterns 가 `→ KT Cloud` 로 읽어준다.
+      return row.threadTitle ?? '';
   }
+}
+
+/** 갈래 제목 상한. experience-engine 의 MAX_THREAD_TITLE_LEN 과 같은 값이다 —
+ *  거기 것은 모델 출력을 자르는 용도라 export 되어 있지 않다. */
+const MAX_THREAD_TITLE_LEN = 100;
+
+/**
+ * 경험을 다른 갈래로 옮긴다. **thread 교정의 실제 효과**다.
+ *
+ * 제목으로 찾고 없으면 만든다. 사람이 "이건 KT Cloud 갈래다"라고 말한 것은
+ * 그런 갈래가 있어야 한다는 선언이기도 하다 — 재구축 뒤 그 갈래가 아직 안
+ * 만들어진 시점에도 교정이 스스로 복구되려면 만들 수 있어야 한다.
+ *
+ * 옮긴 뒤 양쪽 갈래를 다시 센다. 개수·분야·기간이 전부 소속 경험에서 나오는
+ * 파생값이라, 안 고치면 후보 목록이 "경험 12건"이라 말하면서 실제로는 11건인
+ * 갈래를 보여준다 — 모델은 그 숫자를 보고 무게를 잰다.
+ */
+export async function moveExperienceToThread(params: {
+  userId: string;
+  experienceId: string;
+  /** 옮겨 갈 갈래의 제목. 없으면 만든다. */
+  title: string;
+}): Promise<RecordResult> {
+  const title = params.title.trim();
+  if (!title) return { ok: false, error: '갈래 이름이 비어 있어.' };
+  if (title.length > MAX_THREAD_TITLE_LEN) return { ok: false, error: '갈래 이름이 너무 길어.' };
+
+  return db.transaction(async (tx) => {
+    const [exp] = await tx
+      .select({
+        id: experiences.id,
+        threadId: experiences.threadId,
+        category: experiences.category,
+        occurredAt: experiences.occurredAt,
+      })
+      .from(experiences)
+      .where(and(eq(experiences.id, params.experienceId), eq(experiences.userId, params.userId)))
+      .limit(1);
+    if (!exp) return { ok: false, error: '그 경험을 찾을 수 없어.' };
+
+    // 같은 제목이 여럿이면 살아 있는 것, 그중 최근 것을 고른다. 재구축이
+    // 제목을 다시 짓다 보면 드물게 겹친다.
+    const [found] = await tx
+      .select({ id: threads.id, status: threads.status })
+      .from(threads)
+      .where(and(eq(threads.userId, params.userId), eq(threads.title, title)))
+      .orderBy(sql`case when ${threads.status} = 'active' then 0 else 1 end`, desc(threads.lastActivityAt))
+      .limit(1);
+
+    let targetId = found?.id ?? null;
+    if (!targetId) {
+      const [made] = await tx
+        .insert(threads)
+        .values({
+          userId: params.userId,
+          title,
+          category: exp.category,
+          startedAt: exp.occurredAt,
+          lastActivityAt: exp.occurredAt,
+          experienceCount: 0, // 아래 resync 가 실제 개수로 채운다
+        })
+        .returning({ id: threads.id });
+      targetId = made.id;
+    } else if (found.status === 'abandoned') {
+      // 잠긴 갈래로 옮기는 것은 그 일을 다시 한다는 뜻이다. completed 는
+      // 사람이 선언한 값이라 안 건드린다 — 엔진의 attach 분기와 같은 규칙.
+      await tx.update(threads).set({ status: 'active' }).where(eq(threads.id, targetId));
+    }
+
+    const from = exp.threadId;
+    if (from === targetId) return { ok: true }; // 이미 거기 있다
+
+    await tx.update(experiences).set({ threadId: targetId }).where(eq(experiences.id, exp.id));
+    // 기억은 따라오지 않는다. memories 에 갈래당 하나(uq_memories_thread)라는
+    // 제약이 걸려 있어 옮기면 대상 갈래에 이미 기억이 있을 때 터진다. 그리고
+    // 갈래 기억('deepened'·완결)은 애초에 그 **갈래**에 대한 진술이라, 경험
+    // 하나가 빠져나가도 그 갈래에 남는 게 맞다. 근거 목록은 experience_ids 로
+    // 따로 들고 있으므로 어느 경험에서 나왔는지는 그대로 남는다.
+
+    await resyncThread(tx, targetId);
+    if (from) await resyncThread(tx, from);
+    return { ok: true };
+  });
+}
+
+/** 갈래의 파생값(개수·분야·기간)을 소속 경험에서 다시 만든다.
+ *  비고 기억도 없으면 갈래 자체를 지운다 — 경험 0건짜리 갈래가 후보 목록에
+ *  남으면 다음 판정을 끌어당기는 유령이 된다. */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function resyncThread(tx: Tx, threadId: string): Promise<void> {
+  await tx.execute(sql`
+    update ${threads} t set
+      experience_count = coalesce(s.n, 0),
+      category = coalesce(s.cat, t.category),
+      started_at = coalesce(s.first_at, t.started_at),
+      last_activity_at = coalesce(s.last_at, t.last_activity_at)
+    from (
+      select count(*)::int as n,
+             min(e.occurred_at) as first_at,
+             max(e.occurred_at) as last_at,
+             -- 분야는 "지금까지 무엇을 한 작업인가"다. 동률이면 이름순(결정적).
+             (select e2.category from ${experiences} e2
+               where e2.thread_id = ${threadId}
+               group by e2.category order by count(*) desc, e2.category asc limit 1) as cat
+        from ${experiences} e where e.thread_id = ${threadId}
+    ) s
+    where t.id = ${threadId}`);
+
+  await tx.execute(sql`
+    delete from ${threads} t
+     where t.id = ${threadId}
+       and not exists (select 1 from ${experiences} e where e.thread_id = t.id)
+       and not exists (select 1 from ${memories} m where m.thread_id = t.id)`);
 }
 
 export type RecordResult = { ok: true } | { ok: false; error: string };
@@ -111,14 +245,29 @@ export async function recordCorrection(params: {
       outcome: experiences.outcome,
       category: experiences.category,
       isFirstTime: experiences.isFirstTime,
+      // thread 교정의 model_value 는 "옮기기 전에 어느 갈래에 있었나"다.
+      threadTitle: threads.title,
     })
     .from(experiences)
+    .leftJoin(threads, eq(threads.id, experiences.threadId))
     .where(and(eq(experiences.id, params.experienceId), eq(experiences.userId, params.userId)))
     .limit(1);
 
   if (!row) return { ok: false, error: '그 경험을 찾을 수 없어.' };
 
   const modelValue = modelValueOf(row, params.field);
+
+  // thread 는 기록만으로 끝나지 않는다 — 실제로 옮겨야 후보 목록과 "최근:" 줄이
+  // 바뀌고, 그래야 다음 세션의 판정이 달라진다. 옮기기가 실패하면 교정 행도
+  // 남기지 않는다. 둘이 갈리면 "고쳤다고 나오는데 지도는 그대로"가 된다.
+  if (params.field === 'thread') {
+    const moved = await moveExperienceToThread({
+      userId: params.userId,
+      experienceId: params.experienceId,
+      title: params.humanValue,
+    });
+    if (!moved.ok) return moved;
+  }
 
   // 직전 교정과 같은 값이면 넣지 않는다.
   //

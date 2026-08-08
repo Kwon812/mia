@@ -12,6 +12,8 @@ import { FIELD_OPTIONS } from "@/lib/labels";
 
 const MIN_NAME_LENGTH = 1;
 const MAX_NAME_LENGTH = 12;
+/** 갈래 제목 상한. experience-engine 의 MAX_THREAD_TITLE_LEN 과 같은 값이다. */
+const MAX_THREAD_TITLE_LENGTH = 100;
 
 export type SetCharacterNameResult = { error?: string };
 
@@ -60,9 +62,23 @@ export async function correctExperience(
 
   // 클라이언트가 보내는 값이라 열거값 화이트리스트로 막는다. DB CHECK 가
   // 최후 방어선이지만, 여기서 걸러야 500 이 아니라 사람이 읽는 메시지가 나간다.
-  const allowed = FIELD_OPTIONS[field];
-  if (!allowed || !allowed.options.some((o) => o.value === humanValue)) {
-    return { error: "고를 수 없는 값이야." };
+  //
+  // thread 만 열거가 아니다 — 값이 갈래 **제목**이고, 없는 제목을 주면 그
+  // 갈래를 만든다(사람이 "이건 KT Cloud 갈래다"라고 말한 것은 그런 갈래가
+  // 있어야 한다는 선언이다). 그래서 화이트리스트 대신 길이만 본다. 소유권은
+  // recordCorrection 이 user_id 로 함께 조회해 막는다.
+  if (field === "thread") {
+    const t = humanValue.trim();
+    if (!t) return { error: "갈래 이름을 적어줘." };
+    if (t.length > MAX_THREAD_TITLE_LENGTH) {
+      return { error: `갈래 이름은 ${MAX_THREAD_TITLE_LENGTH}자까지야.` };
+    }
+    humanValue = t;
+  } else {
+    const allowed = FIELD_OPTIONS[field];
+    if (!allowed || !allowed.options.some((o) => o.value === humanValue)) {
+      return { error: "고를 수 없는 값이야." };
+    }
   }
 
   const result = await recordCorrection({
@@ -111,6 +127,11 @@ export async function answerQuestion(
     .where(and(eq(questions.id, questionId), eq(questions.userId, user.userId)))
     .limit(1);
   if (!q) return { error: "그 질문을 찾을 수 없어." };
+
+  // 캐릭터는 갈래를 묻지 않는다. 물으려면 선택지가 갈래 목록이어야 하는데
+  // 그건 "맞아/아니야" 두 갈래로 답하는 이 카드의 모양이 아니다 —
+  // 갈래 교정은 선택지가 열려 있어야 해서 /diary 쪽에만 둔다.
+  if (q.field === "thread") return { error: "갈래는 일기에서 고쳐줘." };
 
   const allowed = FIELD_OPTIONS[q.field];
   if (!allowed.options.some((o) => o.value === humanValue)) {
