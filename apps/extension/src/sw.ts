@@ -13,6 +13,14 @@ import {
   shouldClose,
   timeUntilClose,
 } from './session';
+import {
+  advance,
+  clearRun,
+  getRun,
+  setRun,
+  stepFor,
+  type RunState,
+} from './session/runner';
 import type { SessionDraft, SessionPayloadLike } from './session';
 import type { SessionSnapshot, SnapshotDraft, SnapshotPreview } from './snapshot';
 
@@ -669,6 +677,70 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'GET_EXTENSION_KEY') {
     void getExtensionKey().then((key) => sendResponse({ key: key ?? null }));
     return true; // 비동기 sendResponse 유지
+  }
+
+  // ── 절차 실행 ──────────────────────────────────────────
+  //
+  // 사이트가 "이걸 돌려줘"라고 보낸다. 상태를 저장소에 두는 이유는 절차가
+  // 페이지 이동을 넘기 때문이다 — content script 는 이동할 때마다 죽는다.
+  //
+  // 사람이 버튼을 눌러야만 시작한다. 스스로 시작하는 길은 없다. 바꾸는
+  // 조작이 들어 있는 절차를 사람 모르게 돌리면, 틀렸다는 걸 아는 시점이
+  // 이미 실행된 뒤다.
+  if (message?.type === 'START_RUN') {
+    const run = message.run as RunState | undefined;
+    if (!run || !Array.isArray(run.steps) || run.steps.length === 0) {
+      sendResponse({ ok: false, error: '돌릴 단계가 없어' });
+      return true;
+    }
+    void setRun({ ...run, index: 0, startedAt: Date.now() }).then(() =>
+      sendResponse({ ok: true }),
+    );
+    return true;
+  }
+
+  // content script 가 페이지마다 묻는다: 여기서 지금 할 일이 있나.
+  // 도메인이 안 맞으면 아무것도 주지 않는다 — 절차가 supabase 를 기다리는데
+  // 유튜브에서 클릭이 일어나면 안 된다.
+  if (message?.type === 'RUN_STEP_ASK') {
+    void getRun().then((run) => {
+      if (!run) return sendResponse({ step: null });
+      const next = stepFor(run, String(message.host ?? ''));
+      sendResponse(
+        next
+          ? { step: next.step, index: next.index, value: run.params?.[next.index] ?? null }
+          : { step: null },
+      );
+    });
+    return true;
+  }
+
+  // 한 단계가 끝났다. 다음 단계가 같은 도메인이면 이어서 하라고 알려준다.
+  if (message?.type === 'RUN_STEP_DONE') {
+    void advance(message.ok !== false, message.error).then((run) => {
+      if (!run) return sendResponse({ more: false });
+      const next = run.doneAt || run.error ? null : stepFor(run, String(message.host ?? ''));
+      sendResponse({
+        more: !!next,
+        done: !!run.doneAt,
+        error: run.error ?? null,
+        step: next?.step ?? null,
+        index: next?.index ?? null,
+        value: next ? (run.params?.[next.index] ?? null) : null,
+      });
+    });
+    return true;
+  }
+
+  // 팝업·사이트가 진행 상황을 묻는다.
+  if (message?.type === 'RUN_STATUS') {
+    void getRun().then((run) => sendResponse({ run: run ?? null }));
+    return true;
+  }
+
+  if (message?.type === 'RUN_CANCEL') {
+    void clearRun().then(() => sendResponse({ ok: true }));
+    return true;
   }
 
   // 팝업 전용 — 읽기만 하고 아무것도 바꾸지 않는다. 세션 판정을 앞당기지도 않는다

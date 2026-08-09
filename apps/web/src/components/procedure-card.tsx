@@ -12,9 +12,19 @@
 // 「매번 몇 분 걸린다」가 이유다 — 승인을 정할 때 실제로 보는 것은 뒤쪽이다.
 // ============================================================
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
 import type { Candidate } from "@/lib/procedure";
+
+/** 확장이 돌고 있는 절차의 상태. 다리(run-content.js)가 넘겨준다. */
+type RunState = {
+  id: string;
+  name: string;
+  index: number;
+  steps: unknown[];
+  error?: string;
+  doneAt?: number;
+} | null;
 
 type Answer = {
   status: "approved" | "rejected";
@@ -59,6 +69,55 @@ export function ProcedureCard({
   const [name, setName] = useState("");
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // 매개변수 값. 녹화에 안 남기므로 돌릴 때마다 받는다 — 지난달 값이 박혀
+  // 있는 것보다 매번 묻는 쪽이 맞다.
+  const [vals, setVals] = useState<Record<number, string>>({});
+  const [asking, setAsking] = useState(false);
+  const [live, setLive] = useState<RunState>(null);
+
+  // 확장이 어디까지 갔는지 물어본다. 절차가 도는 동안 화면이 조용하면
+  // 멈춘 건지 도는 건지 알 수 없다.
+  useEffect(() => {
+    if (!live || live.doneAt || live.error) return;
+    const timer = setInterval(() => {
+      window.postMessage({ __na: "run-status" }, "*");
+    }, 1000);
+    const onMsg = (e: MessageEvent) => {
+      if (e.source !== window || e.data?.__na !== "run-status-ack") return;
+      setLive(e.data.run ?? null);
+    };
+    window.addEventListener("message", onMsg);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("message", onMsg);
+    };
+  }, [live]);
+
+  function start() {
+    setError(null);
+    const onAck = (e: MessageEvent) => {
+      if (e.source !== window || e.data?.__na !== "run-ack") return;
+      window.removeEventListener("message", onAck);
+      if (!e.data.ok) setError(e.data.error ?? "확장이 응답하지 않아");
+      else setLive({ id: c.signature, name: answer?.name ?? "", index: 0, steps: c.steps });
+    };
+    window.addEventListener("message", onAck);
+    window.postMessage(
+      {
+        __na: "run",
+        run: {
+          id: c.signature,
+          name: answer?.name ?? "",
+          steps: c.steps,
+          index: 0,
+          params: vals,
+          startedAt: Date.now(),
+        },
+      },
+      "*",
+    );
+    setAsking(false);
+  }
 
   function run(fn: () => Promise<Result>) {
     setError(null);
@@ -121,14 +180,65 @@ export function ProcedureCard({
               </pre>
             </details>
           )}
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => run(() => onForget(c.signature))}
-            className="readout mt-2 text-[11.5px] text-lum-4 transition-colors hover:text-lum-2"
-          >
-            다시 정하기
-          </button>
+          {/* 돌리기 — 사람이 눌러야만 시작한다. 스스로 시작하는 길은 없다.
+              바꾸는 조작이 든 절차를 사람 모르게 돌리면 틀렸다는 걸 아는
+              시점이 이미 실행된 뒤다. */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {live && !live.doneAt && !live.error ? (
+              <span className="readout text-[12px] text-lum-2">
+                도는 중 · {live.index + 1}/{c.steps.length}단계
+              </span>
+            ) : live?.error ? (
+              <span className="readout text-[12px] text-[#e0a0a0]">
+                {live.index + 1}단계에서 멈췄어 — {live.error}
+              </span>
+            ) : live?.doneAt ? (
+              <span className="readout text-[12px] text-[#63e6d2]">다 됐어</span>
+            ) : asking ? (
+              <>
+                {c.paramIdx.map((i) => (
+                  <input
+                    key={i}
+                    value={vals[i] ?? ""}
+                    onChange={(e) => setVals((v) => ({ ...v, [i]: e.target.value }))}
+                    placeholder={`${i + 1}단계에 넣을 값`}
+                    className="readout min-w-0 flex-1 rounded-sm border border-[rgba(160,185,220,0.16)] bg-transparent px-2 py-1 text-[12.5px] text-lum-0 outline-none placeholder:text-lum-4 focus:border-[rgba(160,185,220,0.4)]"
+                  />
+                ))}
+                <button
+                  type="button"
+                  onClick={start}
+                  className="readout shrink-0 rounded-sm border border-[rgba(99,230,210,0.3)] px-2 py-1 text-[12.5px] text-lum-1 transition-colors hover:border-[rgba(99,230,210,0.6)] hover:text-lum-0"
+                >
+                  시작
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAsking(false)}
+                  className="readout shrink-0 text-[11.5px] text-lum-4 transition-colors hover:text-lum-2"
+                >
+                  그만
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => (c.paramIdx.length > 0 ? setAsking(true) : start())}
+                className="readout rounded-sm border border-[rgba(99,230,210,0.3)] px-2 py-1 text-[12px] text-lum-1 transition-colors hover:border-[rgba(99,230,210,0.6)] hover:text-lum-0"
+              >
+                돌려보기
+                {c.mutates && <span className="ml-1 text-[#e0c090]">· 바꿈</span>}
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => run(() => onForget(c.signature))}
+              className="readout ml-auto text-[11.5px] text-lum-4 transition-colors hover:text-lum-2"
+            >
+              다시 정하기
+            </button>
+          </div>
         </>
       ) : naming ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">

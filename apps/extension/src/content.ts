@@ -232,6 +232,117 @@
     { passive: true, capture: true },
   );
 
+  // ── 절차 실행기 ────────────────────────────────────────
+  //
+  // 페이지가 뜰 때마다 서비스 워커에게 "여기서 지금 할 일이 있나"를 묻는다.
+  // 절차는 페이지 이동을 넘으므로(supabase → docs.google) 이 물음이 이동
+  // 뒤에도 이어지는 유일한 실마리다 — content script 는 이동할 때마다 죽는다.
+  //
+  // 도메인이 맞을 때만 답이 온다. 절차가 supabase 를 기다리는 동안 유튜브를
+  // 봐도 아무 일도 일어나지 않는다.
+
+  /** 요소가 나타날 때까지 짧게 되풀이해 찾는다. 시간을 재생하지 않는 이유 —
+   *  녹화 때의 dt 를 그대로 기다리면 네트워크가 느린 날 실패하고 빠른 날
+   *  헛되이 기다린다. dt 는 각오할 상한으로만 쓴다. */
+  function waitFor(sel: string, timeoutMs: number): Promise<Element | null> {
+    return new Promise((resolve) => {
+      const found = document.querySelector(sel);
+      if (found) return resolve(found);
+      const t0 = Date.now();
+      const timer = setInterval(() => {
+        const el = document.querySelector(sel);
+        if (el || Date.now() - t0 > timeoutMs) {
+          clearInterval(timer);
+          resolve(el);
+        }
+      }, 120);
+    });
+  }
+
+  /** 셀렉터가 없는 단계는 보이는 텍스트로 찾는다 — 녹화 때 안정 셀렉터가
+   *  없었던 요소들이다. 정확도가 떨어지므로 첫 번째 것만 쓴다. */
+  function findByLabel(label: string): Element | null {
+    const cands = document.querySelectorAll('button, a, [role], input, select, summary, label');
+    for (let i = 0; i < cands.length; i++) {
+      const t = (cands[i].getAttribute('aria-label') ?? cands[i].textContent ?? '').trim();
+      if (t === label) return cands[i];
+    }
+    return null;
+  }
+
+  type RunStep = { sel?: string; label?: string; isInput: boolean; dt: number };
+
+  async function doStep(step: RunStep, value: string | null): Promise<string | null> {
+    const budget = Math.max(4000, Math.min(20000, Math.round(step.dt * 1000) + 4000));
+    let el: Element | null = step.sel ? await waitFor(step.sel, budget) : null;
+    if (!el && step.label) el = findByLabel(step.label);
+    if (!el) return `"${step.label ?? step.sel ?? '요소'}" 를 못 찾았어`;
+
+    if (step.isInput) {
+      // 값은 녹화에 없다. 사람이 실행 전에 채운 것만 넣는다 — 지난달 값이
+      // 박혀 있는 것보다 매번 묻는 쪽이 맞다.
+      if (value == null) return '넣을 값이 없어';
+      const input = el as HTMLInputElement;
+      const proto = Object.getPrototypeOf(input);
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      // React 는 자기가 심은 setter 로만 상태를 갱신한다. el.value = x 는
+      // DOM 만 바꾸고 리액트는 모른 채로 남아, 제출하면 빈 값이 간다.
+      if (setter) setter.call(input, value);
+      else input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return null;
+    }
+
+    (el as HTMLElement).click();
+    return null;
+  }
+
+  async function pump(): Promise<void> {
+    let guard = 0;
+    let ask: { step: RunStep; index: number; value: string | null } | null = await new Promise(
+      (resolve) => {
+        try {
+          chrome.runtime.sendMessage({ type: 'RUN_STEP_ASK', host }, (res) => {
+            if (chrome.runtime.lastError || !res?.step) return resolve(null);
+            resolve({ step: res.step, index: res.index, value: res.value ?? null });
+          });
+        } catch {
+          resolve(null);
+        }
+      },
+    );
+
+    // 한 페이지에서 여러 단계를 이어서 한다. 단계마다 페이지가 바뀌는 것은
+    // 아니라서, 이동이 없으면 여기서 계속 돈다. guard 는 무한 루프 방어다.
+    while (ask && guard++ < 50) {
+      const err = await doStep(ask.step, ask.value);
+      const next: {
+        more?: boolean;
+        step?: RunStep;
+        index?: number;
+        value?: string | null;
+      } | null = await new Promise((resolve) => {
+        try {
+          chrome.runtime.sendMessage(
+            { type: 'RUN_STEP_DONE', host, ok: !err, error: err },
+            (res) => resolve(chrome.runtime.lastError ? null : res),
+          );
+        } catch {
+          resolve(null);
+        }
+      });
+      if (err || !next?.more || !next.step) break;
+      ask = { step: next.step, index: next.index ?? 0, value: next.value ?? null };
+      // 클릭이 화면을 바꿀 틈을 준다. 이동이 일어나면 이 스크립트는 죽고
+      // 새 페이지의 content script 가 이어받는다.
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  // 페이지가 자리 잡은 뒤에 시작한다 — 로드 직후에는 아직 그릴 것을 안 그렸다.
+  setTimeout(() => void pump(), 600);
+
   // content script 는 페이지 컨텍스트에서 계속 살아있으므로 setInterval 사용이
   // 안전하다 (서비스 워커에서는 절대 금지 — chrome.alarms 사용).
   // 보이는 탭에서 미디어(video/audio)가 실제 재생 중인지.

@@ -32,6 +32,7 @@ export default defineConfig({
         sw: 'src/sw.ts',
         content: 'src/content.ts',
         'connect-content': 'src/connect-content.ts',
+        'run-content': 'src/run-content.ts',
         popup: 'src/popup.ts',
       },
       output: {
