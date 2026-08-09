@@ -502,3 +502,46 @@ export async function repointProcedureStep(
   revalidatePath("/procedures");
   return { ok: true };
 }
+
+/**
+ * 승인된 절차에서 단계 하나를 뺀다.
+ *
+ * 추출은 스친 클릭을 끼워 넣을 수 있다. 지나가다 누른 것이 마침 두 번
+ * 반복되면 절차의 일부로 보이는데, 그건 다시 집어도 고쳐지지 않는다 —
+ * 그 자리에 있어야 할 것이 애초에 없기 때문이다.
+ *
+ * 딸린 읽기도 같이 정리한다. 읽기는 "몇 번째 단계 뒤"로 매여 있어서,
+ * 단계가 빠지면 뒤쪽 번호가 전부 하나씩 밀린다.
+ */
+export async function dropProcedureStep(
+  signature: string,
+  index: number,
+): Promise<ProcedureResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+
+  const [row] = await db
+    .select({ steps: procedures.steps, reads: procedures.reads })
+    .from(procedures)
+    .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)))
+    .limit(1);
+  if (!row) return { ok: false, error: "그 절차를 찾을 수 없어." };
+
+  const steps = (row.steps ?? []) as unknown[];
+  if (!steps[index]) return { ok: false, error: "그 단계가 없어." };
+  if (steps.length <= 1) return { ok: false, error: "마지막 단계는 뺄 수 없어." };
+
+  const reads = ((row.reads ?? []) as { after: number }[])
+    // 빠지는 단계에 매인 읽기는 갈 곳이 없다.
+    .filter((r) => r.after !== index)
+    // 뒤쪽은 한 칸씩 당긴다.
+    .map((r) => (r.after > index ? { ...r, after: r.after - 1 } : r));
+
+  await db
+    .update(procedures)
+    .set({ steps: steps.filter((_, i) => i !== index), reads })
+    .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)));
+
+  revalidatePath("/procedures");
+  return { ok: true };
+}

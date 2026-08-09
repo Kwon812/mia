@@ -60,6 +60,7 @@ export function ProcedureCard({
   onReject,
   onForget,
   onRepoint,
+  onDropStep,
 }: {
   candidate: Candidate;
   /** 이미 답한 것이면 그 답. 아니면 null. */
@@ -83,6 +84,9 @@ export function ProcedureCard({
     sel: string,
     label: string,
   ) => Promise<Result>;
+  /** 있어선 안 될 단계를 뺀다. 다시 집어도 안 고쳐지는 것 — 그 자리에
+   *  있어야 할 것이 애초에 없는 경우다. */
+  onDropStep?: (signature: string, index: number) => Promise<Result>;
 }) {
   const c = candidate;
   const [naming, setNaming] = useState(false);
@@ -340,6 +344,27 @@ export function ProcedureCard({
                     className="readout rounded-sm border border-[rgba(160,185,220,0.24)] px-2 py-1 text-[12px] text-lum-1 transition-colors hover:border-[rgba(160,185,220,0.5)] hover:text-lum-0 disabled:opacity-40"
                   >
                     {picking === live.index ? "저 창에서 집어줘…" : "이 단계 다시 집기"}
+                  </button>
+                )}
+                {/* 다시 집어도 안 고쳐지는 것이 있다 — 그 자리에 있어야 할
+                    것이 애초에 없는 경우다. 추출이 스친 클릭을 끼워 넣기도
+                    한다: 지나가다 누른 것이 마침 두 번 반복되면 절차의
+                    일부로 보인다. */}
+                {onDropStep && (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => {
+                      const i = live.index;
+                      startTransition(async () => {
+                        const r = await onDropStep(c.signature, i);
+                        if (!r.ok) setError(r.error);
+                        else setLive(null);
+                      });
+                    }}
+                    className="readout text-[12px] text-lum-4 transition-colors hover:text-lum-2"
+                  >
+                    이 단계 빼기
                   </button>
                 )}
               </>

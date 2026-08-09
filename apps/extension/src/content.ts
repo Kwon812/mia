@@ -464,24 +464,60 @@
   // 가로채서 그 자리의 셀렉터를 잡고 끈다.
   let picking = false;
 
-  function pickSelector(el: Element): string {
-    const id = el.id;
-    if (id && !/\d{4,}/.test(id)) return `#${id}`;
+  /** 그 자체로 요소를 짚는 이름이 있나 — 화면이 다시 그려져도 남는 것들. */
+  function ownName(el: Element): string | null {
+    // 숫자가 길게 박힌 id 는 렌더마다 새로 발급된 것이라 다음에 안 맞는다.
+    if (el.id && !/\d{4,}/.test(el.id)) return `#${CSS.escape(el.id)}`;
     for (const a of ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label']) {
       const v = el.getAttribute(a);
-      if (v) return `[${a}="${v.slice(0, 60)}"]`;
+      if (v) return `[${a}="${CSS.escape(v.slice(0, 60))}"]`;
     }
-    // 안정된 이름이 없으면 구조로 짚는다. 정확도가 떨어지지만 없는 것보다 낫다.
+    return null;
+  }
+
+  /**
+   * 집은 자리를 짚는 셀렉터를 만든다.
+   *
+   * 예전에는 위로 네 칸만 올라가며 nth-child 를 쌓았다. 그러면
+   * `div:nth-child(1) > div:nth-child(1) > span:nth-child(2)` 같은 것이
+   * 나오는데, 앵커가 없어서 **문서 어디에나 맞는다** — 화면이 조금 바뀌면
+   * 깨지는 정도가 아니라 엉뚱한 값을 읽어 온다. 실측으로 그런 것만 나왔다.
+   *
+   * 그래서 두 가지를 지킨다.
+   *   ① 안정된 조상(id·data-*)까지 올라가 거기 매단다. 없으면 body 까지.
+   *   ② 만든 것을 **되짚어 확인한다** — 그 셀렉터로 찾은 것이 집은 그것이
+   *      아니면 더 정확한 쪽으로 다시 만든다. 확인 없이 내주면 화면에는
+   *      그럴듯한 값이 보이는데 실제로는 남의 자리를 읽는다.
+   */
+  function pickSelector(el: Element): string {
+    const own = ownName(el);
+    if (own && document.querySelectorAll(own).length === 1) return own;
+
+    // 안정된 조상에 매단다. 형제 중 몇 번째인지는 같은 태그끼리 센다 —
+    // nth-child 는 형제에 다른 태그가 끼면 밀리지만 nth-of-type 은 안 밀린다.
     const parts: string[] = [];
     let cur: Element | null = el;
-    for (let d = 0; cur && d < 4; d++) {
+    while (cur && cur !== document.body && parts.length < 12) {
+      const anchor = ownName(cur);
+      if (anchor && document.querySelectorAll(anchor).length === 1) {
+        parts.unshift(anchor);
+        const sel = parts.join(' > ');
+        if (document.querySelector(sel) === el) return sel;
+        break;
+      }
+      const tag = cur.tagName.toLowerCase();
       const p: Element | null = cur.parentElement;
       if (!p) break;
-      const i = Array.prototype.indexOf.call(p.children, cur) + 1;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${i})`);
+      const sibs = Array.from(p.children).filter((c) => c.tagName === cur!.tagName);
+      parts.unshift(sibs.length > 1 ? `${tag}:nth-of-type(${sibs.indexOf(cur) + 1})` : tag);
       cur = p;
     }
-    return parts.join(' > ');
+
+    // body 에 매단다. 여기까지 오면 길지만, 적어도 문서 안에서 유일하다.
+    const full = ['body', ...parts].join(' > ');
+    if (document.querySelector(full) === el) return full;
+    // 그래도 안 맞으면(웹컴포넌트 등) 가진 이름이라도 내준다.
+    return own ?? full;
   }
 
   /**
