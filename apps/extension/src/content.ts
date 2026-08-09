@@ -494,6 +494,57 @@
     /* 확장 컨텍스트 무효 */
   }
 
+  // ── 사이트 다리 ────────────────────────────────────────
+  //
+  // 사이트 스크립트는 chrome.runtime 에 직접 못 닿는다(격리된 세계). 사이트가
+  // window.postMessage 로 말하면 여기서 옮긴다.
+  //
+  // 예전에는 run-content.js 를 따로 두고 매니페스트에서 경로로 맞췄는데,
+  // **Next 는 SPA 라 그게 안 붙는다.** content script 는 페이지가 실제로
+  // 로드될 때만 주입되므로, 홈에서 눌러 /procedures 로 들어가면 영영 없다.
+  // 오리진으로 넓혀도 매칭에 기대는 건 마찬가지라, 어디에나 붙는 이 스크립트가
+  // 스스로 오리진을 확인하는 쪽이 확실하다.
+  //
+  // 아무 페이지나 절차를 돌리게 두면 안 된다 — 남의 사이트가 START_RUN 을
+  // 보내면 네 브라우저에서 마음대로 클릭이 일어난다. 그래서 앱 오리진에서만 연다.
+  const APP_ORIGINS = ['https://mia-web-nine.vercel.app'];
+  const isApp =
+    APP_ORIGINS.includes(location.origin) ||
+    // 개발 중에는 포트가 자주 바뀐다. 로컬은 열어둔다.
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1';
+
+  if (isApp) {
+    window.addEventListener('message', (e) => {
+      if (e.source !== window || !e.data || typeof e.data.__na !== 'string') return;
+      const kind = e.data.__na as string;
+
+      const relay = (msg: unknown, ackType: string, extra: Record<string, unknown> = {}) => {
+        try {
+          chrome.runtime.sendMessage(msg, (res) => {
+            window.postMessage(
+              {
+                __na: ackType,
+                ...extra,
+                ...(res ?? {}),
+                ok: !chrome.runtime.lastError && (res?.ok !== false),
+                error: chrome.runtime.lastError?.message ?? res?.error ?? null,
+              },
+              '*',
+            );
+          });
+        } catch {
+          window.postMessage({ __na: ackType, ...extra, ok: false, error: '확장에 닿지 못했어' }, '*');
+        }
+      };
+
+      if (kind === 'run') relay({ type: 'START_RUN', run: e.data.run }, 'run-ack');
+      else if (kind === 'pick')
+        relay({ type: 'START_PICK', url: e.data.url }, 'pick-ack', { after: e.data.after });
+      else if (kind === 'run-status') relay({ type: 'RUN_STATUS' }, 'run-status-ack');
+    });
+  }
+
   // 페이지가 자리 잡은 뒤에 시작한다 — 로드 직후에는 아직 그릴 것을 안 그렸다.
   setTimeout(() => void pump(), 600);
 

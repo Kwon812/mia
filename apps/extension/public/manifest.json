@@ -36,16 +36,6 @@
         "connect-content.js"
       ],
       "run_at": "document_idle"
-    },
-    {
-      "matches": [
-        "https://mia-web-nine.vercel.app/*",
-        "http://localhost:3000/*"
-      ],
-      "js": [
-        "run-content.js"
-      ],
-      "run_at": "document_idle"
     }
   ],
   "action": {
