@@ -478,55 +478,87 @@
   function startPicking(): void {
     if (picking) return;
     picking = true;
-    const veil = document.createElement('div');
-    veil.style.cssText =
-      'position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:rgba(10,14,22,.12)';
+
+    // 덮개를 씌우지 않는다. 예전에는 화면 전체를 가리고 십자 커서만 띄웠는데,
+    // 그러면 **무엇을 집는지 안 보인다** — 값이 여러 개 나란한 대시보드에서는
+    // 옆칸을 집어도 알 수가 없다. 대신 마우스 밑의 요소에 테두리를 그린다.
+    //
+    // 가리지 않으니 페이지의 원래 호버 효과도 그대로 보인다. 그게 낫다 —
+    // 실제로 그 자리가 무엇인지가 드러난다.
+    const box = document.createElement('div');
+    box.style.cssText =
+      'position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #63e6d2;' +
+      'background:rgba(99,230,210,.12);border-radius:2px;transition:all .05s';
     const tip = document.createElement('div');
-    tip.textContent = '확인할 것을 클릭하세요 — Esc 로 취소';
     tip.style.cssText =
-      'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:2147483647;' +
-      'background:rgba(10,14,22,.92);color:#dfe8f5;padding:8px 14px;border-radius:4px;' +
-      'font:13px -apple-system,sans-serif;pointer-events:none';
+      'position:fixed;z-index:2147483647;pointer-events:none;max-width:60vw;' +
+      'background:rgba(10,14,22,.94);color:#dfe8f5;padding:6px 10px;border-radius:4px;' +
+      'font:12px -apple-system,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+
+    let hovered: Element | null = null;
+
+    const onMove = (e: MouseEvent) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || el === box || el === tip) return;
+      hovered = el;
+      const r = el.getBoundingClientRect();
+      box.style.left = `${r.left}px`;
+      box.style.top = `${r.top}px`;
+      box.style.width = `${r.width}px`;
+      box.style.height = `${r.height}px`;
+      const text = ((el as HTMLElement).innerText ?? el.textContent ?? '').trim().replace(/\s+/g, ' ');
+      tip.textContent = text ? `"${text.slice(0, 40)}" 를 확인` : `<${el.tagName.toLowerCase()}> 를 확인`;
+      // 요소 위쪽에 붙이되, 화면 밖으로 나가면 아래로 돌린다.
+      const below = r.top < 40;
+      tip.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 320))}px`;
+      tip.style.top = below ? `${r.bottom + 6}px` : `${r.top - 30}px`;
+    };
+
     const stop = () => {
       picking = false;
-      veil.remove();
+      box.remove();
       tip.remove();
+      document.removeEventListener('mousemove', onMove, true);
+      document.removeEventListener('click', onClick, true);
       document.removeEventListener('keydown', onKey, true);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        stop();
-        try {
-          chrome.runtime.sendMessage({ type: 'PICK_RESULT', ok: false });
-        } catch {
-          /* 확장 컨텍스트 무효 */
-        }
-      }
-    };
-    veil.addEventListener('click', (e) => {
+
+    const onClick = (e: MouseEvent) => {
+      // 캡처 단계에서 가로챈다 — 페이지가 그 클릭으로 어디론가 가버리면
+      // 집은 것을 돌려줄 자리가 없다.
       e.preventDefault();
       e.stopPropagation();
-      // 덮개 밑의 진짜 요소를 찾는다.
-      veil.style.pointerEvents = 'none';
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      veil.style.pointerEvents = '';
+      const el = hovered ?? document.elementFromPoint(e.clientX, e.clientY);
       stop();
       if (!el) return;
-      const text = ((el as HTMLElement).innerText ?? el.textContent ?? '').trim().slice(0, 60);
+      const text = ((el as HTMLElement).innerText ?? el.textContent ?? '').trim().replace(/\s+/g, ' ');
       try {
         chrome.runtime.sendMessage({
           type: 'PICK_RESULT',
           ok: true,
           sel: pickSelector(el),
-          sample: text,
+          sample: text.slice(0, 60),
           host,
         });
       } catch {
         /* 확장 컨텍스트 무효 */
       }
-    });
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      stop();
+      try {
+        chrome.runtime.sendMessage({ type: 'PICK_RESULT', ok: false });
+      } catch {
+        /* 확장 컨텍스트 무효 */
+      }
+    };
+
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('click', onClick, true);
     document.addEventListener('keydown', onKey, true);
-    document.body.append(veil, tip);
+    document.body.append(box, tip);
   }
 
   try {

@@ -322,7 +322,13 @@ export function ProcedureCard({
                 <span className="readout w-32 shrink-0 truncate text-lum-4">{s.domain}</span>
                 {got ? (
                   <>
-                    <span className="min-w-0 flex-1 truncate text-lum-1">{got.label}</span>
+                    {/* 무엇을 어떻게 잡았는지 둘 다 보여준다. 라벨만 보면
+                        옆칸을 집었어도 그럴듯해 보이고, 셀렉터가 nth-child
+                        범벅이면 화면이 조금만 바뀌어도 깨진다는 뜻이다. */}
+                    <span className="min-w-0 flex-1 truncate text-lum-1" title={got.sel}>
+                      {got.label}
+                      <span className="ml-2 text-[11px] text-lum-4">{got.sel}</span>
+                    </span>
                     <button
                       type="button"
                       onClick={() => setReads((v) => v.filter((r) => r.after !== i))}
