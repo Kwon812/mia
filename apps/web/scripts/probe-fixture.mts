@@ -36,7 +36,18 @@ const FILTER = args.includes('--filter');
 // 오염시키는 폭포까지 포함해서 재고, 이쪽은 판단력만 잰다. 잡음의 출처가
 // 모델인지 연쇄인지 가르려면 둘 다 필요하다.
 const ORACLE = args.includes('--oracle');
+// 가상의 사람. 세션이 끝날 때마다 그 세션이 만든 경험만 훑어보고(어제 것은
+// 안 본다 — 지도에서 오늘 것을 보는 셈이다), 남의 갈래에 들어간 것을 확률
+// P 로 옮긴다. 옮긴 기록은 corrections 패턴이 되어 다음 프롬프트에 실린다.
+const CORRECT = num('correct', 0);
+// 대조 키워드. 갈래가 다룬 것 중 **다른 갈래에 없는 것**만 싣는다.
+// H1 이 실패한 이유가 겹치는 것까지 다 실어서였다(localhost·Table Editor 가
+// 두 갈래에 다 나온다). 겹치는 것을 빼면 갈라짐의 축만 남는다.
+const KW = args.includes('--kw');
+
 const RUNS = num('runs',1), N = num('n',40), SEED = num('seed',42);
+let rngState = SEED >>> 0;
+const rnd = () => ((rngState = (rngState*1664525+1013904223)>>>0) / 4294967296);
 const ruleFile = args.find(a => !a.startsWith('--'));
 const RULE = ruleFile ? fs.readFileSync(ruleFile,'utf8') : '';
 const TAG = args.find(a=>a.startsWith('--tag='))?.split('=')[1] ?? (ruleFile ?? '기준선');
@@ -53,6 +64,15 @@ const topOf = (segs:any[], ids:number[]) => {
     t.set(k,(t.get(k)??0)+(x.sec??0)); }
   return [...t.entries()].sort((a,b)=>b[1]-a[1]);
 };
+/** 이 갈래에만 있는 것 — 다른 갈래와 겹치는 표면은 뺀다 */
+function uniqueOf(t:any, others:any[]): string {
+  const elsewhere = new Set<string>();
+  for (const o of others) if (o.id !== t.id) for (const k of o.targets.keys()) elsewhere.add(k);
+  return [...t.targets.entries()].filter(([k]:any)=>!elsewhere.has(k))
+    .sort((a:any,b:any)=>b[1]-a[1]).slice(0,3)
+    .map(([k,v]:any)=>`${k} ${Math.round(v/60)}분`).join(' · ');
+}
+
 /** 이 항목의 정답 — 구간 소유자 중 시간 최다 */
 const truthOf = (owners:string[], segs:any[], ids:number[]) => {
   const t = new Map<string,number>();
@@ -80,8 +100,12 @@ const f1s:number[]=[], precs:number[]=[], recs:number[]=[], counts:number[]=[], 
 const dump:any[] = [];
 for (let run=0; run<RUNS; run++) {
   const threads: Th[] = [];
-  const assign: { thread:string; key:string; title:string; session:string }[] = [];
+  const assign: { thread:string; key:string; title:string; session:string;
+                  summary:string }[] = [];
   let splitOk=0, splitTotal=0, oracleOk=0, oracleTotal=0;
+  const rawAssign: { thread:string; key:string }[] = [];   // 모델의 날것 판단
+  const patterns = new Map<string, number>();               // "잘못된 갈래 → 옳은 갈래"
+  const homeOf = new Map<string, Th>();                     // 정답 키가 자리잡은 갈래
 
   // 정답 갈래 — 오라클 모드에서 매 세션 앞에 놓는다.
   const oracle = new Map<string, Th>();
@@ -123,7 +147,9 @@ for (let run=0; run<RUNS; run++) {
       const top=[...t.targets.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3)
         .map(([k,v])=>`${k} ${Math.round(v/60)}분`).join(' · ');
       return { id:t.id, title:t.title, category:t.category, experienceCount:t.n,
-        lastSummary: WITH_TARGETS ? `[주로 다룬 것] ${top}\n   최근: ${t.recent[0]}` : t.recent[0],
+        lastSummary: KW
+          ? `[이 갈래에만 있는 것] ${uniqueOf(t, pool) || '(아직 없음)'}\n   최근: ${t.recent[0]}`
+          : WITH_TARGETS ? `[주로 다룬 것] ${top}\n   최근: ${t.recent[0]}` : t.recent[0],
         idleDays: 0 };
     });
     let out:any = {};
@@ -132,7 +158,11 @@ for (let run=0; run<RUNS; run++) {
         model: MODEL, max_tokens: 2048, temperature: 0,
         system: SYSTEM_PROMPT_V9 + RULE, tools:[RECORD_EXPERIENCE_TOOL],
         tool_choice:{type:'tool',name:TOOL_NAME},
-        messages:[{role:'user',content: buildUserMessage(fx.session as any, [] as any, [] as any, list as any)}],
+        messages:[{role:'user',content: buildUserMessage(
+        fx.session as any, [] as any, [] as any, list as any, [] as any,
+        [...patterns.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8)
+          .map(([k,count])=>{ const [from,to]=k.split(' → ');
+            return { field:'thread' as any, from, to, count }; }))}],
       });
       tokIn += res.usage.input_tokens; tokOut += res.usage.output_tokens;
       out = (res.content.find((b:any)=>b.type==='tool_use') as any)?.input ?? {};
@@ -144,6 +174,7 @@ for (let run=0; run<RUNS; run++) {
     splitTotal++; if (items.length === fx.expect.length) splitOk++;
 
     const lines:string[] = [];
+    const mine = assign.length;
     items.forEach((it,i)=>{
       const truth = truthOf(fx.owners, segs, it.segmentIds);
       const d = dec[i] ?? { action:'new', title:null };
@@ -161,7 +192,9 @@ for (let run=0; run<RUNS; run++) {
       const use = it.segmentIds.length ? it.segmentIds : segs.map((_:any,i:number)=>i);
       for (const i of use) if (segs[i]) th.domains.add(segs[i].domain);
 
-      assign.push({ thread: th.id, key: truth, title: th.title, session: fx.name });
+      assign.push({ thread: th.id, key: truth, title: th.title, session: fx.name,
+                    summary: it.summary });
+      rawAssign.push({ thread: th.id, key: truth });   // 고치기 전, 모델이 정한 그대로
       // 오라클 채점 — 정답 갈래가 목록에 있었는데 거기로 갔는가
       if (ORACLE) {
         const want = oracle.get(truth);
@@ -170,10 +203,47 @@ for (let run=0; run<RUNS; run++) {
       }
       lines.push(`   ${truth.padEnd(9)} → ${attached?'attach':'NEW   '} "${th.title.slice(0,30)}"`);
     });
+    // ---- 가상의 사람이 고친다 ----
+    if (CORRECT > 0) {
+      for (let k = mine; k < assign.length; k++) {
+        const a = assign[k];
+        const th = threads.find(t=>t.id===a.thread);
+        if (!th) continue;
+        const dom = [...th.keys.entries()].sort((x,y)=>y[1]-x[1])[0]?.[0];
+        if (dom === a.key) continue;             // 다수와 같으면 사람 눈에 안 띈다
+        if (rnd() >= CORRECT) continue;          // 매번 고치지는 않는다
+        // 옮긴다
+        th.keys.set(a.key, (th.keys.get(a.key) ?? 1) - 1);
+        if ((th.keys.get(a.key) ?? 0) <= 0) th.keys.delete(a.key);
+        th.n -= 1;
+        let home = homeOf.get(a.key);
+        if (!home || home.id === th.id) {
+          home = { id:`t${threads.length+1}`, title:a.summary.slice(0,32), category:th.category, n:0,
+                   recent:[], targets:new Map(), lastAt:threads.length, keys:new Map(),
+                   domains:new Set() };
+          threads.push(home); homeOf.set(a.key, home);
+        }
+        home.n += 1; home.keys.set(a.key,(home.keys.get(a.key)??0)+1);
+        home.recent.unshift(a.summary);
+        for (const [d] of th.targets) if (!home.targets.has(d)) home.targets.set(d,1);
+        for (const d of th.domains) home.domains.add(d);
+        const pk = `${th.title.slice(0,24)} → ${home.title.slice(0,24)}`;
+        patterns.set(pk,(patterns.get(pk)??0)+1);
+        a.thread = home.id; a.title = home.title;   // 최종 상태는 고쳐진 상태
+      }
+    }
+    for (let k = mine; k < assign.length; k++)
+      if (!homeOf.has(assign[k].key)) homeOf.set(assign[k].key, threads.find(t=>t.id===assign[k].thread)!);
+
     if (RUNS === 1) console.log(`${fx.name}  기대 ${fx.expect.length}건 → ${items.length}건\n${lines.join('\n')}`);
   }
 
-  const { p, r, f1 } = pairF1(assign);
+  const raw = pairF1(rawAssign);
+  const { p, r, f1 } = CORRECT > 0 ? raw : pairF1(assign);   // 교정 시험은 날것으로 잰다
+  if (CORRECT > 0) {
+    const fin = pairF1(assign);
+    console.log(`  [교정 ${CORRECT}] 모델 날것 F1 ${(raw.f1*100).toFixed(1)}% · 사람이 고친 뒤 F1 ${(fin.f1*100).toFixed(1)}% · 옮긴 횟수 ${[...patterns.values()].reduce((a,b)=>a+b,0)}`);
+  }
   if (ORACLE) console.log(`  [오라클] 정답 갈래가 목록에 있을 때 그리로 간 비율 ${oracleOk}/${oracleTotal} = ${(oracleOk/Math.max(1,oracleTotal)*100).toFixed(1)}%`);
   console.log(`\n  --- ${run+1}회차 · F1 ${(f1*100).toFixed(1)}% (정밀 ${(p*100).toFixed(0)} / 재현 ${(r*100).toFixed(0)}) · 갈래 ${threads.length}(정답 ${TRUTH_THREADS}) · 분할 ${splitOk}/${splitTotal} ---`);
   [...threads].sort((a,b)=>b.n-a.n).slice(0,12).forEach(t=>{
