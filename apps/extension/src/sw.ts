@@ -822,12 +822,26 @@ async function announce(run: RunState): Promise<void> {
     }
     void chrome.tabs.create({ url, active: true }).then((tab) => {
       pickWaiter = { tabId: tab.id ?? -1, reply: sendResponse };
-      // content script 가 주입될 때까지 기다린다. document_idle 이라 페이지가
-      // 자리 잡은 뒤이고, 그보다 일찍 보내면 리스너가 아직 없다.
+      // 밀어넣지 않고 **기다린다.**
+      //
+      // 예전에는 1.2초 뒤에 tabs.sendMessage 로 밀었는데, 무거운 대시보드는
+      // 그때 content script 가 아직 안 붙어 있어서 조용히 아무 일도 안
+      // 일어났다. 지금은 페이지가 자리 잡고 스스로 "나 집기 대기 중이야?"를
+      // 묻는다 — 경합이 아예 없어진다.
+      //
+      // 이미 떠 있는 탭을 위해 밀기도 남긴다. 실패해도 그만이다.
       setTimeout(() => {
-        if (tab.id != null) void chrome.tabs.sendMessage(tab.id, { type: 'START_PICK' }).catch(() => undefined);
-      }, 1200);
+        if (tab.id != null)
+          void chrome.tabs.sendMessage(tab.id, { type: 'START_PICK' }).catch(() => undefined);
+      }, 1500);
     });
+    return true;
+  }
+
+  // content script 가 뜨자마자 묻는다 — 이 탭이 집기 대상인가.
+  // 밀어넣기의 타이밍 경합을 없애는 쪽이다.
+  if (message?.type === 'PICK_ASK') {
+    sendResponse({ pick: pickWaiter != null && pickWaiter.tabId === sender.tab?.id });
     return true;
   }
 

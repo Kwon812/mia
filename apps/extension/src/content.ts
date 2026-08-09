@@ -497,6 +497,19 @@
   // 페이지가 자리 잡은 뒤에 시작한다 — 로드 직후에는 아직 그릴 것을 안 그렸다.
   setTimeout(() => void pump(), 600);
 
+  // 이 탭이 집기 대상인지 스스로 묻는다. 서비스 워커가 밀어넣기를 기다리면
+  // 무거운 페이지에서 경합이 난다 — 밀 때 이 스크립트가 아직 없다.
+  setTimeout(() => {
+    try {
+      chrome.runtime.sendMessage({ type: 'PICK_ASK' }, (res) => {
+        if (chrome.runtime.lastError) return;
+        if (res?.pick) startPicking();
+      });
+    } catch {
+      /* 확장 컨텍스트 무효 */
+    }
+  }, 700);
+
   // content script 는 페이지 컨텍스트에서 계속 살아있으므로 setInterval 사용이
   // 안전하다 (서비스 워커에서는 절대 금지 — chrome.alarms 사용).
   // 보이는 탭에서 미디어(video/audio)가 실제 재생 중인지.
