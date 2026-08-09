@@ -86,6 +86,8 @@ export function ProcedureCard({
   const [live, setLive] = useState<RunState>(null);
   const [reads, setReads] = useState<Read[]>([]);
   const [picking, setPicking] = useState<number | null>(null);
+  /** 진행 중인 집기를 접는 손잡이. 결과가 안 돌아와도 잠기지 않게 한다. */
+  const [cancelPick, setCancelPick] = useState<() => void>(() => () => {});
 
   // 확장이 어디까지 갔는지 물어본다. 절차가 도는 동안 화면이 조용하면
   // 멈춘 건지 도는 건지 알 수 없다.
@@ -337,14 +339,24 @@ export function ProcedureCard({
                       빼기
                     </button>
                   </>
+                ) : picking === i ? (
+                  // 진행 중인 것은 그만둘 수 있어야 한다. 결과가 안 돌아오면
+                  // 이 상태로 잠기는데, 예전에는 **다른 집기까지 비활성**돼서
+                  // 화면 전체가 먹통처럼 보였다.
+                  <button
+                    type="button"
+                    onClick={() => cancelPick()}
+                    className="readout shrink-0 text-lum-3 transition-colors hover:text-lum-0"
+                  >
+                    집는 중… (누르면 그만)
+                  </button>
                 ) : (
                   <button
                     type="button"
-                    disabled={picking !== null}
                     onClick={() => pick(i, s.domain)}
-                    className="readout shrink-0 text-lum-3 transition-colors hover:text-lum-0 disabled:opacity-40"
+                    className="readout shrink-0 text-lum-3 transition-colors hover:text-lum-0"
                   >
-                    {picking === i ? "저 창에서 집어줘…" : "집기"}
+                    집기
                   </button>
                 )}
               </div>

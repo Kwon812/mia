@@ -38,6 +38,9 @@ const PICK_KEY = 'na_pick';
 
 type PickState = {
   tabId: number;
+  /** 집기를 시킨 탭 — 결과를 받을 곳. 저장소에 놓고 가져가게만 하면
+   *  한 군데라도 어긋날 때 조용히 잠긴다. 직접 밀어주는 길도 같이 둔다. */
+  fromTabId?: number;
   /** 집기를 시작한 시각. 오래 묵으면 없는 셈 친다. */
   at: number;
   /** 사람이 집은 결과. 아직이면 없다. */
@@ -854,7 +857,11 @@ async function announce(run: RunState): Promise<void> {
       .create({ url, active: true })
       .then((tab) =>
         chrome.storage.local.set({
-          [PICK_KEY]: { tabId: tab.id ?? -1, at: Date.now() } satisfies PickState,
+          [PICK_KEY]: {
+            tabId: tab.id ?? -1,
+            fromTabId: sender.tab?.id,
+            at: Date.now(),
+          } satisfies PickState,
         }),
       )
       // 붙들지 않고 바로 답한다. 사이트는 그 뒤로 결과를 가지러 온다 —
@@ -904,8 +911,21 @@ async function announce(run: RunState): Promise<void> {
           },
         } satisfies PickState,
       });
+      // 시킨 탭에 **직접 밀어준다.** 저장소에 놓고 가져가게만 하면 한 군데라도
+      // 어긋날 때 사이트가 조용히 잠긴 채로 남는다 — 사람 눈에는 확인을
+      // 눌렀는데 아무 일도 안 일어난 것으로 보인다.
+      if (p.fromTabId != null) {
+        await chrome.tabs
+          .sendMessage(p.fromTabId, {
+            type: 'PICK_DONE',
+            ok: message.ok === true,
+            sel: message.sel ?? null,
+            sample: message.sample ?? null,
+          })
+          .catch(() => undefined);
+      }
       // 집었으면 그 탭은 볼일이 끝났다. 결과는 이미 저장소에 있으므로
-      // 닫아도 잃지 않는다.
+      // 닫아도 잃지 않는다 — 폴링도 여전히 가져갈 수 있다.
       const tabId = sender.tab?.id ?? p.tabId;
       if (tabId > 0) await chrome.tabs.remove(tabId).catch(() => undefined);
       sendResponse({ ok: true });

@@ -633,6 +633,14 @@
   try {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'START_PICK') showPickBar();
+      // 집기 결과를 확장이 직접 밀어준다. 사이트가 가지러 오는 길과 둘 다 둔다 —
+      // 한쪽이 어긋나도 잠기지 않게.
+      if (msg?.type === 'PICK_DONE' && isApp) {
+        window.postMessage(
+          { __na: 'pick-ack', done: true, ok: msg.ok, sel: msg.sel, sample: msg.sample, push: true },
+          '*',
+        );
+      }
       // 이미 열려 있는 탭으로 옮겨왔다. 페이지 로드가 없으니 스스로 물을
       // 계기가 없어서, 서비스 워커가 직접 깨운다.
       if (msg?.type === 'RUN_PUMP') void pump();
