@@ -523,26 +523,90 @@
       document.removeEventListener('keydown', onKey, true);
     };
 
+    /**
+     * 집은 것을 보여주고 확인을 받는다.
+     *
+     * 바로 보내면 잘못 집었을 때 되돌릴 길이 없다 — 창이 닫히고 사이트로
+     * 돌아가서 처음부터 다시 해야 한다. 값이 여러 개 나란한 대시보드에서는
+     * 옆칸을 집는 일이 흔하니, 여기서 한 번 보고 정하게 한다.
+     */
+    const confirm = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      box.style.left = `${r.left}px`;
+      box.style.top = `${r.top}px`;
+      box.style.width = `${r.width}px`;
+      box.style.height = `${r.height}px`;
+      box.style.borderColor = '#63e6d2';
+      document.removeEventListener('mousemove', onMove, true);
+
+      const text = ((el as HTMLElement).innerText ?? el.textContent ?? '')
+        .trim()
+        .replace(/\s+/g, ' ');
+      const sel = pickSelector(el);
+
+      tip.textContent = '';
+      tip.style.whiteSpace = 'normal';
+      tip.style.pointerEvents = 'auto';
+      tip.style.display = 'flex';
+      tip.style.alignItems = 'center';
+      tip.style.gap = '10px';
+
+      const what = document.createElement('span');
+      what.textContent = text ? `"${text.slice(0, 40)}"` : `<${el.tagName.toLowerCase()}>`;
+      // 셀렉터도 보여준다. nth-child 범벅이면 화면이 조금만 바뀌어도 깨진다는
+      // 뜻이라, 확인하기 전에 알아야 한다.
+      const how = document.createElement('span');
+      how.textContent = sel.length > 44 ? `${sel.slice(0, 44)}…` : sel;
+      how.style.cssText = 'color:#8b98ab;font-size:11px';
+
+      const yes = document.createElement('button');
+      yes.textContent = '확인';
+      yes.style.cssText =
+        'border:1px solid rgba(99,230,210,.5);background:none;color:#63e6d2;' +
+        'padding:3px 10px;border-radius:3px;cursor:pointer;font:inherit';
+      yes.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        stop();
+        try {
+          chrome.runtime.sendMessage({
+            type: 'PICK_RESULT',
+            ok: true,
+            sel,
+            sample: text.slice(0, 60),
+            host,
+          });
+        } catch {
+          /* 확장 컨텍스트 무효 */
+        }
+      });
+
+      const again = document.createElement('button');
+      again.textContent = '다시';
+      again.style.cssText = 'border:none;background:none;color:#8b98ab;cursor:pointer;font:inherit';
+      again.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        tip.style.pointerEvents = 'none';
+        tip.style.display = '';
+        tip.style.whiteSpace = 'nowrap';
+        document.addEventListener('mousemove', onMove, true);
+      });
+
+      tip.append(what, how, yes, again);
+      // 확인 띠가 화면 밖으로 나가지 않게 다시 앉힌다.
+      tip.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 420))}px`;
+      tip.style.top = r.top < 48 ? `${r.bottom + 8}px` : `${r.top - 38}px`;
+    };
+
     const onClick = (e: MouseEvent) => {
       // 캡처 단계에서 가로챈다 — 페이지가 그 클릭으로 어디론가 가버리면
       // 집은 것을 돌려줄 자리가 없다.
       e.preventDefault();
       e.stopPropagation();
+      // 확인 띠 안을 누른 것은 집기가 아니다.
+      if (tip.contains(e.target as Node)) return;
       const el = hovered ?? document.elementFromPoint(e.clientX, e.clientY);
-      stop();
       if (!el) return;
-      const text = ((el as HTMLElement).innerText ?? el.textContent ?? '').trim().replace(/\s+/g, ' ');
-      try {
-        chrome.runtime.sendMessage({
-          type: 'PICK_RESULT',
-          ok: true,
-          sel: pickSelector(el),
-          sample: text.slice(0, 60),
-          host,
-        });
-      } catch {
-        /* 확장 컨텍스트 무효 */
-      }
+      confirm(el);
     };
 
     const onKey = (e: KeyboardEvent) => {
