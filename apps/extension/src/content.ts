@@ -111,11 +111,120 @@
   let clicks = 0;
   let keys = 0;
 
+  // ── 조작 기록 ──────────────────────────────────────────────
+  //
+  // 예전에는 clicks++ 로 **횟수만** 셌다. 그걸로는 "어디 있었나"까지만 알고
+  // "무엇을 했나"는 모른다 — 같은 Supabase 콘솔이라도 테이블을 내보낸 것과
+  // 그냥 들여다본 것이 구별되지 않는다. 절차를 뽑으려면 후자가 필요하다.
+  //
+  // 무엇을 남기는가(계획서 PLAN-observe.md 의 B 안):
+  //   태그·역할·보이는 텍스트 + 안정 셀렉터(id / data-* / aria-label)
+  //
+  // 무엇을 여전히 안 남기는가:
+  //   **키 입력 내용과 입력 필드의 값.** keydown 은 지금도 횟수만 센다.
+  //   입력은 종류와 길이로만 남긴다(`email 24자`) — 절차의 뼈대에는 그걸로
+  //   충분하고, 값 자체는 내용이라 성격이 달라진다.
+  const MAX_ACT = 40; // 한 틱(10초)에 남길 조작 상한. 자동 스크롤 등 폭주 방어.
+  const MAX_LABEL = 60;
+
+  // dt: 직전 조작으로부터 흐른 초. 절대 시각이 아니라 **간격**인 이유는
+  // 실행기에 필요한 게 그것이기 때문이다 — 「누르고 8초 뒤에 눌렀다」는
+  // 그 사이에 화면이 바뀌기를 기다렸다는 뜻이고, 재실행할 때도 기다려야 한다.
+  // 간격 없이 순서만 남기면 「연달아 두 번」과 구별이 안 되고, 그건 나중에
+  // 소급해서 못 채운다.
+  type Action = { t: string; label?: string; sel?: string; mut?: true; dt?: number };
+  let actions: Action[] = [];
+  let lastActAt = 0;
+
+  /** 조작을 담으면서 직전과의 간격을 붙인다. */
+  function pushAction(act: Action): void {
+    if (actions.length >= MAX_ACT) return;
+    const now = Date.now();
+    if (lastActAt > 0) {
+      const dt = Math.round((now - lastActAt) / 100) / 10; // 0.1초 단위
+      if (dt >= 0.5) act.dt = dt; // 0.5초 미만은 연속 조작으로 보고 안 남긴다
+    }
+    lastActAt = now;
+    actions.push(act);
+  }
+
+  /** 재실행에 쓸 수 있는 셀렉터만 고른다 — 자동 생성 클래스는 다음에 안 맞는다. */
+  function stableSelector(el: Element): string | undefined {
+    const id = el.id;
+    if (id && !/\d{4,}/.test(id)) return `#${id}`;
+    for (const a of ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label']) {
+      const v = el.getAttribute(a);
+      if (v) return `[${a}="${v.slice(0, MAX_LABEL)}"]`;
+    }
+    const role = el.getAttribute('role');
+    return role ? `[role="${role}"]` : undefined;
+  }
+
+  /** 보이는 텍스트. 버튼 라벨이 절차의 이름표가 된다. */
+  function labelOf(el: Element): string | undefined {
+    const t =
+      el.getAttribute('aria-label') ??
+      (el as HTMLElement).innerText ??
+      el.textContent ??
+      undefined;
+    return t?.trim().replace(/\s+/g, ' ').slice(0, MAX_LABEL) || undefined;
+  }
+
+  /**
+   * 무언가를 **바꾸는** 조작인가.
+   *
+   * 이 표시가 두 군데서 쓰인다. 절차의 후조건을 뽑는 재료이고, 나중에 그
+   * 절차를 사람 없이 돌려도 되는지 가르는 기준이다 — 읽기만 하는 절차는
+   * 최악이 헛수고지만 바꾸는 절차는 최악이 되돌릴 수 없다.
+   */
+  function isMutating(el: Element, label?: string): boolean {
+    if (el.matches('button[type="submit"], input[type="submit"], a[download]')) return true;
+    if (el.closest('form') && el.matches('button:not([type="button"])')) return true;
+    return /저장|제출|삭제|배포|보내기|내보내기|등록|확인|올리기|다운로드|save|submit|delete|deploy|publish|export|download|create|apply|confirm/i.test(
+      label ?? '',
+    );
+  }
+
   document.addEventListener('scroll', () => scrolls++, { passive: true });
-  document.addEventListener('click', () => clicks++, { passive: true });
-  // 키 입력 "횟수"만 센다 — 어떤 키인지(내용)는 절대 읽지 않는다 (키로거 금지,
-  // 스토어 심사·프라이버시상 필수). 입력 필드 값도 별도로 읽지 않는다.
+  document.addEventListener(
+    'click',
+    (e) => {
+      clicks++;
+      if (actions.length >= MAX_ACT) return;
+      // 클릭은 자식(아이콘·span)에 꽂히기 마련이라 조작 주체까지 올라간다.
+      const raw = e.target as Element | null;
+      const el = raw?.closest?.('button, a, [role], input, select, summary, label') ?? raw;
+      if (!el || !(el instanceof Element)) return;
+      const label = labelOf(el);
+      const act: Action = { t: el.tagName.toLowerCase() };
+      if (label) act.label = label;
+      const sel = stableSelector(el);
+      if (sel) act.sel = sel;
+      if (isMutating(el, label)) act.mut = true;
+      pushAction(act);
+    },
+    { passive: true, capture: true },
+  );
+  // 키 입력 "횟수"만 센다 — 어떤 키인지(내용)는 여전히 절대 읽지 않는다
+  // (키로거 금지). 아래 change 리스너도 값이 아니라 종류와 길이만 본다.
   document.addEventListener('keydown', () => keys++, { passive: true });
+  // 입력이 **끝났을 때** 무엇을 채웠는지 — 값이 아니라 종류와 길이다.
+  // 절차에서 이 자리는 "여기에 날짜를 넣는다" 정도의 뜻만 지니면 된다.
+  document.addEventListener(
+    'change',
+    (e) => {
+      if (actions.length >= MAX_ACT) return;
+      const el = e.target as HTMLInputElement | null;
+      if (!el || !(el instanceof Element) || !el.matches('input, select, textarea')) return;
+      if (/password|hidden/i.test(el.type ?? '')) return; // 길이조차 남기지 않는다
+      const kind = el.tagName === 'SELECT' ? 'select' : (el.type || 'text');
+      const act: Action = { t: 'input', label: `${kind} ${el.value?.length ?? 0}자` };
+      const sel = stableSelector(el);
+      if (sel) act.sel = sel;
+      pushAction(act);
+    },
+    { passive: true, capture: true },
+  );
 
   // content script 는 페이지 컨텍스트에서 계속 살아있으므로 setInterval 사용이
   // 안전하다 (서비스 워커에서는 절대 금지 — chrome.alarms 사용).
@@ -158,6 +267,9 @@
         title: document.title.slice(0, MAX_TEXT_LEN),
         path: location.pathname.slice(0, MAX_TEXT_LEN),
         query: extractSearchQuery(),
+        // ── 조작 열 ── 절차 추출의 원재료. 도메인·제목이 "어디 있었나"라면
+        // 이건 "무엇을 했나"다. 둘 다 있어야 절차가 뽑힌다.
+        actions: actions.length > 0 ? actions : undefined,
       });
     } catch {
       // chrome.runtime 부재 또는 확장 컨텍스트 무효화(reload 등) 시 무시한다.
@@ -166,5 +278,6 @@
     scrolls = 0;
     clicks = 0;
     keys = 0;
+    actions = [];
   }, 10000);
 })();

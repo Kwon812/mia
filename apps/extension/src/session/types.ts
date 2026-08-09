@@ -17,6 +17,26 @@ import type { RawEvent } from '../db';
 export type { RawEvent };
 
 /** rawEvents 에서 정규화된 활동 이벤트 하나. */
+/** 조작 하나. content.ts 가 만들고 redact 를 거쳐 여기까지 온다. */
+export interface ActionRecord {
+  /** 태그명 (button/a/input …) */
+  t: string;
+  /** 보이는 텍스트 또는 aria-label (60자 절단). input 은 `종류 N자`. */
+  label?: string;
+  /** 재실행에 쓸 수 있는 안정 셀렉터 — id / data-* / name / aria-label / role */
+  sel?: string;
+  /** 무언가를 바꾼 조작인가 (제출·저장·삭제·배포·다운로드) */
+  mut?: true;
+  /**
+   * 직전 조작으로부터 흐른 초 (0.5초 미만이면 없음).
+   *
+   * 실행기가 이걸 쓴다 — 간격이 길었다는 건 화면이 바뀌기를 기다렸다는
+   * 뜻이고, 재실행할 때도 그 자리에서 기다려야 한다. 순서만 남기면
+   * 「연달아 두 번」과 구별이 안 된다.
+   */
+  dt?: number;
+}
+
 export interface ActivityEvent {
   /** epoch ms */
   at: number;
@@ -48,6 +68,14 @@ export interface ActivityEvent {
    * URL 파라미터에 실릴 수 있는 값의 유출을 막기 위함. 검색어는 아래 query 로만 받는다.
    */
   path?: string;
+  /**
+   * 이 10초 틱에 일어난 조작들 — "무엇을 눌렀나".
+   *
+   * domain/title 이 "어디 있었나"라면 이건 "무엇을 했나"다. 절차를 뽑으려면
+   * 둘 다 있어야 한다 — 같은 콘솔이라도 내보낸 것과 들여다본 것이 갈린다.
+   * `mut` 은 무언가를 바꾼 조작(제출·저장·삭제·배포)이라는 표시다.
+   */
+  acts?: ActionRecord[];
   /**
    * 검색 엔진 화이트리스트 파라미터에서만 추출한 검색어 (content.ts 의
    * SEARCH_QUERY_PARAMS 참고). DOM 입력 필드 값을 직접 읽지 않는다.

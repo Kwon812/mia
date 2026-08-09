@@ -732,6 +732,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         title: message.title,
         path: message.path,
         query: message.query,
+        // 조작 열 — 라벨에 비밀이 박힐 수 있어 redactPayload 를 통과시킨다.
+        actions: message.actions,
       }),
     })
     .then(

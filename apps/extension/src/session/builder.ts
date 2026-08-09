@@ -11,7 +11,7 @@ import {
   recentDominantCategory,
   dominantCategory as pickDominantCategory,
 } from './rules';
-import type { ActivityEvent, FinalCloseReason, RawEvent, SessionDraft } from './types';
+import type { ActionRecord, ActivityEvent, FinalCloseReason, RawEvent, SessionDraft } from './types';
 
 // domains(호스트별 누적 초) 계산 시, 이벤트 사이 간격을 얼마까지 "그 도메인에
 // 머문 시간"으로 인정할지의 상한. content script 활동 신호 주기(10초)보다
@@ -59,6 +59,13 @@ const MAX_VIA = 6;
 /** earlier(잘려나간 앞부분 요약)에 남길 항목 수. */
 const MAX_EARLIER_TOP = 8;
 const MAX_SEGMENT_PATHS = 3; // 구간별 path 예시 최대 개수
+// 구간별 조작 최대 개수. paths(3)보다 훨씬 넉넉한 이유는 이게 절차의 **뼈대**라
+// 순서가 곧 내용이기 때문이다 — 세 개만 남기면 「필터 → 내보내기」가 잘려
+// 절차가 아니라 파편이 된다. 세션당 상한은 MAX_SEGMENTS(20) × 이 값이다.
+const MAX_SEGMENT_ACTS = 24;
+// 조작 라벨 절단 — content.ts 의 MAX_LABEL 과 같은 값. 저쪽이 이미 자르지만
+// rawEvents 는 오래 살아 다른 버전이 섞이므로 여기서도 방어한다.
+const MAX_ACT_LABEL = 60;
 export const MAX_QUERIES = 15; // 세션 전체 검색 쿼리 최대 개수 (중복 제거 후)
 
 function newId(): string {
@@ -107,7 +114,33 @@ export function normalizeEvent(raw: RawEvent): ActivityEvent {
     title: readTextField(payload, 'title', MAX_TITLE_LEN),
     path: readTextField(payload, 'path', MAX_TITLE_LEN),
     query: readTextField(payload, 'query', MAX_TITLE_LEN),
+    acts: readActions(payload),
   };
+}
+
+/**
+ * payload.actions 를 검증해서 받는다.
+ *
+ * rawEvents 는 IndexedDB 에 오래 살아 스키마가 섞인다 — 조작 기록이 없던
+ * 시절의 이벤트와 새 이벤트가 한 세션에 같이 들어올 수 있다. 여기서 형태를
+ * 확인하지 않으면 그게 그대로 compressed_log 를 거쳐 프롬프트까지 간다.
+ */
+function readActions(payload: Record<string, unknown>): ActionRecord[] | undefined {
+  const raw = payload.actions;
+  if (!Array.isArray(raw)) return undefined;
+  const out: ActionRecord[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const o = item as Record<string, unknown>;
+    if (typeof o.t !== 'string' || !o.t) continue;
+    const act: ActionRecord = { t: o.t.slice(0, 16) };
+    if (typeof o.label === 'string' && o.label) act.label = o.label.slice(0, MAX_ACT_LABEL);
+    if (typeof o.sel === 'string' && o.sel) act.sel = o.sel.slice(0, MAX_ACT_LABEL);
+    if (o.mut === true) act.mut = true;
+    if (typeof o.dt === 'number' && Number.isFinite(o.dt) && o.dt > 0) act.dt = o.dt;
+    out.push(act);
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 function computeDomainSeconds(events: ActivityEvent[]): Record<string, number> {
@@ -278,6 +311,15 @@ interface CompressedSegment {
   /** 이 구간에서 관측된 path 예시(등장 순서, 중복 제거, 최대 MAX_SEGMENT_PATHS 개). */
   paths?: string[];
   /**
+   * 이 구간의 조작 열 — **순서를 지킨다**.
+   *
+   * paths 처럼 중복을 지우지 않는다. 「테이블 → 필터 → 필터 → 내보내기」에서
+   * 반복은 사람이 손에 익어 두 번 누른 흔적이고, 그걸 지우면 절차의 모양이
+   * 달라진다. 상한(MAX_SEGMENT_ACTS)을 넘으면 **앞쪽을 남긴다** — 절차는
+   * 시작이 특징적이고 끝은 대개 같은 저장·제출이다.
+   */
+  acts?: ActionRecord[];
+  /**
    * 이 구간에 접힌 짧은 경유들 — `"도메인 · 제목"` 꼴.
    *
    * 1분도 안 머문 곳이 구간 한 칸을 차지하면 상한이 경유지로 차버린다.
@@ -324,6 +366,7 @@ interface RawSegment {
   titleCounts: Map<string, number>;
   titleLastAt: Map<string, number>;
   paths: string[];
+  acts: ActionRecord[];
   /** 귀속 체류 시간(ms). assignDwell 이 두 번째 패스에서 채운다. */
   dwellMs: number;
   /** 이 구간에 접힌 짧은 경유들. foldWaypoints 가 채운다. */
@@ -339,6 +382,7 @@ function newRawSegment(e: ActivityEvent): RawSegment {
     titleCounts: new Map(),
     titleLastAt: new Map(),
     paths: [],
+    acts: [],
     dwellMs: 0,
     via: [],
   };
@@ -352,6 +396,12 @@ function absorbEvent(seg: RawSegment, e: ActivityEvent): void {
   }
   if (e.path && seg.paths.length < MAX_SEGMENT_PATHS && !seg.paths.includes(e.path)) {
     seg.paths.push(e.path);
+  }
+  if (e.acts) {
+    for (const a of e.acts) {
+      if (seg.acts.length >= MAX_SEGMENT_ACTS) break;
+      seg.acts.push(a);
+    }
   }
 }
 
@@ -421,6 +471,11 @@ function foldWaypoints(segs: RawSegment[]): RawSegment[] {
         for (const [t, c] of seg.titleCounts) {
           prev.titleCounts.set(t, (prev.titleCounts.get(t) ?? 0) + c);
           prev.titleLastAt.set(t, Math.max(prev.titleLastAt.get(t) ?? 0, seg.titleLastAt.get(t)!));
+        }
+        // 접히는 구간의 조작은 버리지 않고 앞 구간으로 옮긴다. 1분도 안 머문
+        // 경유라도 거기서 「내보내기」를 눌렀으면 그게 절차의 핵심일 수 있다.
+        for (const a of seg.acts) {
+          if (prev.acts.length < MAX_SEGMENT_ACTS) prev.acts.push(a);
         }
         for (const p of seg.paths) {
           if (prev.paths.length < MAX_SEGMENT_PATHS && !prev.paths.includes(p)) prev.paths.push(p);
@@ -579,6 +634,7 @@ function toSegment(seg: RawSegment): CompressedSegment {
   if (title) result.title = title;
 
   if (seg.paths.length > 0) result.paths = seg.paths;
+  if (seg.acts.length > 0) result.acts = seg.acts;
   if (seg.via.length > 0) result.via = seg.via;
 
   return result;

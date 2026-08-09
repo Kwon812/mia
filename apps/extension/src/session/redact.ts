@@ -163,6 +163,17 @@ export function redactPayload(payload: Record<string, unknown>): Record<string, 
   if (typeof out.query === 'string') out.query = redactText(out.query);
   // url 은 tab_updated 가 통째로 싣는다 — 경로가 그대로 들어있어 같이 지운다.
   if (typeof out.url === 'string') out.url = redactUrl(out.url);
+  // 조작 라벨 — 버튼 텍스트에 토큰·시크릿 이름이 박히는 경우가 있다
+  // (GitHub 시크릿 편집 화면의 삭제 버튼이 시크릿 이름을 그대로 단다).
+  if (Array.isArray(out.actions)) {
+    out.actions = out.actions.map((a) => {
+      if (typeof a !== 'object' || a === null) return a;
+      const o = { ...(a as Record<string, unknown>) };
+      if (typeof o.label === 'string') o.label = redactText(o.label);
+      if (typeof o.sel === 'string') o.sel = redactText(o.sel);
+      return o;
+    });
+  }
   return out;
 }
 

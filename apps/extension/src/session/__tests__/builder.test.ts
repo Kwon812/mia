@@ -519,3 +519,51 @@ describe('유휴 시계는 점수가 붙는 이벤트만 리셋한다', () => {
     expect(hasScoringEvent([tabUpdated(1_000_000), typed(1_000_001)])).toBe(true);
   });
 });
+
+// ── 조작 기록 (PLAN-observe 0단계) ───────────────────────────
+//
+// 도메인·제목이 "어디 있었나"라면 조작은 "무엇을 했나"다. 이게 압축을 통과해
+// compressed_log 까지 살아 나가야 절차를 뽑을 수 있다. 중간에 뭉개지면
+// 몇 주 뒤에야 알게 되고, 그때는 그 기간 데이터가 이미 없다.
+describe('조작 기록', () => {
+  const act = (at: number, payload: Record<string, unknown>): RawEvent => ({
+    id: at,
+    at,
+    kind: 'activity',
+    domain: 'app.example.com',
+    payload: { scrolls: 0, clicks: 1, keys: 0, visible: true, ...payload },
+  });
+
+  it('normalizeEvent 가 조작을 통과시킨다', () => {
+    const e = normalizeEvent(
+      act(1000, { actions: [{ t: 'button', label: '내보내기', sel: '#export', mut: true, dt: 3.2 }] }),
+    );
+    expect(e.acts).toEqual([{ t: 'button', label: '내보내기', sel: '#export', mut: true, dt: 3.2 }]);
+  });
+
+  it('형태가 깨진 조작은 버린다 — rawEvents 는 오래 살아 버전이 섞인다', () => {
+    const e = normalizeEvent(
+      act(1000, { actions: [null, 'nope', { label: 't 없음' }, { t: 'a', label: 'ok' }] }),
+    );
+    expect(e.acts).toEqual([{ t: 'a', label: 'ok' }]);
+  });
+
+  it('조작이 없던 시절의 이벤트도 그대로 돈다', () => {
+    expect(normalizeEvent(act(1000, {})).acts).toBeUndefined();
+  });
+
+  it('압축을 지나 compressed_log 까지 살아 나간다 — 순서를 지킨다', () => {
+    const events: RawEvent[] = [
+      act(0, { actions: [{ t: 'a', label: '테이블' }] }),
+      act(60_000, { actions: [{ t: 'button', label: '필터', dt: 12 }] }),
+      act(120_000, { actions: [{ t: 'button', label: '내보내기', sel: '#export', mut: true }] }),
+    ];
+    const draft = ingest(null, events, 180_000);
+    const payload = close(draft, 'idle', 180_000);
+    const acts = (payload.compressed_log.segments as { acts?: unknown[] }[])
+      .flatMap((s) => s.acts ?? []);
+    // 중복 제거를 하지 않는다 — 순서가 곧 절차의 모양이다
+    expect(acts.map((a) => (a as { label: string }).label)).toEqual(['테이블', '필터', '내보내기']);
+    expect(acts.some((a) => (a as { mut?: true }).mut === true)).toBe(true);
+  });
+});

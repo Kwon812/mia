@@ -104,3 +104,23 @@ describe('redactPayload', () => {
     expect(payload.path).toBe('/r/settings/secrets/actions/X_TOKEN');
   });
 });
+
+// 조작 라벨에도 비밀이 박힌다 — GitHub 시크릿 편집 화면의 삭제 버튼은
+// 시크릿 이름을 그대로 라벨로 단다. path 만 막아서는 새는 자리가 남는다.
+describe('조작 라벨 리댁션', () => {
+  it('라벨과 셀렉터의 JWT 를 지운다', () => {
+    const out = redactPayload({
+      actions: [
+        { t: 'button', label: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N', mut: true },
+        { t: 'a', label: '내보내기' },
+      ],
+    });
+    const acts = out.actions as { label: string }[];
+    expect(acts[0].label).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+    expect(acts[1].label).toBe('내보내기');
+  });
+
+  it('조작이 없으면 그대로 둔다', () => {
+    expect(redactPayload({ clicks: 3 })).toEqual({ clicks: 3 });
+  });
+});
