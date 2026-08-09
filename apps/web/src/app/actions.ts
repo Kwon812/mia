@@ -2,7 +2,7 @@
 
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { characters, experiences, memories, questions, threads } from "@na/db";
+import { characters, experiences, memories, procedures, questions, threads } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { recordCorrection, type CorrectionField } from "@/lib/corrections";
@@ -341,4 +341,82 @@ export async function renameThreadTitle(
   if (!r.ok) return r;
   revalidateAfterFix();
   return { ok: true, effects: r.effects };
+}
+
+// ============================================================
+// 되풀이한 절차 — 사람이 답한다
+//
+// 코드가 답할 수 없는 질문이 하나 남아서다: **자동화할 값어치가 있나.**
+// 반복 횟수도, 단계 수도, 무엇을 바꾸는지도 전부 관측에서 나오지만
+// 귀찮음은 관측되지 않는다. 클릭 열두 번짜리인데 재밌어할 수도 있고,
+// 세 번짜리인데 하기 싫어 미룰 수도 있다.
+//
+// 승인은 **단계를 얼린다.** 이후 계산이 그 행을 안 건드린다 — 매번 다시
+// 계산하면 승인한 뒤에 그 절차를 조금 다르게 한 번 하는 것만으로 스킬이
+// 몰래 바뀐다.
+// ============================================================
+
+export type ProcedureResult = { ok: true } | { ok: false; error: string };
+
+async function answerProcedure(
+  signature: string,
+  status: "approved" | "rejected",
+  extra: { name?: string; steps?: unknown; mutates?: boolean },
+): Promise<ProcedureResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  if (!signature) return { ok: false, error: "어떤 절차인지 모르겠어." };
+
+  await db
+    .insert(procedures)
+    .values({
+      userId: user.userId,
+      signature,
+      status,
+      name: extra.name?.trim() || null,
+      steps: extra.steps ?? [],
+      mutates: extra.mutates ?? false,
+    })
+    // 마음이 바뀌면 덮어쓴다. 승인 이력을 남기지 않는 이유 — 교정과 달리
+    // 여기서 배울 것이 없다. 절차는 맞거나 아니거나지, 사람이 무엇을 두 번
+    // 뒤집었는지가 다음 판정을 바꾸지 않는다.
+    .onConflictDoUpdate({
+      target: [procedures.userId, procedures.signature],
+      set: {
+        status,
+        name: extra.name?.trim() || null,
+        steps: extra.steps ?? [],
+        mutates: extra.mutates ?? false,
+      },
+    });
+
+  revalidatePath("/procedures");
+  return { ok: true };
+}
+
+/** 절차로 인정한다. 이 시점의 단계가 얼어붙는다. */
+export async function approveProcedure(
+  signature: string,
+  name: string,
+  steps: unknown,
+  mutates: boolean,
+): Promise<ProcedureResult> {
+  if (!name.trim()) return { ok: false, error: "이름을 지어줘." };
+  return answerProcedure(signature, "approved", { name, steps, mutates });
+}
+
+/** 자동화할 값어치가 없다. 다시 안 묻는다. */
+export async function rejectProcedure(signature: string): Promise<ProcedureResult> {
+  return answerProcedure(signature, "rejected", {});
+}
+
+/** 답한 것을 무른다 — 후보 목록에 다시 올라온다. */
+export async function forgetProcedureAnswer(signature: string): Promise<ProcedureResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  await db
+    .delete(procedures)
+    .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)));
+  revalidatePath("/procedures");
+  return { ok: true };
 }

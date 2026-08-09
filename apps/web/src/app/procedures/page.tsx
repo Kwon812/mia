@@ -12,12 +12,14 @@
 
 import { redirect } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
-import { sessions } from "@na/db";
+import { procedures, sessions } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { formatKstYmd } from "@/lib/date";
 import { findProcedures, looksLikeOscillation, stepsOf } from "@/lib/procedure";
 import { Head, Shell, Empty } from "@/components/shell";
+import { ProcedureCard } from "@/components/procedure-card";
+import { approveProcedure, forgetProcedureAnswer, rejectProcedure } from "@/app/actions";
 
 /** 훑을 세션 수. 절차는 몇 주에 걸쳐 반복되므로 최근 것만 봐서는 안 잡힌다. */
 const SCAN_LIMIT = 400;
@@ -54,6 +56,29 @@ export default async function ProceduresPage() {
   const found = all.filter((c) => !looksLikeOscillation(c));
   const oscillations = all.length - found.length;
 
+  // 사람이 이미 답한 것. 거절한 후보는 목록에서 내리고, 승인한 것은 위에 남긴다.
+  const answered = new Map(
+    (
+      await db
+        .select({
+          signature: procedures.signature,
+          status: procedures.status,
+          name: procedures.name,
+        })
+        .from(procedures)
+        .where(eq(procedures.userId, user.userId))
+    ).map((r) => [r.signature, { status: r.status, name: r.name }]),
+  );
+
+  // 승인 → 아직 안 물은 것 → 거절 순. 거절한 것도 아주 감추지는 않는다 —
+  // 마음이 바뀌었을 때 되돌릴 자리가 있어야 하고, 무엇을 이미 봤는지가
+  // 보여야 같은 것을 두 번 고민하지 않는다.
+  const rank = (sig: string) => {
+    const a = answered.get(sig);
+    return a?.status === "approved" ? 0 : a?.status === "rejected" ? 2 : 1;
+  };
+  const ordered = [...found].sort((x, y) => rank(x.signature) - rank(y.signature));
+
   return (
     <Shell>
       <Head
@@ -83,51 +108,16 @@ export default async function ProceduresPage() {
             </Empty>
           ) : (
             <div className="flex flex-col gap-8">
-              {found.map((c) => (
-                <div key={c.signature} className="border-l border-[rgba(160,185,220,0.14)] pl-4">
-                  {/* 「몇 번」은 사실이고 「매번 몇 분」이 이유다 — 자동화할
-                      값어치를 재는 것은 뒤쪽이다. */}
-                  <div className="tick mb-2">
-                    {c.runs}번 · 매번 {dur(c.medianSec)} · {c.steps.length}단계
-                    {c.mutates && " · 바꿈"}
-                  </div>
-
-                  <ol className="flex flex-col gap-1">
-                    {c.steps.map((s, i) => (
-                      <li
-                        key={`${c.signature}-${i}`}
-                        className="flex items-baseline gap-2 text-[13.5px] text-lum-1"
-                      >
-                        <span className="readout w-4 shrink-0 text-right text-[11.5px] text-lum-4">
-                          {i + 1}
-                        </span>
-                        <span className="readout shrink-0 text-[11.5px] text-lum-4">
-                          {s.domain}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">
-                          {s.label ?? s.sel ?? s.tag}
-                        </span>
-                        {/* 매개변수는 실행할 때 물어볼 자리다. 입력값을 안 남기니
-                            무엇을 넣었는지는 모르고, 넣을 자리라는 것만 안다 —
-                            오히려 그게 맞다. 지난달 값이 박혀 있으면 그건 버그다. */}
-                        {c.paramIdx.includes(i) && (
-                          <span className="readout shrink-0 text-[11px] text-lum-3">
-                            매번 다름
-                          </span>
-                        )}
-                        {s.mut && (
-                          <span className="readout shrink-0 text-[11px] text-[#e0c090]">바꿈</span>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
-
-                  <div className="readout mt-2 text-[11.5px] text-lum-4">
-                    {formatKstYmd(c.firstAt)} 처음
-                    {c.lastAt.getTime() !== c.firstAt.getTime() &&
-                      ` · ${formatKstYmd(c.lastAt)} 마지막`}
-                  </div>
-                </div>
+              {ordered.map((c) => (
+                <ProcedureCard
+                  key={c.signature}
+                  candidate={c}
+                  answer={answered.get(c.signature) ?? null}
+                  ymd={{ first: formatKstYmd(c.firstAt), last: formatKstYmd(c.lastAt) }}
+                  onApprove={approveProcedure}
+                  onReject={rejectProcedure}
+                  onForget={forgetProcedureAnswer}
+                />
               ))}
             </div>
           )}

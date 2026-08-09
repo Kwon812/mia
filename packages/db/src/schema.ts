@@ -16,6 +16,7 @@ import {
   check,
   date,
   index,
+  uniqueIndex,
   integer,
   jsonb,
   pgTable,
@@ -552,3 +553,49 @@ export const corrections = pgTable(
 //     → check() 로 char_length 표현식을 그대로 옮겼다.
 //   그 외 마이그레이션에 있는 CHECK 는 전부 위 목록으로 커버된다.
 // ------------------------------------------------------------
+
+// ============================================================
+// 15. 되풀이한 절차 (procedures)
+//
+// supabase/migrations/20260809000002_procedures.sql 대응.
+//
+// 경험·갈래·기억과 **독립이다.** 세션의 조작 열에서 바로 뽑으며 해석 층을
+// 거치지 않는다 — 갈래 부착이 실측 F1 54% 라 그 위에 얹으면 오류를 물려받고,
+// 무엇보다 검증 방식이 다르다(갈래는 확인할 길이 없고 절차는 돌려보면 안다).
+//
+// 후보는 계산이고 이 표는 사람이 답한 것만 담는다.
+// ============================================================
+
+export const PROCEDURE_STATUSES = ['approved', 'rejected'] as const;
+export type ProcedureStatus = (typeof PROCEDURE_STATUSES)[number];
+
+export const procedures = pgTable(
+  'procedures',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+
+    /** 열쇠들을 이은 것. 정규화 규칙이 바뀌면 값도 바뀌고, 그러면 거절했던
+     *  후보가 목록에 다시 뜬다 — 한 번 더 거절하면 되는 정도로 본다. */
+    signature: text('signature').notNull(),
+    status: text('status', { enum: PROCEDURE_STATUSES }).notNull(),
+    /** 사람이 지은 이름. 거절한 것은 없다. */
+    name: text('name'),
+    /** **승인 시점의 단계.** 이후 계산이 건드리지 않는다 — 매번 다시 계산하면
+     *  승인한 뒤에 그 절차를 조금 다르게 한 번 하는 것만으로 스킬이 몰래
+     *  바뀐다. 승인한 것과 도는 것이 달라지면 안 된다. */
+    steps: jsonb('steps').notNull().default([]),
+    /** 무언가를 바꾸는 조작이 있나. 사람 없이 돌려도 되는지의 기준이다 —
+     *  읽기 전용은 최악이 헛수고고 바꾸는 것은 최악이 되돌릴 수 없다. */
+    mutates: boolean('mutates').notNull().default(false),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('uq_procedures_user_sig').on(t.userId, t.signature),
+    index('idx_procedures_user').on(t.userId, t.createdAt.desc()),
+    check('procedures_status_check', sql`${t.status} in ('approved','rejected')`),
+  ],
+);
