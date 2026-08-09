@@ -534,6 +534,37 @@ unique_domains == 1 &amp;&amp; 분야 == entertainment
 
   <p><code>POST /api/sessions</code>가 저장 성공 응답을 보낸 뒤 <code>after()</code> 안에서 조용히 돈다. 실패해도 API 응답에는 영향이 없고 <code>processed_at</code>이 NULL로 남아 재처리 대상이 된다.</p>
 
+  <h3>관측에서 저장까지 — 한 세션이 지나는 길</h3>
+  <p>실제 세션(241분) 하나가 어떻게 줄어드는지 숫자로 따라간다.</p>
+<pre><code><span class="c">┌ 확장 ─────────────────────────────────────────────────────────┐</span>
+  rawEvents            <span class="k">1,219건</span>   10초 틱 · 탭 전환 · 로드 완료
+        ↓ ingest       <span class="c">1분마다 draft 로. 양은 안 준다(이사일 뿐)</span>
+  draft.events         1,219건
+        ↓ <span class="k">buildCompressedLog</span>  <span class="c">마감 시점. 여기서 처음 줄어든다</span>
+        │   ① 도메인 바뀔 때마다 구간으로   → 60여 개
+        │   ② 체류 시간 계산 (간격 10분 캡)
+        │   ③ 1분 미만은 via 로 접기        → 28개
+        │   ④ 20개 넘으면 앞부분은 earlier  → <span class="k">20 + earlier 8</span>
+  compressed_log       <span class="k">~8KB</span>
+<span class="c">└───────────────────────────────────────────────────────────────┘</span>
+        ↓ POST /api/sessions
+<span class="c">┌ 서버 ─────────────────────────────────────────────────────────┐</span>
+  buildUserMessage     <span class="k">~12,000자</span>  <span class="c">(≈14,000 입력 토큰)</span>
+        │   압축 로그 + 스킬 50 + 최근 경험 3 + 갈래 8+3
+        │   + 대상별 체류 합계 <span class="c">← 코드가 미리 더해준다</span>
+        │   + 구간마다 i <span class="c">← 코드가 박아 넣는다</span>
+        ↓ Haiku · temp 0 · max_tokens 2048
+  tool_use.input       <span class="k">~986 출력 토큰</span>
+        │   summary · also 2건 · segment_ids · thread · dialogues 4
+        ↓ <span class="k">코드가 다섯 번 손댄다</span>
+        │   ① 검증  ② 자르기  ③ 방어  ④ 보강  ⑤ 회계
+        ↓ 트랜잭션
+  experiences <span class="k">3건</span> · threads · memories · dialogues 4 · characters
+<span class="c">└───────────────────────────────────────────────────────────────┘</span>
+
+<span class="c">1,219건 → 28구간 → 3문장.  줄어드는 자리는 딱 둘이다 —</span>
+<span class="c">압축기(규칙)와 모델(해석). 나머지는 옮기거나 재는 것뿐이다.</span></code></pre>
+
   <h3>무엇이 오가나 — 한눈에</h3>
 <pre><code><span class="c">┌─ 들어가는 것 ────────────────────────────────────────┐</span>
   시스템 프롬프트   <span class="k">~5,600자</span>  고정 <span class="c">(v9)</span>
@@ -659,6 +690,56 @@ also[]         <span class="k">뚜렷이 다른 작업이 더 있었으면</span
     지금은 <code>hasNewSkill || 모델 판정</code>이다. 확실히 아는 부분은 규칙이 채우고, 모델은
     규칙이 못 보는 것(주제·방식·환경)만 보탠다.
   </div>
+
+  <h3>나오는 것 — 실제 출력</h3>
+  <p>241분 세션의 v9 출력이다(입력 14,012 · 출력 986 토큰 · <code>stop_reason: tool_use</code>). 길이만 줄이고 값은 그대로다.</p>
+<pre><code>{
+  "summary": "Project NA 데이터베이스 테이블을 검토하고 로컬 환경에서 기능을 구현했다.",
+  "detail":  "Supabase 의 memories·threads·ingest_failures 테이블을 오가며 구조를
+              점검하고, localhost 에서 Project NA 의 메모리·스레드 페이지를 작업했다.
+              중간에 Claude 와 기술 아키텍처를 논의하고 SOLDIER : A DAY 도 잠깐 테스트했다.",
+  "category": "dev",
+  "outcome":  "partial",
+  "is_first_time": false,
+
+  "skills": [
+    { "name": "Project NA",     "weight": 9, "domain": "programming" },
+    { "name": "Supabase",       "weight": 8, "domain": "programming" },
+    { "name": "localhost 개발",  "weight": 6, "domain": "programming" }
+  ],
+
+  "dialogues": [
+    { "slot": "morning",   "text": "…" },   <span class="c">← 슬롯당 하나씩 정확히 4개</span>
+    { "slot": "afternoon", "text": "…" },
+    { "slot": "evening",   "text": "…" },
+    { "slot": "night",     "text": "…" }
+  ],
+
+  "thread": { "action": "attach",
+              "existing_thread_id": "d45b9352-…", "title": null },
+
+  <span class="k">"segment_ids": [0,2,3,4,5,7,8,9,10,11,12,13,14]</span>,
+
+  <span class="k">"also"</span>: [
+    { "summary": "ZEP 메타버스 플랫폼의 kt cloud TECH UP 2기 과정을 탐색했다.",
+      "category": "study", "outcome": "explore", "is_first_time": false,
+      "skills": [{ "name": "ZEP", "weight": 2, "domain": "programming" }],
+      "thread": { "action": "attach", "existing_thread_id": "d45b…", "title": null },
+      "segment_ids": [1] },
+
+    { "summary": "SOLDIER: A DAY 게임을 테스트하고 플레이했다.",
+      "category": "dev", "outcome": "explore", "is_first_time": false,
+      "skills": [{ "name": "SOLDIER: A DAY", "weight": 3, "domain": "programming" }],
+      "thread": { "action": "attach", "existing_thread_id": "3a04…", "title": null },
+      "segment_ids": [6] }
+  ]
+}</code></pre>
+  <p>눈여겨볼 것 셋.</p>
+  <ul>
+    <li><strong><code>also</code> 는 최상위와 같은 모양</strong>이다 — 각자 제 <code>category</code>·<code>outcome</code>·<code>skills</code>·<code>thread</code> 를 갖는다. <strong>갈래 판정도 따로</strong> 한다(나뉘었다는 건 대상이 다르다는 뜻이라 같은 갈래에 붙으면 애초에 나눌 이유가 없다). 다만 <code>dialogues</code> 는 없다 — 대사는 슬롯당 하나라 세션 단위지 경험 단위가 아니다.</li>
+    <li><strong>주 경험의 <code>segment_ids</code> 가 곁가지를 비켜간다</strong> — <code>[0,2,3,4,…]</code> 에 1 과 6 이 없다. 모델이 배타 배정을 지킨 경우다(안 지키는 경우가 흔해서 코드가 빼주는 경로도 있다).</li>
+    <li><code>thread.title</code> 이 <code>null</code> 인 것은 <code>attach</code> 라서다. <code>new</code> 일 때만 제목을 짓는다.</li>
+  </ul>
 
   <h3>나오는 것 — 코드가 다섯 번 손댄다</h3>
 
@@ -799,6 +880,45 @@ skill.domain = 모델판정 ?? <span class="k">CATEGORY_DOMAIN[category]</span>
   <h4>빈 배열의 뜻</h4>
   <p><strong>주 경험의 <code>segment_ids</code>가 빈 배열이면 "세션 전체"</strong>다. 그래서 갈라져 나간 몫만 빼고 나머지를 전부 갖는다. 배정 안 된 구간의 몫은 어느 경험에도 안 간다 — 세션은 관측이고 경험은 해석이라, 해석이 관측 전부를 덮을 필요가 없다. "197분 중 설명되는 건 27분" 이 사실 그대로다.</p>
   <div class="note"><b>여기서 한 번 크게 데었다</b> — 흡수할 때 곁가지 번호를 주 경험에 그냥 <code>push</code> 했더니, 전체를 뜻하던 빈 배열이 <b>곁가지 크기로 쪼그라들었다.</b> 130분 세션의 주 경험이 5분짜리가 되고 77분이 아무 경험에도 안 들어갔다. 지금은 빈 배열이면 전체에서 갈라진 몫만 빼는 방식으로 계산한다.</div>
+
+  <h3>마지막 — 저장</h3>
+  <p>정제가 끝난 것을 <strong>트랜잭션 하나</strong>에 쓴다. 순서에 이유가 있다.</p>
+<pre><code>BEGIN
+  ① update sessions set processed_at = now()
+       where id = ? and <span class="k">processed_at is null</span>     <span class="c">← 0행이면 throw (아래 참고)</span>
+
+  <span class="c">경험마다 반복 (1~3건)</span>
+  ② insert threads          <span class="c">action='new' 일 때. FK 때문에 경험보다 먼저</span>
+  ③ insert experiences      <span class="c">summary·detail 은 자르지 않는다</span>
+  ④ insert experience_skills
+  ⑤ upsert user_skills      <span class="c">points 누적 · domain 은 최빈값 재계산</span>
+                            <span class="c">last_used_at 은 GREATEST — 역행 방지</span>
+  ⑥ update threads          <span class="c">action='attach' 일 때. last_activity_at GREATEST,</span>
+                            <span class="c">experience_count +1, abandoned→active, category 재계산</span>
+  ⑦ upsert memories         <span class="c">문턱 60 넘거나 갈래 6건째면. 갈래당 하나에 근거를 더한다</span>
+
+  <span class="c">세션에 한 번</span>
+  ⑧ upsert dialogues × 4    <span class="c">슬롯당 하나. 80자로 잘라서</span>
+  ⑨ update characters       <span class="c">경험 수·스킬 수·레벨·기억 수·oldest_memory_at</span>
+COMMIT</code></pre>
+
+  <h4>왜 이 순서인가</h4>
+  <table>
+    <thead><tr><th>자리</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td>① 이 맨 앞</td><td>처리 권리를 <strong>선점</strong>한다. 뒤에 두면 두 실행이 나란히 LLM 을 부르고 둘 다 저장한다</td></tr>
+      <tr><td>② 가 ③ 보다 먼저</td><td><code>experiences.thread_id</code> 가 FK 다 — 참조 대상이 있어야 통과한다</td></tr>
+      <tr><td>⑦ 이 ⑥ 뒤</td><td>기억의 중요도가 <strong>갈래에 쌓인 경험 수</strong>를 쓴다. 갱신 전 값을 쓰면 하나씩 적게 센다</td></tr>
+      <tr><td>⑧ 이 루프 밖</td><td>대사는 슬롯당 하나라 <strong>세션 단위</strong>다. 경험이 셋이어도 4개다</td></tr>
+      <tr><td>⑨ 가 맨 끝</td><td>레벨이 <code>√(경험수 × 스킬수)</code> 라 앞이 다 끝나야 맞다</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>트랜잭션 밖에도 하나 있다</b> — <code>llm_outputs</code> 는 검증 <b>전에</b>, 트랜잭션과
+    무관하게 쓴다. 그래야 검증 실패분(<code>valid=false</code>)과 롤백된 판정까지 남는다.
+    로깅 실패가 처리를 막으면 안 되므로 예외를 삼킨다.
+  </div>
 
   <h3>중복 처리를 막는 법</h3>
   <p>트랜잭션 맨 앞에서 <strong>처리 권리를 선점</strong>한다.</p>
