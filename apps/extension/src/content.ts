@@ -598,12 +598,17 @@
     };
 
     const onClick = (e: MouseEvent) => {
+      // **검사가 먼저다.** 확인 띠 안을 누른 것은 집기가 아니라 답이다.
+      //
+      // 예전에는 preventDefault·stopPropagation 을 먼저 부르고 검사했는데,
+      // 이건 문서 캡처 단계 리스너라 그 순간 이벤트가 죽는다 — 확인 버튼의
+      // 핸들러가 영영 안 불렸다. 누르면 아무 일도 안 일어나는 것처럼 보였다.
+      if (tip.contains(e.target as Node) || box.contains(e.target as Node)) return;
+
       // 캡처 단계에서 가로챈다 — 페이지가 그 클릭으로 어디론가 가버리면
       // 집은 것을 돌려줄 자리가 없다.
       e.preventDefault();
       e.stopPropagation();
-      // 확인 띠 안을 누른 것은 집기가 아니다.
-      if (tip.contains(e.target as Node)) return;
       const el = hovered ?? document.elementFromPoint(e.clientX, e.clientY);
       if (!el) return;
       confirm(el);
