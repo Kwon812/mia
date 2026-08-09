@@ -35,6 +35,32 @@ export interface RunRead {
   after: number;
   sel: string;
   label: string;
+  /**
+   * 무엇이면 정상인가. 없으면 값만 모으고 판단하지 않는다.
+   *
+   * 이게 읽기의 값어치를 완성한다 — 없으면 돌린 뒤에 사람이 결과를 봐야
+   * 하지만, 있으면 **아무 일 없으면 아무 말도 안 한다.** 자동으로 도는
+   * 절차에는 이것이 있어야 뜻이 있다.
+   */
+  expect?:
+    | { kind: 'contains'; text: string }
+    | { kind: 'not-contains'; text: string }
+    /** 값에서 뽑은 첫 숫자가 이 아래여야 한다 (비용·사용량) */
+    | { kind: 'below'; n: number };
+}
+
+/** 읽은 값이 기대에 맞나. 안 맞으면 왜 안 맞는지. */
+export function checkRead(r: RunRead, value: string): string | null {
+  if (!r.expect) return null;
+  if (r.expect.kind === 'contains')
+    return value.includes(r.expect.text) ? null : `"${r.expect.text}" 가 없어`;
+  if (r.expect.kind === 'not-contains')
+    return value.includes(r.expect.text) ? `"${r.expect.text}" 가 보여` : null;
+  // 첫 숫자를 뽑는다. "$12.40 / $50" 에서 12.40 을 본다 — 대시보드는 대개
+  // 쓴 값이 앞에 온다.
+  const m = value.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+  if (!m) return '숫자를 못 찾았어';
+  return Number(m[0]) < r.expect.n ? null : `${m[0]} 이 ${r.expect.n} 이상이야`;
 }
 
 export interface RunState {
@@ -55,7 +81,10 @@ export interface RunState {
   reads?: RunRead[];
   /** 읽어낸 값. 절차가 끝나면 이게 결과다 — 네 군데를 열어보는 대신
    *  한 화면에 모이는 것이 이 자동화의 값어치 대부분이다. */
-  results?: { label: string; value: string }[];
+  results?: { label: string; value: string; wrong?: string }[];
+  /** 사람이 안 누르고 일정으로 돈 것인가. 조용히 끝낼지 알릴지를 가른다 —
+   *  버튼을 눌렀으면 결과를 보고 있고, 자동이면 안 보고 있다. */
+  auto?: boolean;
 }
 
 const KEY = 'na_run';

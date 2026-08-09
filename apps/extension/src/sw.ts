@@ -26,6 +26,37 @@ import type { SessionDraft, SessionPayloadLike } from './session';
 
 /** 집기 결과를 기다리는 사이트. 한 번에 하나만 — 두 개를 동시에 집을 일이 없다. */
 let pickWaiter: { tabId: number; reply: (r: unknown) => void } | null = null;
+
+/**
+ * 다음 단계의 자리로 데려간다.
+ *
+ * 실행기는 "이미 그 페이지에 있을 때"만 단계를 준다. 그것만으로는 절차가
+ * 시작조차 못 한다 — 아침 점검은 페이지를 **여는 것**부터다. 그래서 다음
+ * 단계의 도메인에 탭이 없으면 열고, 있으면 그리로 옮긴다.
+ *
+ * 이미 열려 있는 탭을 재사용하는 게 중요하다. 매번 새로 열면 절차를 한 번
+ * 돌 때마다 탭이 네 개씩 쌓인다.
+ */
+async function goTo(domain: string): Promise<void> {
+  if (!domain) return;
+  const url = domain.startsWith('localhost') ? `http://${domain}/` : `https://${domain}/`;
+  const tabs = await chrome.tabs.query({});
+  const hit = tabs.find((t) => {
+    try {
+      return t.url ? new URL(t.url).host === domain : false;
+    } catch {
+      return false;
+    }
+  });
+  if (hit?.id != null) {
+    await chrome.tabs.update(hit.id, { active: true });
+    // 이미 그 페이지에 있으면 content script 가 다시 물을 계기가 없다.
+    // 직접 깨운다 — 없으면 절차가 그 자리에서 멈춘 채로 남는다.
+    await chrome.tabs.sendMessage(hit.id, { type: 'RUN_PUMP' }).catch(() => undefined);
+    return;
+  }
+  await chrome.tabs.create({ url, active: true });
+}
 import type { SessionSnapshot, SnapshotDraft, SnapshotPreview } from './snapshot';
 
 // 서비스 워커: manifest 에서 "type": "module" 이므로 정적 import 사용 가능.
@@ -697,9 +728,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: '돌릴 단계가 없어' });
       return true;
     }
-    void setRun({ ...run, index: 0, startedAt: Date.now() }).then(() =>
-      sendResponse({ ok: true }),
-    );
+    void setRun({ ...run, index: 0, startedAt: Date.now(), results: [] })
+      .then(() => goTo(run.steps[0]?.domain ?? ''))
+      .then(() => sendResponse({ ok: true }));
     return true;
   }
 
@@ -726,9 +757,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 한 단계가 끝났다. 다음 단계가 같은 도메인이면 이어서 하라고 알려준다.
   if (message?.type === 'RUN_STEP_DONE') {
-    void advance(message.ok !== false, message.error, message.got).then((run) => {
+    void advance(message.ok !== false, message.error, message.got).then(async (run) => {
       if (!run) return sendResponse({ more: false });
       const next = run.doneAt || run.error ? null : stepFor(run, String(message.host ?? ''));
+      // 여기서 이어지지 않는다는 것은 다음 단계가 다른 자리에 있다는 뜻이다.
+      // 데려간다 — 안 그러면 절차가 이 페이지에서 조용히 멈춘다.
+      if (!next && !run.doneAt && !run.error) {
+        await goTo(run.steps[run.index]?.domain ?? '');
+      }
+      if (run.doneAt || run.error) await announce(run);
       sendResponse({
         more: !!next,
         done: !!run.doneAt,
@@ -749,7 +786,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // 사이트가 "저 화면에서 뭘 확인하는지 집을게" 라고 한다. 그 도메인으로
+  // 끝났다고 알린다.
+//
+// 사람이 버튼을 눌러 돌렸으면 화면을 보고 있으니 조용히 끝내도 된다.
+// 일정으로 스스로 돈 것이면 아무도 안 보고 있어서, **이상할 때만** 알린다 —
+// 아무 일 없을 때도 알리면 그건 다시 확인해야 할 일이 되어버린다.
+async function announce(run: RunState): Promise<void> {
+  const wrong = (run.results ?? []).filter((r) => r.wrong);
+  if (run.auto && !run.error && wrong.length === 0) return; // 조용히 넘어간다
+  if (!run.auto && !run.error && wrong.length === 0) return; // 화면이 이미 보여준다
+
+  const lines = run.error
+    ? [run.error]
+    : wrong.map((r) => `${r.label}: ${r.wrong}`);
+  try {
+    await chrome.notifications.create({
+      type: 'basic',
+      iconUrl: 'icon.png',
+      title: run.error ? `${run.name} — 멈췄어` : `${run.name} — 확인이 필요해`,
+      message: lines.slice(0, 3).join('\n') || '무언가 달라',
+    });
+  } catch {
+    // 알림 권한이 없으면 배지로라도 남긴다.
+    void chrome.action.setBadgeText({ text: '!' });
+  }
+}
+
+// 사이트가 "저 화면에서 뭘 확인하는지 집을게" 라고 한다. 그 도메인으로
   // 탭을 열고 집기 모드를 켠다 — 관측으로는 못 얻는 값이라 이 길뿐이다.
   if (message?.type === 'START_PICK') {
     const url = String(message.url ?? '');

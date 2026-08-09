@@ -275,17 +275,42 @@
   }
 
   type RunStep = { sel?: string; label?: string; isInput: boolean; dt: number };
-  type RunRead = { after: number; sel: string; label: string };
+  type RunRead = {
+    after: number;
+    sel: string;
+    label: string;
+    expect?:
+      | { kind: 'contains'; text: string }
+      | { kind: 'not-contains'; text: string }
+      | { kind: 'below'; n: number };
+  };
+
+  /** 읽은 값이 기대에 맞나. 안 맞으면 왜. session/runner.ts 와 같은 규칙이어야
+   *  한다 — 이쪽은 classic script 라 import 를 못 해서 자급자족한다. */
+  function checkRead(r: RunRead, value: string): string | undefined {
+    if (!r.expect) return undefined;
+    if (r.expect.kind === 'contains')
+      return value.includes(r.expect.text) ? undefined : `"${r.expect.text}" 가 없어`;
+    if (r.expect.kind === 'not-contains')
+      return value.includes(r.expect.text) ? `"${r.expect.text}" 가 보여` : undefined;
+    const m = value.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+    if (!m) return '숫자를 못 찾았어';
+    return Number(m[0]) < r.expect.n ? undefined : `${m[0]} 이 ${r.expect.n} 이상이야`;
+  }
 
   /** 짚어준 자리의 값을 읽는다. 클릭은 기록돼도 **본 것은 기록되지 않아서**,
    *  무엇을 확인하는지는 사람이 승인할 때 알려준 것뿐이다. */
-  async function doReads(reads: RunRead[]): Promise<{ label: string; value: string }[]> {
-    const out: { label: string; value: string }[] = [];
+  async function doReads(
+    reads: RunRead[],
+  ): Promise<{ label: string; value: string; wrong?: string }[]> {
+    const out: { label: string; value: string; wrong?: string }[] = [];
     for (const r of reads) {
       // 값이 늦게 채워지는 화면이 많다(대시보드는 대개 그렇다). 잠깐 기다린다.
       const el = await waitFor(r.sel, 6000);
       const raw = el ? ((el as HTMLElement).innerText ?? el.textContent ?? '') : '';
-      out.push({ label: r.label, value: raw.trim().replace(/\s+/g, ' ').slice(0, 120) || '(못 읽음)' });
+      const value = raw.trim().replace(/\s+/g, ' ').slice(0, 120) || '(못 읽음)';
+      const wrong = checkRead(r, value);
+      out.push(wrong ? { label: r.label, value, wrong } : { label: r.label, value });
     }
     return out;
   }
@@ -461,6 +486,9 @@
   try {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'START_PICK') startPicking();
+      // 이미 열려 있는 탭으로 옮겨왔다. 페이지 로드가 없으니 스스로 물을
+      // 계기가 없어서, 서비스 워커가 직접 깨운다.
+      if (msg?.type === 'RUN_PUMP') void pump();
     });
   } catch {
     /* 확장 컨텍스트 무효 */
