@@ -938,14 +938,56 @@ async function findRelevantActiveThreads(
  * 로그를 태운다. 번호는 배열 순서에서 나오는 파생값이라 저장할 이유도 없다.
  * earlier.top 의 i 와 같은 규칙(segments 뒤에 이어짐)이라 충돌하지 않는다.
  */
+/**
+ * 구간에 번호를 박고, **조작 열은 덜어낸다.**
+ *
+ * compressed_log 는 통째로 JSON.stringify 되어 프롬프트에 들어간다. 그래서
+ * 확장이 새 필드를 담기 시작하면 그게 자동으로 프롬프트에 실린다 — 아무도
+ * 그러라고 하지 않았는데.
+ *
+ * acts(조작 열)를 빼는 이유는 두 가지다.
+ *
+ * 하나, 측정이 반대를 말한다. 갈래에 「주로 다룬 것」을 더 실어준 실험(H1)이
+ * 쌍 F1 을 56.3 → 47.7 로 **떨어뜨렸다**. 신호가 늘면 겹치는 면적도 늘어
+ * 틀리게 맞을 자리가 넓어진다. 조작은 도메인보다 더 겹친다 — 같은 도구를
+ * 쓰면 손놀림도 같기 때문이다. (docs/HANDOFF-attach.md)
+ *
+ * 둘, 20구간 × 24조작이면 프롬프트가 거의 두 배가 된다.
+ *
+ * acts 는 절차 추출용으로 DB 에 쌓인다(docs/PLAN-observe.md). 프롬프트에
+ * 넣을지는 실데이터가 모인 뒤 시험대로 재고 나서 정한다 — 오늘 기각한
+ * 가설 여섯 개가 전부 "재보지 않고 좋아 보여서" 넣으려던 것들이었다.
+ *
+ * 빼는 방식이 **거부 목록이 아니라 허용 목록**인 것이 중요하다. acts 만
+ * 지우면 다음에 확장이 담는 필드가 또 조용히 실린다 — 그때는 아무도
+ * 모른다. 여기 없는 것은 안 들어간다.
+ * (scripts/check-prompt-leak.mts 가 이 계약을 지킨다)
+ */
+const PROMPT_SEGMENT_FIELDS = [
+  'domain',
+  'category',
+  'start',
+  'end',
+  'sec',
+  'title',
+  'paths',
+  'via',
+] as const;
+
 function withSegmentIndex(log: unknown): unknown {
   const l = log as { segments?: unknown[] } | null;
   if (!l || !Array.isArray(l.segments)) return log;
   return {
     ...l,
-    segments: l.segments.map((g, i) =>
-      g && typeof g === 'object' ? { i, ...(g as object) } : g,
-    ),
+    segments: l.segments.map((g, i) => {
+      if (!g || typeof g !== 'object') return g;
+      const src = g as Record<string, unknown>;
+      const out: Record<string, unknown> = { i };
+      for (const k of PROMPT_SEGMENT_FIELDS) {
+        if (src[k] !== undefined) out[k] = src[k];
+      }
+      return out;
+    }),
   };
 }
 
