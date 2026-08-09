@@ -28,6 +28,14 @@ const WITH_TARGETS = args.includes('--threads');
 // H4: 후보를 코드가 거른다. 이번 세션과 도메인이 하나도 안 겹치는 갈래는
 // 아예 보여주지 않는다 — 모델에게 "붙이지 마라"를 설득하는 대신 선택지에서 뺀다.
 const FILTER = args.includes('--filter');
+// 연쇄를 끊는다. 갈래 목록을 모델의 앞선 판단이 아니라 **정답**으로 만들어
+// 물려준다. 호출이 서로 독립이 되므로 흔들림이 사라지고, "제대로 된 갈래가
+// 있을 때 제대로 고르는가"만 깨끗하게 잰다.
+//
+// 연쇄 시험(기본)이 재는 것과 다른 것이다. 저쪽은 오판이 다음 선택지를
+// 오염시키는 폭포까지 포함해서 재고, 이쪽은 판단력만 잰다. 잡음의 출처가
+// 모델인지 연쇄인지 가르려면 둘 다 필요하다.
+const ORACLE = args.includes('--oracle');
 const RUNS = num('runs',1), N = num('n',40), SEED = num('seed',42);
 const ruleFile = args.find(a => !a.startsWith('--'));
 const RULE = ruleFile ? fs.readFileSync(ruleFile,'utf8') : '';
@@ -73,14 +81,44 @@ const dump:any[] = [];
 for (let run=0; run<RUNS; run++) {
   const threads: Th[] = [];
   const assign: { thread:string; key:string; title:string; session:string }[] = [];
-  let splitOk=0, splitTotal=0;
+  let splitOk=0, splitTotal=0, oracleOk=0, oracleTotal=0;
+
+  // 정답 갈래 — 오라클 모드에서 매 세션 앞에 놓는다.
+  const oracle = new Map<string, Th>();
+  if (ORACLE) {
+    for (const fx of FIXTURES) {
+      const segs = (fx.session.compressedLog as any).segments as any[];
+      fx.owners.forEach((k,i)=>{
+        let t = oracle.get(k);
+        if (!t) { t = { id:`o-${k}`, title:'', category:segs[i].category, n:0, recent:[],
+                        targets:new Map(), lastAt:0, keys:new Map(), domains:new Set() };
+                  oracle.set(k,t); }
+        t.domains.add(segs[i].domain);
+        const key = `${segs[i].domain} · ${String(segs[i].title).slice(0,26)}`;
+        t.targets.set(key,(t.targets.get(key)??0)+segs[i].sec);
+      });
+    }
+    // 제목·건수·최근 줄은 갈래가 실제로 다룬 것에서 뽑는다
+    for (const [k,t] of oracle) {
+      const top=[...t.targets.entries()].sort((a,b)=>b[1]-a[1]);
+      t.title = String(top[0][0].split(' · ')[1] ?? k);
+      t.n = FIXTURES.filter(f=>f.expect.includes(k)).length;
+      t.recent = [`${t.title} 작업을 이어갔다.`];
+    }
+  }
 
   for (const fx of FIXTURES) {
     const segDomains = new Set<string>(
       ((fx.session.compressedLog as any).segments as any[]).map(s=>s.domain));
-    const pool = FILTER
-      ? threads.filter(t => [...t.domains].some(d => segDomains.has(d)))
+    // 오라클 모드에서는 이 세션의 정답 갈래 + 헷갈리라고 넣는 남의 갈래를 함께 준다
+    const base = ORACLE
+      ? [...oracle.values()].filter(t =>
+          fx.expect.includes(t.id.slice(2)) || [...t.domains].some(d=>segDomains.has(d))
+          || Math.abs([...oracle.keys()].indexOf(t.id.slice(2))) < 8)
       : threads;
+    const pool = FILTER
+      ? base.filter(t => [...t.domains].some(d => segDomains.has(d)))
+      : base;
     const list = [...pool].sort((a,b)=>b.lastAt-a.lastAt).slice(0,8).map(t=>{
       const top=[...t.targets.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3)
         .map(([k,v])=>`${k} ${Math.round(v/60)}분`).join(' · ');
@@ -109,7 +147,8 @@ for (let run=0; run<RUNS; run++) {
     items.forEach((it,i)=>{
       const truth = truthOf(fx.owners, segs, it.segmentIds);
       const d = dec[i] ?? { action:'new', title:null };
-      let th = threads.find(t=>t.id===d.existing_thread_id);
+      let th = (ORACLE ? [...oracle.values(), ...threads] : threads)
+        .find(t=>t.id===d.existing_thread_id);
       const attached = d.action==='attach' && !!th;
       if (attached && th) { th.n+=1; th.recent.unshift(it.summary); }
       else { th = { id:`t${threads.length+1}`, title:d.title?.trim()||it.summary.slice(0,32),
@@ -123,12 +162,19 @@ for (let run=0; run<RUNS; run++) {
       for (const i of use) if (segs[i]) th.domains.add(segs[i].domain);
 
       assign.push({ thread: th.id, key: truth, title: th.title, session: fx.name });
+      // 오라클 채점 — 정답 갈래가 목록에 있었는데 거기로 갔는가
+      if (ORACLE) {
+        const want = oracle.get(truth);
+        const offered = want && pool.some(t=>t.id===want.id);
+        if (offered) { oracleTotal++; if (d.action==='attach' && d.existing_thread_id===want!.id) oracleOk++; }
+      }
       lines.push(`   ${truth.padEnd(9)} → ${attached?'attach':'NEW   '} "${th.title.slice(0,30)}"`);
     });
     if (RUNS === 1) console.log(`${fx.name}  기대 ${fx.expect.length}건 → ${items.length}건\n${lines.join('\n')}`);
   }
 
   const { p, r, f1 } = pairF1(assign);
+  if (ORACLE) console.log(`  [오라클] 정답 갈래가 목록에 있을 때 그리로 간 비율 ${oracleOk}/${oracleTotal} = ${(oracleOk/Math.max(1,oracleTotal)*100).toFixed(1)}%`);
   console.log(`\n  --- ${run+1}회차 · F1 ${(f1*100).toFixed(1)}% (정밀 ${(p*100).toFixed(0)} / 재현 ${(r*100).toFixed(0)}) · 갈래 ${threads.length}(정답 ${TRUTH_THREADS}) · 분할 ${splitOk}/${splitTotal} ---`);
   [...threads].sort((a,b)=>b.n-a.n).slice(0,12).forEach(t=>{
     const ks=[...t.keys.entries()].sort((a,b)=>b[1]-a[1]);
