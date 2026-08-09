@@ -682,7 +682,10 @@
 
       if (kind === 'run') relay({ type: 'START_RUN', run: e.data.run }, 'run-ack');
       else if (kind === 'pick')
-        relay({ type: 'START_PICK', url: e.data.url }, 'pick-ack', { after: e.data.after });
+        relay({ type: 'START_PICK', url: e.data.url }, 'pick-started', { after: e.data.after });
+      // 결과를 가지러 온다. 붙들고 있다가 주면 워커가 잠드는 순간 영영 안 간다.
+      else if (kind === 'pick-poll')
+        relay({ type: 'PICK_POLL' }, 'pick-ack', { after: e.data.after });
       else if (kind === 'run-status') relay({ type: 'RUN_STATUS' }, 'run-status-ack');
     });
   }

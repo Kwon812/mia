@@ -24,8 +24,38 @@ import {
 } from './session/runner';
 import type { SessionDraft, SessionPayloadLike } from './session';
 
-/** 집기 결과를 기다리는 사이트. 한 번에 하나만 — 두 개를 동시에 집을 일이 없다. */
-let pickWaiter: { tabId: number; reply: (r: unknown) => void } | null = null;
+// ── 집기 상태 ──────────────────────────────────────────
+//
+// **저장소에 둔다.** 예전에는 모듈 변수에 뒀는데, MV3 워커는 30초쯤 놀면
+// 크롬이 죽인다 — 사람이 화면을 옮겨 다니는 동안 워커가 잠들고, 그 안에
+// 있던 "누가 집기를 기다리는지"가 통째로 사라졌다. 그러면 확인을 눌러도
+// 닫을 탭을 모르고, 기다리던 사이트에도 아무 답이 안 간다.
+//
+// 답을 돌려주는 방식도 바꾼다. 예전에는 sendResponse 를 붙들고 있다가
+// 결과가 오면 그때 응답했는데, 그 붙듦 자체가 워커 수명에 기대는 일이다.
+// 지금은 결과를 저장소에 놓고 사이트가 가져가게 한다.
+const PICK_KEY = 'na_pick';
+
+type PickState = {
+  tabId: number;
+  /** 집기를 시작한 시각. 오래 묵으면 없는 셈 친다. */
+  at: number;
+  /** 사람이 집은 결과. 아직이면 없다. */
+  result?: { ok: boolean; sel?: string; sample?: string };
+};
+
+async function getPick(): Promise<PickState | null> {
+  const got = await chrome.storage.local.get(PICK_KEY);
+  const p = got[PICK_KEY] as PickState | undefined;
+  if (!p) return null;
+  // 집다 말고 딴 일을 하러 갔을 수 있다. 그 상태로 남으면 다음날 엉뚱한
+  // 페이지에 띠가 뜬다.
+  if (Date.now() - p.at > 10 * 60 * 1000) {
+    await chrome.storage.local.remove(PICK_KEY);
+    return null;
+  }
+  return p;
+}
 
 /**
  * 다음 단계의 자리로 데려간다.
@@ -820,51 +850,66 @@ async function announce(run: RunState): Promise<void> {
       sendResponse({ ok: false });
       return true;
     }
-    void chrome.tabs.create({ url, active: true }).then((tab) => {
-      pickWaiter = { tabId: tab.id ?? -1, reply: sendResponse };
-      // 밀어넣지 않고 **기다린다.**
-      //
-      // 예전에는 1.2초 뒤에 tabs.sendMessage 로 밀었는데, 무거운 대시보드는
-      // 그때 content script 가 아직 안 붙어 있어서 조용히 아무 일도 안
-      // 일어났다. 지금은 페이지가 자리 잡고 스스로 "나 집기 대기 중이야?"를
-      // 묻는다 — 경합이 아예 없어진다.
-      //
-      // 이미 떠 있는 탭을 위해 밀기도 남긴다. 실패해도 그만이다.
-      setTimeout(() => {
-        if (tab.id != null)
-          void chrome.tabs.sendMessage(tab.id, { type: 'START_PICK' }).catch(() => undefined);
-      }, 1500);
-    });
+    void chrome.tabs
+      .create({ url, active: true })
+      .then((tab) =>
+        chrome.storage.local.set({
+          [PICK_KEY]: { tabId: tab.id ?? -1, at: Date.now() } satisfies PickState,
+        }),
+      )
+      // 붙들지 않고 바로 답한다. 사이트는 그 뒤로 결과를 가지러 온다 —
+      // 붙들고 있으면 워커가 잠드는 순간 그 응답이 영영 안 간다.
+      .then(() => sendResponse({ ok: true }));
     return true;
   }
 
   // content script 가 뜨자마자 묻는다 — 이 탭이 집기 대상인가.
   // 밀어넣기의 타이밍 경합을 없애는 쪽이다.
   if (message?.type === 'PICK_ASK') {
-    // 그 탭이거나, 그 탭이 연 탭이면 대상이다. 대시보드는 새 탭으로 여는
-    // 링크가 흔해서, 탭 하나만 보면 따라간 곳에서 띠가 사라진다.
     const t = sender.tab;
-    const mine =
-      pickWaiter != null &&
-      (pickWaiter.tabId === t?.id || pickWaiter.tabId === t?.openerTabId);
-    // 따라간 탭에서 집었으면 그 탭을 닫아야 하므로 대상을 옮겨둔다.
-    if (mine && pickWaiter && t?.id != null) pickWaiter.tabId = t.id;
-    sendResponse({ pick: mine });
+    void getPick().then(async (p) => {
+      // 그 탭이거나, 그 탭이 연 탭이면 대상이다. 대시보드는 새 탭으로 여는
+      // 링크가 흔해서, 탭 하나만 보면 따라간 곳에서 띠가 사라진다.
+      const mine = p != null && !p.result && (p.tabId === t?.id || p.tabId === t?.openerTabId);
+      // 따라간 탭에서 집을 것이므로 닫을 대상도 그쪽으로 옮겨둔다.
+      if (mine && p && t?.id != null && p.tabId !== t.id) {
+        await chrome.storage.local.set({ [PICK_KEY]: { ...p, tabId: t.id } });
+      }
+      sendResponse({ pick: mine });
+    });
+    return true;
+  }
+
+  // 사이트가 결과를 가지러 온다. 한 번 주면 지운다.
+  if (message?.type === 'PICK_POLL') {
+    void getPick().then(async (p) => {
+      if (!p?.result) return sendResponse({ done: false });
+      await chrome.storage.local.remove(PICK_KEY);
+      sendResponse({ done: true, ...p.result });
+    });
     return true;
   }
 
   // 집기 결과가 돌아왔다. 기다리던 사이트에 넘기고 그 탭은 닫는다.
   if (message?.type === 'PICK_RESULT') {
-    if (pickWaiter) {
-      pickWaiter.reply({
-        ok: message.ok === true,
-        sel: message.sel ?? null,
-        sample: message.sample ?? null,
+    void getPick().then(async (p) => {
+      if (!p) return sendResponse({ ok: false });
+      await chrome.storage.local.set({
+        [PICK_KEY]: {
+          ...p,
+          result: {
+            ok: message.ok === true,
+            sel: message.sel ?? undefined,
+            sample: message.sample ?? undefined,
+          },
+        } satisfies PickState,
       });
-      if (pickWaiter.tabId > 0) void chrome.tabs.remove(pickWaiter.tabId).catch(() => undefined);
-      pickWaiter = null;
-    }
-    sendResponse({ ok: true });
+      // 집었으면 그 탭은 볼일이 끝났다. 결과는 이미 저장소에 있으므로
+      // 닫아도 잃지 않는다.
+      const tabId = sender.tab?.id ?? p.tabId;
+      if (tabId > 0) await chrome.tabs.remove(tabId).catch(() => undefined);
+      sendResponse({ ok: true });
+    });
     return true;
   }
 
