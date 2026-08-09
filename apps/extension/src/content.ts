@@ -85,7 +85,11 @@
     return false;
   }
 
+  // 매칭용(포트 없음)과 기록용(포트 있음)을 나눈다.
+  // 차단·검색어 사전은 hostname 으로 조회해야 `example.com:8443` 같은 것이
+  // 안 빗나가고, 기록에는 포트가 있어야 localhost 의 여러 프로젝트가 갈린다.
   const hostname = location.hostname;
+  const host = location.host;
 
   // blocked 도메인이면 리스너조차 등록하지 않고 즉시 종료 — 활동 카운트를
   // 포함해 그 어떤 신호도 만들지 않는다 (도메인 자체를 기록하지 않기 위함).
@@ -144,7 +148,7 @@
         clicks,
         keys,
         playing,
-        url: hostname,
+        url: host,
         // 예외 C(백그라운드 재생) 판정용: 이 탭이 지금 보이는 탭인지.
         // 백그라운드에서 음악만 틀어놓고 다른 탭에서 작업 중이면 false가 된다.
         visible: document.visibilityState === 'visible',

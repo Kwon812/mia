@@ -649,10 +649,13 @@ function isInternalUrl(url: string | undefined): boolean {
   return !/^https?:\/\//i.test(url);
 }
 
+/** 기록용 도메인. **포트를 살린다** — localhost 하나에 여러 프로젝트가 물려
+ *  있어서(실측 넷) 포트가 없으면 구분이 페이지 제목 하나에만 매달린다.
+ *  사전 조회는 categories.ts 의 stripPort 가 매칭 직전에 포트를 뗀다. */
 function domainOf(url: string | undefined): string {
   if (!url) return '';
   try {
-    return new URL(url).hostname;
+    return new URL(url).host;
   } catch {
     return '';
   }

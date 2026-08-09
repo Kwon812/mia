@@ -486,7 +486,7 @@ export const BLOCKED_DOMAINS: readonly string[] = [
  * 로 확인한다. 예: isDomainInSet('open.spotify.com', BACKGROUND_AUDIO) === true
  */
 function isDomainInSet(hostname: string, set: readonly string[]): boolean {
-  const labels = hostname.split('.');
+  const labels = stripPort(hostname).split('.');
   for (let i = 0; i < labels.length; i++) {
     const suffix = labels.slice(i).join('.');
     if (set.includes(suffix)) return true;
@@ -515,9 +515,27 @@ export function isBlockedDomain(hostname: string): boolean {
  * 'music.youtube.com' 이 'youtube.com' 보다 항상 우선한다.
  * 어디에도 없으면 'etc'.
  */
+/**
+ * 매칭 전에 포트를 뗀다.
+ *
+ * 기록되는 도메인은 이제 포트를 **달고 온다**(`localhost:3000`). localhost 하나에
+ * 여러 프로젝트가 물려 있어서 포트가 없으면 구분이 페이지 제목 하나에만 매달리기
+ * 때문이다 — 실측으로 `localhost` 한 키에 Project NA · SOLDIER : A DAY ·
+ * 강의 설문지 · 달팽이 그림책 연구소 넷이 들어 있었다.
+ *
+ * 그런데 사전 조회는 포트가 있으면 깨진다. `example.com:8443` 을 '.' 으로 쪼개면
+ * `['example', 'com:8443']` 이 되어 `example.com` 과 영영 안 맞는다 — 차단
+ * 목록도 카테고리 사전도 통째로 빗나간다. 그래서 **매칭 직전에만** 떼고,
+ * 기록에는 포트를 남긴다.
+ */
+function stripPort(hostname: string): string {
+  const i = hostname.lastIndexOf(':');
+  return i > 0 ? hostname.slice(0, i) : hostname;
+}
+
 export function categorize(hostname: string): string {
   if (!hostname) return DEFAULT_CATEGORY;
-  const labels = hostname.toLowerCase().split('.');
+  const labels = stripPort(hostname).toLowerCase().split('.');
   for (let i = 0; i < labels.length; i++) {
     const suffix = labels.slice(i).join('.');
     const category = CATEGORY_MAP[suffix];
