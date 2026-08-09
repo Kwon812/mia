@@ -109,27 +109,45 @@ export function ProcedureCard({
 
   /** 그 도메인의 탭을 열고 확장이 집기 모드를 켠다. 사람이 클릭한 자리의
    *  셀렉터가 돌아온다 — 개발자도구 요소 선택기와 같은 방식이다. */
+  /**
+   * 그 도메인의 탭을 열고 확장이 집기 모드를 켠다.
+   *
+   * 결과를 받는 길이 **둘**이다. 확장이 직접 밀어주는 것과, 여기서 가지러
+   * 가는 것. 하나만 두면 한 군데라도 어긋날 때 조용히 잠긴 채로 남는다 —
+   * 사람 눈에는 확인을 눌렀는데 아무 일도 안 일어난 것으로 보인다.
+   *
+   * 밀어준 것에는 `after` 가 없다. 확장은 어느 단계를 집는 중이었는지 모르고
+   * 알 필요도 없다 — 한 번에 하나만 집으므로 지금 진행 중인 것이 그것이다.
+   */
   function pick(after: number, domain: string) {
     setPicking(after);
     setError(null);
-    // 확장이 없거나 다리가 안 붙었으면 아무 답도 안 온다. 그러면 "저 창에서
-    // 클릭해…" 가 영영 남아서, 사람은 창을 기다리는데 실은 아무 일도 일어나지
-    // 않는 상태가 된다. 조용한 실패가 제일 나쁘다.
-    // 집기는 사람이 화면을 옮겨 다니는 시간이 든다. 시한은 **다리가 붙었나**만
-    // 재는 것이라 짧게 두면 안 된다 — 확장이 응답만 하면 그 뒤로는 사람 속도다.
-    // 대신 창이 뜨면 다리는 살아 있는 것이므로, 그때부터는 안 재도 된다.
-    const dead = setTimeout(() => {
-      window.removeEventListener("message", onAck);
+
+    let timer: number | undefined;
+    const cleanup = () => {
+      window.clearInterval(timer);
+      window.removeEventListener("message", onMsg);
       setPicking(null);
-      setError("확장이 응답하지 않아. 확장을 새로고침하고 이 페이지도 새로고침해줘.");
-    }, 180_000);
-    const onAck = (e: MessageEvent) => {
-      if (e.source !== window || e.data?.__na !== "pick-ack" || e.data.after !== after) return;
-      clearTimeout(dead);
-      window.removeEventListener("message", onAck);
-      setPicking(null);
+    };
+
+    const onMsg = (e: MessageEvent) => {
+      if (e.source !== window) return;
+      // 밀어준 것(push)에는 after 가 없으므로 그건 통과시킨다.
+      if (!e.data?.push && e.data?.after !== after) return;
+
+      // 시작 응답 — 다리가 살아 있다는 뜻. 여기서부터는 사람 속도라 안 잰다.
+      if (e.data.__na === "pick-started") {
+        if (!e.data.ok) {
+          cleanup();
+          setError(e.data.error ?? "확장이 응답하지 않아. 확장을 새로고침해줘.");
+        }
+        return;
+      }
+
+      if (e.data.__na !== "pick-ack" || !e.data.done) return;
+      cleanup();
       if (!e.data.ok || !e.data.sel) {
-        setError(e.data.error ?? "집기가 취소됐어");
+        setError("집기를 그만뒀어");
         return;
       }
       setReads((v) => [
@@ -137,7 +155,12 @@ export function ProcedureCard({
         { after, sel: e.data.sel, label: e.data.sample || `${domain} 값` },
       ]);
     };
-    window.addEventListener("message", onAck);
+
+    window.addEventListener("message", onMsg);
+    setCancelPick(() => cleanup);
+    timer = window.setInterval(() => {
+      window.postMessage({ __na: "pick-poll", after }, "*");
+    }, 700);
     const url = domain.startsWith("localhost") ? `http://${domain}` : `https://${domain}`;
     window.postMessage({ __na: "pick", after, url }, "*");
   }
