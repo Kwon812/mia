@@ -40,6 +40,8 @@ type Answer = {
   skillMd?: string | null;
   /** 승인 때 짚어준 확인 자리. 실행할 때 이걸 읽어 온다. */
   reads?: Read[];
+  /** 얼린 단계. 다시 집어 고친 셀렉터가 여기 있다 — 후보 계산에는 없다. */
+  steps?: { domain: string; sel?: string; label?: string; tag: string; mut: boolean; dt: number; isInput: boolean }[];
 } | null;
 type Result = { ok: true } | { ok: false; error: string };
 
@@ -57,6 +59,7 @@ export function ProcedureCard({
   onApprove,
   onReject,
   onForget,
+  onRepoint,
 }: {
   candidate: Candidate;
   /** 이미 답한 것이면 그 답. 아니면 null. */
@@ -73,6 +76,13 @@ export function ProcedureCard({
   ) => Promise<Result>;
   onReject: (signature: string) => Promise<Result>;
   onForget: (signature: string) => Promise<Result>;
+  /** 깨진 단계를 다시 짚는다. 얼린 steps 를 사람이 알고 고치는 길이다. */
+  onRepoint?: (
+    signature: string,
+    index: number,
+    sel: string,
+    label: string,
+  ) => Promise<Result>;
 }) {
   const c = candidate;
   const [naming, setNaming] = useState(false);
@@ -107,10 +117,9 @@ export function ProcedureCard({
     };
   }, [live]);
 
-  /** 그 도메인의 탭을 열고 확장이 집기 모드를 켠다. 사람이 클릭한 자리의
-   *  셀렉터가 돌아온다 — 개발자도구 요소 선택기와 같은 방식이다. */
   /**
-   * 그 도메인의 탭을 열고 확장이 집기 모드를 켠다.
+   * 그 도메인의 탭을 열고 확장이 집기 모드를 켠다. 사람이 클릭한 자리의
+   * 셀렉터가 돌아온다 — 개발자도구 요소 선택기와 같은 방식이다.
    *
    * 결과를 받는 길이 **둘**이다. 확장이 직접 밀어주는 것과, 여기서 가지러
    * 가는 것. 하나만 두면 한 군데라도 어긋날 때 조용히 잠긴 채로 남는다 —
@@ -165,6 +174,51 @@ export function ProcedureCard({
     window.postMessage({ __na: "pick", after, url }, "*");
   }
 
+  /**
+   * 깨진 단계를 다시 짚는다. 집기와 같은 길을 쓰되, 결과를 reads 가 아니라
+   * 그 단계의 셀렉터로 보낸다.
+   */
+  function repoint(index: number) {
+    const domain = c.steps[index]?.domain ?? "";
+    if (!domain || !onRepoint) return;
+    setPicking(index);
+    setError(null);
+
+    let timer: number | undefined;
+    const cleanup = () => {
+      window.clearInterval(timer);
+      window.removeEventListener("message", onMsg);
+      setPicking(null);
+    };
+    const onMsg = (e: MessageEvent) => {
+      if (e.source !== window) return;
+      if (!e.data?.push && e.data?.after !== index) return;
+      if (e.data.__na === "pick-started") {
+        if (!e.data.ok) {
+          cleanup();
+          setError(e.data.error ?? "확장이 응답하지 않아");
+        }
+        return;
+      }
+      if (e.data.__na !== "pick-ack" || !e.data.done) return;
+      cleanup();
+      if (!e.data.ok || !e.data.sel) return;
+      startTransition(async () => {
+        const r = await onRepoint(c.signature, index, e.data.sel, e.data.sample ?? "");
+        if (!r.ok) setError(r.error);
+        else setLive(null); // 고쳤으니 멈춘 자리를 지운다 — 다시 돌리면 된다
+      });
+    };
+
+    window.addEventListener("message", onMsg);
+    setCancelPick(() => cleanup);
+    timer = window.setInterval(() => {
+      window.postMessage({ __na: "pick-poll", after: index }, "*");
+    }, 700);
+    const url = domain.startsWith("localhost") ? `http://${domain}` : `https://${domain}`;
+    window.postMessage({ __na: "pick", after: index, url }, "*");
+  }
+
   function start() {
     setError(null);
     // 집기와 같은 이유로 시한을 둔다 — 확장이 없으면 아무 답도 안 오는데,
@@ -187,7 +241,9 @@ export function ProcedureCard({
         run: {
           id: c.signature,
           name: answer?.name ?? "",
-          steps: c.steps,
+          // 후보 계산이 아니라 **승인 때 얼린 것**을 돌린다. 다시 집어 고친
+          // 셀렉터가 거기 있고, 후보 쪽에는 없다.
+          steps: answer?.steps ?? c.steps,
           index: 0,
           params: vals,
           reads: answer?.reads ?? [],
@@ -269,9 +325,24 @@ export function ProcedureCard({
                 도는 중 · {live.index + 1}/{c.steps.length}단계
               </span>
             ) : live?.error ? (
-              <span className="readout text-[12px] text-[#e0a0a0]">
-                {live.index + 1}단계에서 멈췄어 — {live.error}
-              </span>
+              <>
+                <span className="readout text-[12px] text-[#e0a0a0]">
+                  {live.index + 1}단계에서 멈췄어 — {live.error}
+                </span>
+                {/* 셀렉터는 깨진다. 사이트가 화면을 바꾸면 그 자리를 못 찾는데,
+                    그때마다 절차를 처음부터 다시 만들게 하면 쓸 수가 없다.
+                    멈춘 자리에서 바로 다시 집는다. */}
+                {onRepoint && (
+                  <button
+                    type="button"
+                    disabled={picking !== null}
+                    onClick={() => repoint(live.index)}
+                    className="readout rounded-sm border border-[rgba(160,185,220,0.24)] px-2 py-1 text-[12px] text-lum-1 transition-colors hover:border-[rgba(160,185,220,0.5)] hover:text-lum-0 disabled:opacity-40"
+                  >
+                    {picking === live.index ? "저 창에서 집어줘…" : "이 단계 다시 집기"}
+                  </button>
+                )}
+              </>
             ) : live?.doneAt ? (
               <span className="readout text-[12px] text-[#63e6d2]">다 됐어</span>
             ) : asking ? (

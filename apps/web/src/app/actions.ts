@@ -463,3 +463,42 @@ export async function forgetProcedureAnswer(signature: string): Promise<Procedur
   revalidatePath("/procedures");
   return { ok: true };
 }
+
+/**
+ * 승인된 절차의 한 단계를 다시 짚는다.
+ *
+ * 셀렉터는 깨진다. 사이트가 화면을 바꾸면 그 자리를 못 찾고, 그때마다 절차를
+ * 처음부터 다시 만들게 하면 쓸 수가 없다 — 한 단계만 다시 집으면 된다.
+ *
+ * steps 를 승인 시점에 얼려두는 것과 어긋나지 않는다. 얼리는 이유는 **모르는
+ * 사이에** 바뀌는 것을 막으려는 것이지, 사람이 알고 고치는 것까지 막으려는
+ * 게 아니다.
+ */
+export async function repointProcedureStep(
+  signature: string,
+  index: number,
+  sel: string,
+  label: string,
+): Promise<ProcedureResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+
+  const [row] = await db
+    .select({ steps: procedures.steps })
+    .from(procedures)
+    .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)))
+    .limit(1);
+  if (!row) return { ok: false, error: "그 절차를 찾을 수 없어." };
+
+  const steps = (row.steps ?? []) as Record<string, unknown>[];
+  if (!steps[index]) return { ok: false, error: "그 단계가 없어." };
+  steps[index] = { ...steps[index], sel, label };
+
+  await db
+    .update(procedures)
+    .set({ steps })
+    .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)));
+
+  revalidatePath("/procedures");
+  return { ok: true };
+}

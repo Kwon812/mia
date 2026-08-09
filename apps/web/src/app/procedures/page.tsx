@@ -19,7 +19,12 @@ import { formatKstYmd } from "@/lib/date";
 import { findProcedures, looksLikeOscillation, stepsOf } from "@/lib/procedure";
 import { Head, Shell, Empty } from "@/components/shell";
 import { ProcedureCard } from "@/components/procedure-card";
-import { approveProcedure, forgetProcedureAnswer, rejectProcedure } from "@/app/actions";
+import {
+  approveProcedure,
+  forgetProcedureAnswer,
+  rejectProcedure,
+  repointProcedureStep,
+} from "@/app/actions";
 
 /** 훑을 세션 수. 절차는 몇 주에 걸쳐 반복되므로 최근 것만 봐서는 안 잡힌다. */
 const SCAN_LIMIT = 400;
@@ -66,6 +71,7 @@ export default async function ProceduresPage() {
           name: procedures.name,
           skillMd: procedures.skillMd,
           reads: procedures.reads,
+          steps: procedures.steps,
         })
         .from(procedures)
         .where(eq(procedures.userId, user.userId))
@@ -76,6 +82,7 @@ export default async function ProceduresPage() {
         name: r.name,
         skillMd: r.skillMd,
         reads: (r.reads ?? []) as { after: number; sel: string; label: string }[],
+        steps: (r.steps ?? []) as never,
       },
     ]),
   );
@@ -127,6 +134,7 @@ export default async function ProceduresPage() {
                   onApprove={approveProcedure}
                   onReject={rejectProcedure}
                   onForget={forgetProcedureAnswer}
+                  onRepoint={repointProcedureStep}
                 />
               ))}
             </div>
