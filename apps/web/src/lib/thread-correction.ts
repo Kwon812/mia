@@ -280,6 +280,10 @@ async function reevaluateMemory(
   if (!mem) return false;
 
   const ids = mem.experienceIds.filter((id) => id !== args.removedExperienceId);
+  // 떠난 경험이 이 기억의 **근거였는가**. experience_ids 는 갈래의 모든
+  // 경험이 아니라 조건을 넘긴 것들만이라, 갈래에는 있었어도 근거가 아닐 수
+  // 있다. 그때는 제목 재료가 안 바뀌었으므로 다시 뽑을 이유가 없다.
+  const wasEvidence = ids.length !== mem.experienceIds.length;
 
   // 트리거마다 아직 성립하는지 본다.
   const kept = mem.triggers.filter((t) => {
@@ -299,10 +303,19 @@ async function reevaluateMemory(
     .set({
       experienceIds: ids,
       triggers: kept,
-      // 근거가 바뀌었으니 제목·본문을 다시 뽑아야 한다. 여기서 LLM 을 부르지
-      // 않는다 — 옮기기는 사람이 지도에서 하는 즉각적인 동작이라 기다리게
-      // 하면 안 되고, 밤 배치가 이미 이 깃발을 보고 다시 요약한다.
-      needsResummary: true,
+      // 근거가 실제로 줄었을 때만 다시 뽑는다. 갈래에만 있던 경험이 떠난
+      // 것이라면 제목 재료가 그대로라 다시 쓸 게 없다 — 밤 배치에
+      // MAX_PER_RUN 상한이 있어서, 헛 대상이 끼면 진짜 필요한 재요약이
+      // 하루 밀린다.
+      //
+      // 여기서 LLM 을 부르지는 않는다. 옮기기는 사람이 지도에서 하는 즉각적인
+      // 동작이라 기다리게 하면 안 된다. 깃발만 세우고 밤 배치가 맡는다.
+      //
+      // **세우기만 하고 내리지는 않는다.** false 를 그냥 쓰면, 앞선 다른
+      // 이유로 이미 대기 중이던 재요약이 여기서 취소된다 — 그 기억은
+      // 근거가 바뀐 채로 옛 제목을 영영 달고 있게 된다. 깃발을 내리는 것은
+      // 실제로 다시 써낸 밤 배치의 몫이다.
+      ...(wasEvidence ? { needsResummary: true } : {}),
       importance: await importanceOf(tx, ids, args.threadExperienceCount),
     })
     .where(eq(memories.id, mem.id));
