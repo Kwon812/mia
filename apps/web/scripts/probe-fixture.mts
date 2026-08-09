@@ -44,6 +44,12 @@ const CORRECT = num('correct', 0);
 // H1 이 실패한 이유가 겹치는 것까지 다 실어서였다(localhost·Table Editor 가
 // 두 갈래에 다 나온다). 겹치는 것을 빼면 갈라짐의 축만 남는다.
 const KW = args.includes('--kw');
+// 교정을 제목 쌍이 아니라 **대조축**으로 적는다.
+//   제목 쌍: "베타 스토어 배포 → 알파 대시보드 (1회)"  — 다음에 쓸 데가 없다
+//   대조축: "같은 도메인이어도 갈래가 다르다 → db.example.com (5회)"  — 쌓이고 재사용된다
+// category 교정이 먹히는 건 값 공간이 좁아 같은 줄이 반복되기 때문이다.
+// 갈래도 같은 성질을 갖게 하려면 무엇이 갈라짐의 축인지로 적어야 한다.
+const AXIS = args.includes('--axis');
 
 const RUNS = num('runs',1), N = num('n',40), SEED = num('seed',42);
 let rngState = SEED >>> 0;
@@ -101,7 +107,7 @@ const dump:any[] = [];
 for (let run=0; run<RUNS; run++) {
   const threads: Th[] = [];
   const assign: { thread:string; key:string; title:string; session:string;
-                  summary:string }[] = [];
+                  summary:string; domains:string[] }[] = [];
   let splitOk=0, splitTotal=0, oracleOk=0, oracleTotal=0;
   const rawAssign: { thread:string; key:string }[] = [];   // 모델의 날것 판단
   const patterns = new Map<string, number>();               // "잘못된 갈래 → 옳은 갈래"
@@ -192,8 +198,10 @@ for (let run=0; run<RUNS; run++) {
       const use = it.segmentIds.length ? it.segmentIds : segs.map((_:any,i:number)=>i);
       for (const i of use) if (segs[i]) th.domains.add(segs[i].domain);
 
+      const myDomains = (it.segmentIds.length ? it.segmentIds : segs.map((_:any,i:number)=>i))
+        .map((i:number)=>segs[i]?.domain).filter(Boolean) as string[];
       assign.push({ thread: th.id, key: truth, title: th.title, session: fx.name,
-                    summary: it.summary });
+                    summary: it.summary, domains: myDomains });
       rawAssign.push({ thread: th.id, key: truth });   // 고치기 전, 모델이 정한 그대로
       // 오라클 채점 — 정답 갈래가 목록에 있었는데 거기로 갔는가
       if (ORACLE) {
@@ -227,8 +235,21 @@ for (let run=0; run<RUNS; run++) {
         home.recent.unshift(a.summary);
         for (const [d] of th.targets) if (!home.targets.has(d)) home.targets.set(d,1);
         for (const d of th.domains) home.domains.add(d);
-        const pk = `${th.title.slice(0,24)} → ${home.title.slice(0,24)}`;
-        patterns.set(pk,(patterns.get(pk)??0)+1);
+        if (AXIS) {
+          // 잘못 붙었던 갈래와 **겹쳤던** 것이 곧 안 갈라지는 축이다.
+          // 겹쳤는데도 사람이 갈랐으니, 그 겹침은 근거가 아니었다는 뜻이다.
+          const host = (d:string) => d.split(':')[0];
+          const srcHosts = new Set([...th.domains].map(host));
+          for (const d of new Set(a.domains)) {
+            if (th.domains.has(d))
+              patterns.set(`같은 도메인이어도 갈래가 다르다 → ${d}`, (patterns.get(`같은 도메인이어도 갈래가 다르다 → ${d}`)??0)+1);
+            else if (srcHosts.has(host(d)))
+              patterns.set(`같은 호스트라도 포트가 다르면 다른 갈래다 → ${host(d)}`, (patterns.get(`같은 호스트라도 포트가 다르면 다른 갈래다 → ${host(d)}`)??0)+1);
+          }
+        } else {
+          const pk = `${th.title.slice(0,24)} → ${home.title.slice(0,24)}`;
+          patterns.set(pk,(patterns.get(pk)??0)+1);
+        }
         a.thread = home.id; a.title = home.title;   // 최종 상태는 고쳐진 상태
       }
     }
@@ -242,7 +263,12 @@ for (let run=0; run<RUNS; run++) {
   const { p, r, f1 } = CORRECT > 0 ? raw : pairF1(assign);   // 교정 시험은 날것으로 잰다
   if (CORRECT > 0) {
     const fin = pairF1(assign);
-    console.log(`  [교정 ${CORRECT}] 모델 날것 F1 ${(raw.f1*100).toFixed(1)}% · 사람이 고친 뒤 F1 ${(fin.f1*100).toFixed(1)}% · 옮긴 횟수 ${[...patterns.values()].reduce((a,b)=>a+b,0)}`);
+    console.log(`  [교정 ${CORRECT}${AXIS?' 대조축':' 제목쌍'}] 모델 날것 F1 ${(raw.f1*100).toFixed(1)}% · 고친 뒤 F1 ${(fin.f1*100).toFixed(1)}%`);
+    // 규칙이 쌓이는가 — 전부 1회면 재사용이 안 된다는 뜻이고, F1 과 무관하게 경로가 죽는다.
+    const cnts=[...patterns.values()];
+    console.log(`     규칙 ${patterns.size}줄 · 총 ${cnts.reduce((a,b)=>a+b,0)}회 · 2회 이상인 줄 ${cnts.filter(c=>c>1).length} · 최대 ${Math.max(0,...cnts)}회`);
+    [...patterns.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5)
+      .forEach(([k,v])=>console.log(`       ${String(v).padStart(2)}회  ${k}`));
   }
   if (ORACLE) console.log(`  [오라클] 정답 갈래가 목록에 있을 때 그리로 간 비율 ${oracleOk}/${oracleTotal} = ${(oracleOk/Math.max(1,oracleTotal)*100).toFixed(1)}%`);
   console.log(`\n  --- ${run+1}회차 · F1 ${(f1*100).toFixed(1)}% (정밀 ${(p*100).toFixed(0)} / 재현 ${(r*100).toFixed(0)}) · 갈래 ${threads.length}(정답 ${TRUTH_THREADS}) · 분할 ${splitOk}/${splitTotal} ---`);
