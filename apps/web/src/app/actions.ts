@@ -531,11 +531,17 @@ export async function dropProcedureStep(
   if (!steps[index]) return { ok: false, error: "그 단계가 없어." };
   if (steps.length <= 1) return { ok: false, error: "마지막 단계는 뺄 수 없어." };
 
+  // 빠지는 단계에 매인 읽기를 그냥 버리면 안 된다. 사람이 집어둔 것이고,
+  // 그 값은 대개 **같은 화면**에 있다 — 단계가 빠져도 앞 단계에서 읽으면
+  // 그만이다. 앞 단계가 다른 도메인일 때만 갈 곳이 없어 버린다.
+  const prevDomain = index > 0 ? (steps[index - 1] as { domain?: string })?.domain : null;
+  const thisDomain = (steps[index] as { domain?: string })?.domain;
   const reads = ((row.reads ?? []) as { after: number }[])
-    // 빠지는 단계에 매인 읽기는 갈 곳이 없다.
-    .filter((r) => r.after !== index)
-    // 뒤쪽은 한 칸씩 당긴다.
-    .map((r) => (r.after > index ? { ...r, after: r.after - 1 } : r));
+    .flatMap((r) => {
+      if (r.after > index) return [{ ...r, after: r.after - 1 }];
+      if (r.after !== index) return [r];
+      return prevDomain && prevDomain === thisDomain ? [{ ...r, after: index - 1 }] : [];
+    });
 
   await db
     .update(procedures)
