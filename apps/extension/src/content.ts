@@ -208,6 +208,10 @@
       if (sel) act.sel = sel;
       if (isMutating(el, label)) act.mut = true;
       pushAction(act);
+      // 무언가를 바꾸는 조작은 그 자리에서 보낸다. 이런 클릭이 곧 페이지를
+      // 떠나게 만드는 것이라(제출·저장·배포), 다음 틱을 기다리면 그 조작
+      // 자체가 사라진다 — 절차의 후조건이 되는 바로 그 단계다.
+      if (act.mut) setTimeout(flush, 0);
     },
     { passive: true, capture: true },
   );
@@ -359,9 +363,19 @@
     return false;
   };
 
-  setInterval(() => {
+  /**
+   * 모아둔 것을 보낸다.
+   *
+   * 10초 틱이 기본이지만 그것만으로는 **떠나는 순간을 못 잡는다.** 링크를
+   * 눌러 페이지가 바뀌면 마지막 틱 이후의 조작이 전송 전에 사라지는데,
+   * 하필 절차의 마지막 단계가 대개 페이지를 바꾸는 클릭이라 제일 중요한
+   * 것부터 없어진다.
+   *
+   * 그래서 세 번 부른다: 10초마다 · 무언가를 바꾸는 조작 직후 · 떠날 때.
+   */
+  function flush(): void {
     const playing = isMediaPlaying();
-    if (scrolls === 0 && clicks === 0 && keys === 0 && !playing) return;
+    if (scrolls === 0 && clicks === 0 && keys === 0 && actions.length === 0 && !playing) return;
 
     try {
       // SPA URL 변경 감지: 별도 리스너(popstate/history patch 등) 없이 10초
@@ -396,5 +410,15 @@
     clicks = 0;
     keys = 0;
     actions = [];
-  }, 10000);
+  }
+
+  setInterval(flush, 10000);
+
+  // 떠나기 직전. beforeunload 는 MV3 에서 못 미덥고, pagehide 와
+  // visibilitychange 를 같이 걸면 이동·탭 전환·창 닫기가 대부분 덮인다.
+  // 둘 다 걸리는 경우가 있지만 flush 는 비어 있으면 아무것도 안 한다.
+  window.addEventListener('pagehide', flush);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush();
+  });
 })();

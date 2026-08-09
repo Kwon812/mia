@@ -1114,7 +1114,9 @@ export function buildUserMessage(
   const patternList =
     correctionPatterns.length > 0
       ? correctionPatterns
-          .map((p) => `- ${p.field}: ${p.from} → ${p.to} (${p.count}회)`)
+          // 갈래는 from → to 쌍이 매번 새로 생겨 쌓이지 않는다. text 가 있으면
+          // 그건 갈라짐의 축으로 적힌 것이라 그대로 싣는다 (lib/corrections.ts).
+          .map((p) => (p.text ? `- ${p.text} (${p.count}회)` : `- ${p.field}: ${p.from} → ${p.to} (${p.count}회)`))
           .join('\n')
       : null;
 
