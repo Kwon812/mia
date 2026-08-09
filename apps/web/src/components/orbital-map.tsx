@@ -4,7 +4,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { EXPERIENCE_CATEGORIES, clampSentence, type ExperienceCategory } from "@na/shared";
 
 import { formatKstYmd } from "@/lib/date";
-import { ThreadFix } from "@/components/thread-fix";
+import { ThreadFix, ThreadSelfFix } from "@/components/thread-fix";
 
 // 궤도 지도 — 이 사이트의 본체.
 //
@@ -712,6 +712,8 @@ export function OrbitalMap({
   latestIds,
   onComplete,
   onMove,
+  onRename,
+  onMerge,
   onFocusChange,
 }: {
   bodies: Body[];
@@ -731,6 +733,18 @@ export function OrbitalMap({
   onMove?: (
     experienceId: string,
     target: { kind: "existing"; threadId: string } | { kind: "new"; title: string },
+  ) => Promise<{ ok: true; effects: string[] } | { ok: false; error: string }>;
+  /** 갈래 이름을 고친다. 제목이 활동이면("배포 점검") 다음 판정이 어느
+   *  프로젝트인지 몰라 엉뚱한 데 붙는다. */
+  onRename?: (
+    threadId: string,
+    title: string,
+  ) => Promise<{ ok: true; effects: string[] } | { ok: false; error: string }>;
+  /** 갈래 둘을 합친다. 옮기기로는 못 고치는 쪽이다 — 측정에서 재현율이
+   *  74% 였고, 그건 넷 중 하나가 갈라져 있다는 뜻이다. */
+  onMerge?: (
+    fromThreadId: string,
+    intoThreadId: string,
   ) => Promise<{ ok: true; effects: string[] } | { ok: false; error: string }>;
   /** 지금 화면이 무엇 하나에 대한 것인지. 눌러서 펼쳤거나, 당겨서 그 별의
    *  계 안에 들어와 있으면 그 천체를 넘긴다. 아니면 null.
@@ -3283,6 +3297,21 @@ export function OrbitalMap({
               >
                 {completing ? "…" : "끝"}
               </button>
+            )}
+
+            {/* 갈래 자체를 고치는 길. 완결 버튼과 달리 상태를 안 가린다 —
+                끝난 갈래도 이름이 틀렸거나 갈라져 있을 수 있고, 그건 지금
+                진행 중인지와 무관하다. */}
+            {onRename && onMerge && (
+              <ThreadSelfFix
+                key={headline.id}
+                threadId={headline.id}
+                title={headline.title}
+                experienceCount={headline.referencedIds.length}
+                threads={threads}
+                onRename={onRename}
+                onMerge={onMerge}
+              />
             )}
 
           </div>

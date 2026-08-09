@@ -155,3 +155,164 @@ export function ThreadFix({
     </div>
   );
 }
+
+// ============================================================
+// 갈래 자체를 고친다 — 이름과 병합.
+//
+// 옮기기만으로는 못 고치는 것이 있다. 측정에서 재현율이 74% 였다 — 넷 중
+// 하나는 **같은 것이 다른 갈래에 갈라져 있다**는 뜻이고, 그걸 옮기기로
+// 고치려면 경험을 하나씩 N 번 옮겨야 한다.
+//
+// 이름 고치기는 다른 이유로 필요하다. 모델이 짓는 제목이 활동을 말하고
+// 대상을 말하지 않을 때가 있다("배포 점검"). 그러면 다음 세션이 무엇을 보고
+// 판단해야 할지 모른다 — 어느 프로젝트의 배포인지가 제목에 없기 때문이다.
+// ============================================================
+
+export function ThreadSelfFix({
+  threadId,
+  title,
+  experienceCount,
+  threads,
+  onRename,
+  onMerge,
+}: {
+  threadId: string;
+  title: string;
+  experienceCount: number;
+  threads: ThreadBody[];
+  onRename: (threadId: string, title: string) => Promise<FixResult>;
+  onMerge: (fromThreadId: string, intoThreadId: string) => Promise<FixResult>;
+}) {
+  const [mode, setMode] = useState<null | "rename" | "merge">(null);
+  const [draft, setDraft] = useState(title);
+  const [query, setQuery] = useState("");
+  const [pending, startTransition] = useTransition();
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const others = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return threads
+      .filter((t) => t.id !== threadId)
+      .filter((t) => !q || t.title.toLowerCase().includes(q))
+      .slice(0, 12);
+  }, [threads, threadId, query]);
+
+  function run(fn: () => Promise<FixResult>) {
+    setError(null);
+    startTransition(async () => {
+      const r = await fn();
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setNote(r.effects.join(" · "));
+      setMode(null);
+      setQuery("");
+    });
+  }
+
+  if (!mode) {
+    return (
+      <div className="pointer-events-auto mt-3 flex flex-wrap items-center justify-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(title);
+            setMode("rename");
+          }}
+          className="readout rounded-sm border border-[rgba(160,185,220,0.18)] px-2 py-1 text-[12px] text-lum-2 transition-colors hover:border-[rgba(160,185,220,0.4)] hover:text-lum-0"
+        >
+          이름 고치기
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("merge")}
+          className="readout rounded-sm border border-[rgba(160,185,220,0.18)] px-2 py-1 text-[12px] text-lum-2 transition-colors hover:border-[rgba(160,185,220,0.4)] hover:text-lum-0"
+        >
+          다른 갈래와 합치기
+        </button>
+        {note && <span className="readout text-[12px] text-lum-3">{note}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="pointer-events-auto mt-3 rounded-sm border border-[rgba(160,185,220,0.18)] bg-[rgba(10,14,22,0.86)] p-3 text-left backdrop-blur-sm">
+      {mode === "rename" ? (
+        <>
+          <div className="tick mb-2">이름 고치기</div>
+          {/* 무엇을 적어야 하는지 말해준다. 제목이 활동이면("배포 점검") 다음
+              세션이 어느 프로젝트인지 몰라 엉뚱한 데 붙는다. */}
+          <p className="mb-2 font-sans text-[12px] leading-relaxed text-lum-3">
+            활동 말고 대상을 적어. 「배포 점검」보다 「알파 대시보드」가 낫다 —
+            다음 판단이 이 이름만 보고 이뤄지니까.
+          </p>
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={pending}
+            autoFocus
+            className="readout w-full rounded-sm border border-[rgba(160,185,220,0.16)] bg-transparent px-2 py-1 text-[12.5px] text-lum-0 outline-none focus:border-[rgba(160,185,220,0.4)]"
+          />
+          <button
+            type="button"
+            disabled={pending || !draft.trim() || draft.trim() === title}
+            onClick={() => run(() => onRename(threadId, draft.trim()))}
+            className="readout mt-2 w-full rounded-sm border border-[rgba(160,185,220,0.24)] px-2 py-1 text-[12.5px] text-lum-1 transition-colors hover:border-[rgba(160,185,220,0.5)] hover:text-lum-0 disabled:opacity-40"
+          >
+            바꾸기
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="tick mb-2">「{title}」을 어디에 합칠까</div>
+          {/* 사라지는 쪽이 이쪽이라는 걸 분명히 한다. 반대로 알면 남기려던
+              이름을 지우게 된다 — 되돌리려면 경험을 하나씩 다시 옮겨야 한다. */}
+          <p className="mb-2 font-sans text-[12px] leading-relaxed text-lum-3">
+            이 갈래의 경험 {experienceCount}건이 고른 쪽으로 옮겨가고,
+            <span className="text-lum-1">「{title}」은 사라진다.</span>
+          </p>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="남길 갈래 찾기"
+            disabled={pending}
+            className="readout mb-2 w-full rounded-sm border border-[rgba(160,185,220,0.16)] bg-transparent px-2 py-1 text-[12.5px] text-lum-0 outline-none placeholder:text-lum-4 focus:border-[rgba(160,185,220,0.4)]"
+          />
+          <div className="flex max-h-40 flex-col gap-0.5 overflow-y-auto">
+            {others.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                disabled={pending}
+                onClick={() => run(() => onMerge(threadId, t.id))}
+                className="readout flex items-baseline justify-between gap-2 rounded-sm px-1.5 py-1 text-left text-[12.5px] text-lum-2 transition-colors hover:bg-[rgba(160,185,220,0.1)] hover:text-lum-0"
+              >
+                <span className="truncate">{t.title}</span>
+                <span className="shrink-0 text-[11px] text-lum-4">
+                  {t.experienceCount}건{t.memory ? " · 기억" : ""}
+                </span>
+              </button>
+            ))}
+            {others.length === 0 && (
+              <span className="readout px-1.5 py-1 text-[12px] text-lum-4">합칠 갈래가 없어</span>
+            )}
+          </div>
+        </>
+      )}
+
+      {error && <p className="readout mt-2 text-[12px] text-[#e0a0a0]">{error}</p>}
+      <button
+        type="button"
+        onClick={() => {
+          setMode(null);
+          setError(null);
+        }}
+        className="readout mt-2 text-[11.5px] text-lum-4 transition-colors hover:text-lum-2"
+      >
+        그만두기
+      </button>
+    </div>
+  );
+}

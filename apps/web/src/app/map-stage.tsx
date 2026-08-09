@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { completeThread, moveExperienceToThread } from "@/app/actions";
+import {
+  completeThread,
+  mergeThreadInto,
+  moveExperienceToThread,
+  renameThreadTitle,
+} from "@/app/actions";
 import {
   CAT_GROUPS,
   OrbitalMap,
@@ -154,6 +159,17 @@ export function MapStage({
     ) => moveExperienceToThread(experienceId, target),
     [],
   );
+  const handleRename = useCallback(
+    (threadId: string, title: string) => renameThreadTitle(threadId, title),
+    [],
+  );
+  // 합치기는 사라지는 쪽이 from 이다. 화면이 그걸 분명히 말해야 한다 —
+  // 반대로 알면 남기려던 이름을 지우게 되고, 되돌리려면 경험을 하나씩
+  // 다시 옮겨야 한다.
+  const handleMerge = useCallback(
+    (fromThreadId: string, intoThreadId: string) => mergeThreadInto(fromThreadId, intoThreadId),
+    [],
+  );
 
   return (
     <main className="relative h-screen w-full overflow-hidden">
@@ -166,6 +182,8 @@ export function MapStage({
           onFocusChange={handleFocusChange}
           onComplete={handleComplete}
           onMove={handleMove}
+          onRename={handleRename}
+          onMerge={handleMerge}
           // 펼치면 위성 층이라 최근 경험이, 계 화면에서는 그 경험이 속한 갈래가 표식을 켠다.
           latestIds={reading ? latestExperienceIds : latestThreadIds}
         />
