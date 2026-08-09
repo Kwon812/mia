@@ -51,6 +51,10 @@
 
       body {
         width: 320px;
+        /* 최소 높이가 없으면 내용이 비었을 때 팝업이 납작하게 쭈그러든다.
+           서비스 워커가 잠들었거나 크롬이 방금 재시작한 직후가 그렇다 —
+           고장난 것처럼 보이는데 실은 스냅샷을 못 받은 것뿐이다. */
+        min-height: 180px;
         background: var(--bg);
         color: var(--fg);
         font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI",

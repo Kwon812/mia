@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { corrections, experiences, questions, type CORRECTION_FIELDS } from '@na/db';
+import { corrections, experiences, questions, sessions, threads, type CORRECTION_FIELDS } from '@na/db';
 import { db } from './db';
 
 // ============================================================
@@ -248,8 +248,122 @@ export async function loadCorrectionPatterns(userId: string): Promise<Correction
     else counts.set(k, { field: row.field, from: row.modelValue, to: row.humanValue, count: 1 });
   }
 
+  // 갈래 교정은 from → to 쌍이 아니라 갈라짐의 축으로 바꿔 담는다.
+  // 위 루프가 만든 thread 줄은 버린다 — 제목 쌍은 매번 새로 생겨 안 쌓인다.
+  const axes = await loadThreadAxes(userId);
+  const rest = [...counts.values()].filter((p) => p.field !== 'thread');
+
   // 잦은 것부터. 프롬프트가 잘릴 일은 없지만 읽는 순서가 곧 강조 순서다.
-  return [...counts.values()].sort((a, b) => b.count - a.count);
+  return [...rest, ...axes].sort((a, b) => b.count - a.count);
+}
+
+/** 축을 몇 줄까지 실을까. 넘치면 잦은 것만 남는다. */
+const MAX_AXES = 6;
+/** 이만큼은 되풀이돼야 규칙으로 본다. 한 번은 그 갈래의 사연이지 규칙이 아니다. */
+const MIN_AXIS_COUNT = 2;
+
+/**
+ * 갈래 교정에서 **갈라짐의 축**을 뽑는다.
+ *
+ * 사람이 경험을 다른 갈래로 옮겼다는 것은 단순한 수정이 아니라 선언이다:
+ * "이 둘은 겹치는 게 많지만 다른 것이다." 그 겹침이 무엇이었는지가 곧 축이다.
+ *
+ * 옮긴 경험이 밟은 도메인 중, **원래 갈래에도 있는 것**을 찾는다. 겹쳤는데도
+ * 사람이 갈랐으니 그 겹침은 붙일 근거가 아니었다는 뜻이다.
+ *
+ * 이렇게 적어야 쌓인다. 「베타 스토어 배포 → 알파 대시보드」는 제목이 자유
+ * 텍스트라 매번 새 쌍이 되고 열세 번 고쳐도 count 가 1 에서 안 는다 —
+ * 모델에게는 일반화할 규칙이 아니라 남의 사연 열세 개다. 반면 「같은
+ * db.example.com 이어도 갈래가 다르다」는 처음 보는 프로젝트에도 적용된다.
+ *
+ * (실측: 대조축 쌍 F1 62.6% · 제목 쌍 55.6% · 기준선 54.3%. 2회 표본이라
+ *  확정은 못 하지만, 규칙이 4~5회까지 쌓이는 것 자체가 관측됐다.
+ *  docs/HANDOFF-attach.md)
+ */
+async function loadThreadAxes(userId: string): Promise<CorrectionPattern[]> {
+  const moves = await db
+    .select({
+      experienceId: corrections.experienceId,
+      fromTitle: corrections.modelValue,
+    })
+    .from(corrections)
+    .where(and(eq(corrections.userId, userId), eq(corrections.field, 'thread')))
+    .orderBy(desc(corrections.createdAt))
+    .limit(PATTERN_SAMPLE);
+
+  if (moves.length === 0) return [];
+
+  const counts = new Map<string, number>();
+  const host = (d: string) => d.split(':')[0];
+
+  for (const m of moves) {
+    const moved = await domainsOfExperience(m.experienceId);
+    if (moved.size === 0) continue;
+    // 원래 갈래에 **지금 남아 있는** 것들의 도메인. 옮길 당시의 구성은
+    // 복원할 수 없지만, 남은 것과 겹친다면 그 겹침이 근거가 아니었다는
+    // 사실은 그대로다.
+    const stayed = await domainsOfThreadTitle(userId, m.fromTitle);
+
+    for (const d of moved) {
+      if (stayed.has(d)) {
+        const k = `같은 ${d} 를 다뤄도 갈래가 다를 수 있다`;
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      } else if ([...stayed].some((x) => host(x) === host(d) && x !== d)) {
+        // 호스트는 같고 포트만 다르다 — localhost 의 여러 프로젝트가 여기 걸린다.
+        const k = `${host(d)} 는 포트가 다르면 다른 갈래다`;
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      }
+    }
+  }
+
+  return [...counts.entries()]
+    .filter(([, n]) => n >= MIN_AXIS_COUNT)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_AXES)
+    .map(([text, count]) => ({ field: 'thread' as const, from: '', to: '', count, text }));
+}
+
+/** 그 경험이 밟은 도메인. segment_ids 로 세션의 압축 로그를 되짚는다. */
+async function domainsOfExperience(experienceId: string): Promise<Set<string>> {
+  const [row] = await db
+    .select({ segmentIds: experiences.segmentIds, log: sessions.compressedLog })
+    .from(experiences)
+    .innerJoin(sessions, eq(sessions.id, experiences.sessionId))
+    .where(eq(experiences.id, experienceId))
+    .limit(1);
+  if (!row) return new Set();
+
+  const segs = ((row.log as { segments?: { domain?: string }[] } | null)?.segments ?? []);
+  // segment_ids 가 비면 세션 전체가 그 경험이다 (planItems 와 같은 규칙).
+  const use = row.segmentIds.length > 0 ? row.segmentIds : segs.map((_, i) => i);
+  const out = new Set<string>();
+  for (const i of use) {
+    const d = segs[i]?.domain;
+    if (d) out.add(d);
+  }
+  return out;
+}
+
+/** 그 제목의 갈래에 지금 남아 있는 경험들이 밟은 도메인. */
+async function domainsOfThreadTitle(userId: string, title: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ segmentIds: experiences.segmentIds, log: sessions.compressedLog })
+    .from(experiences)
+    .innerJoin(sessions, eq(sessions.id, experiences.sessionId))
+    .innerJoin(threads, eq(threads.id, experiences.threadId))
+    .where(and(eq(threads.userId, userId), eq(threads.title, title)))
+    .limit(50);
+
+  const out = new Set<string>();
+  for (const r of rows) {
+    const segs = ((r.log as { segments?: { domain?: string }[] } | null)?.segments ?? []);
+    const use = r.segmentIds.length > 0 ? r.segmentIds : segs.map((_, i) => i);
+    for (const i of use) {
+      const d = segs[i]?.domain;
+      if (d) out.add(d);
+    }
+  }
+  return out;
 }
 
 /** 최근 교정된 경험 id 들 — 프롬프트 컨텍스트에서 "사람이 고친 것" 표시에 쓴다. */
