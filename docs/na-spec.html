@@ -534,6 +534,78 @@ unique_domains == 1 &amp;&amp; 분야 == entertainment
 
   <p><code>POST /api/sessions</code>가 저장 성공 응답을 보낸 뒤 <code>after()</code> 안에서 조용히 돈다. 실패해도 API 응답에는 영향이 없고 <code>processed_at</code>이 NULL로 남아 재처리 대상이 된다.</p>
 
+  <h3>무엇이 오가나 — 한눈에</h3>
+<pre><code><span class="c">┌─ 들어가는 것 ────────────────────────────────────────┐</span>
+  시스템 프롬프트   <span class="k">~5,600자</span>  고정 <span class="c">(v9)</span>
+  유저 메시지       <span class="k">~12,000자</span> 세션마다 다름 <span class="c">(≈5,500 토큰)</span>
+      ├ 보유 스킬 목록        최근 50개
+      ├ 최근 경험 3건         <span class="c">교정을 겹친 값 · [사람이 고침] 표시</span>
+      ├ 교정 패턴             <span class="c">있을 때만</span>
+      ├ 진행 중 갈래          최근 8 + 어휘 3
+      ├ 잠긴 갈래             <span class="c">있을 때만</span> 3
+      ├ 이번 세션 요약        길이·종료사유·활동량·도메인
+      ├ <span class="k">대상별 체류 합계</span>      ← 코드가 미리 더해준 값
+      └ 압축 로그(JSON)       구간 20 + earlier + 검색어
+<span class="c">└──────────────────────────────────────────────────────┘</span>
+                          ↓ Haiku · temp 0 · max_tokens 2048
+<span class="c">┌─ 나오는 것 ──────────────────────────────────────────┐</span>
+  tool_use.input   summary · detail · category · outcome
+                   is_first_time · skills[] · dialogues[4]
+                   thread · segment_ids[] · also[]
+<span class="c">└──────────────────────────────────────────────────────┘</span>
+                          ↓ <span class="k">코드가 다섯 번 손댄다</span>
+   ① 검증  ② 자르기  ③ 방어  ④ 보강  ⑤ 회계
+                          ↓
+   experiences 1~3건 · threads · memories · dialogues 4</code></pre>
+
+  <h3>들어가는 것 — 실제 프롬프트</h3>
+  <p>2026-08-08 세션(130분) 것을 그대로 옮겼다.</p>
+<pre><code>## 기존 컨텍스트
+### 보유 스킬 목록
+- localhost 개발 (마지막 사용: 2026-08-09)
+- Supabase (마지막 사용: 2026-08-09)
+- SOLDIER: A DAY (마지막 사용: 2026-08-07)
+  <span class="c">… 최근 50개까지</span>
+
+### 최근 경험 3건 (최신순)
+1. [dev/partial/해봄] Project NA 개발 중 Supabase 구조를 정리하고 파인튜닝 개념을 학습했다.
+2. [dev/partial/<span class="k">처음</span>] Project NA 개발 중 Claude API 활용 방안을 검토하고…
+3. [dev/success/해봄] <span class="c">…</span>
+
+### 네가 바로잡힌 판정 (사람이 고친 것)     <span class="c">← 교정이 있을 때만</span>
+- outcome: explore → stuck (3회)
+
+### 진행 중인 작업(thread) 목록 (최근 활동순 + 이번 세션과 어휘가 겹치는 것)
+1. id=… · "TECH UP 2기 프로젝트 개발" (카테고리: dev, 경험 18건, 마지막 활동 0일 전)
+   최근: Project NA 데이터베이스 구조를 정리하고…
+
+### 잠긴 작업(thread) — 30일 넘게 손 안 댔다     <span class="c">← 후보가 있을 때만</span>
+
+## 이번 세션
+- 카테고리: dev
+- 길이: 130분
+- 어떻게 끝났나: <span class="k">다른 분야로 넘어갔다</span>
+- 활동량: 4263 (스크롤·클릭·키의 가중합. 분당 10 이상이면 손이 바빴다는 뜻)
+- 방문 도메인(도메인별 체류 시간 등): {"localhost":814,"vercel.com":1364,…}
+- <span class="k">대상별 체류 합계</span>(segments·via·earlier 를 모두 더한 값):
+    vercel.com · choi-media 25분 · dashboard.render.com · Cron Job 19분 · …
+- 압축 로그(타임라인):
+{"tags":[],"queries":[…],"segments":[…20개…],"earlier":{…}}</code></pre>
+
+  <h4>압축 로그 안쪽 — 구간 하나</h4>
+<pre><code>{
+  <span class="k">"i": 0</span>,                      <span class="c">← 코드가 프롬프트 조립 때 박아 넣는다</span>
+  "domain": "dashboard.render.com",
+  "category": "dev",
+  "start": "2026-08-08T15:20:24+09:00",
+  "end":   "2026-08-08T15:27:33+09:00",
+  <span class="k">"sec": 430</span>,                  <span class="c">← 귀속 체류. start~end 가 아니다</span>
+  "title": "New Cron Job ・ Render Dashboard",
+  "paths": ["/cron/new", "/", "/blueprints"],
+  "via":   ["chatgpt.com · AI 강좌 Codex API 관리"]   <span class="c">← 1분 미만 경유</span>
+}</code></pre>
+  <p>이 세션은 구간 20개 + <code>earlier</code>(앞부분 8항목 33분) + 검색어 1개였다. <strong>도메인별 시간은 두 번 들어간다</strong> — 원시 맵(<code>domains</code>)과 대상별 합계. 앞엣것은 도메인 단위라 <code>localhost</code> 하나에 여러 프로젝트가 뭉쳐 있고, 뒤엣것은 <code>도메인 · 제목</code> 단위라 그게 갈린다.</p>
+
   <h3>모델에게 주는 것</h3>
   <table>
     <thead><tr><th>블록</th><th>내용</th><th>왜</th></tr></thead>
@@ -588,18 +660,145 @@ also[]         <span class="k">뚜렷이 다른 작업이 더 있었으면</span
     규칙이 못 보는 것(주제·방식·환경)만 보탠다.
   </div>
 
-  <h3>나눌지는 코드가 정한다 — <code>planItems</code></h3>
-  <p>모델은 <strong>어느 구간이 어느 일이었나</strong>만 배정하고, 시간과 문턱은 코드가 잰다.</p>
-<pre><code><span class="c">아래 중 하나라도 걸리면 통째로 안 나눈다</span>
+  <h3>나오는 것 — 코드가 다섯 번 손댄다</h3>
+
+  <div class="maxim">모델은 무엇이 있었나를 말하고, 코드는 그것을 어떻게 셀 것인가를 정한다.</div>
+
+  <p>모델 출력이 그대로 저장되지 않는다. <strong>성격이 다른 다섯 종류</strong>의 손질이 순서대로 걸린다.</p>
+  <table>
+    <thead><tr><th></th><th>종류</th><th>하는 일</th><th>대상</th></tr></thead>
+    <tbody>
+      <tr><td class="num">①</td><td><strong>검증</strong></td><td>형태가 틀리면 <strong>폐기</strong></td><td>zod 스키마 · <code>stop_reason</code></td></tr>
+      <tr><td class="num">②</td><td><strong>자르기</strong></td><td>길면 <strong>줄여서 통과</strong></td><td>대사 80자 · 갈래 제목 100자</td></tr>
+      <tr><td class="num">③</td><td><strong>방어</strong></td><td>환각을 <strong>강등</strong></td><td>존재하지 않는 갈래 id</td></tr>
+      <tr><td class="num">④</td><td><strong>보강</strong></td><td>규칙이 <strong>덮어씀</strong></td><td><code>is_first_time</code> · 스킬 <code>domain</code></td></tr>
+      <tr><td class="num">⑤</td><td><strong>회계</strong></td><td>시간을 <strong>다시 잼</strong></td><td>분할 여부 · <code>duration_min</code> · <code>occurred_at</code></td></tr>
+    </tbody>
+  </table>
+
+  <h4>① 검증 — 폐기</h4>
+<pre><code>tool_use 블록이 없다              → ingest_failures, 재처리 대상
+stop_reason === 'max_tokens'      → <span class="k">검증을 통과했어도 폐기</span>
+zod safeParse 실패                → ingest_failures
+
+<span class="c">셋 다 processed_at 이 NULL 로 남아 재처리 대상이 된다</span></code></pre>
+  <p><code>max_tokens</code>를 폐기로 다루는 것이 핵심이다. <code>also</code>는 출력 <strong>끝</strong>에 오는데 스키마상 optional 이라 잘려도 검증을 통과한다 — <strong>경험이 조용히 하나로 줄어든다.</strong> 필수 필드는 앞에서 이미 채워졌으니 겉보기엔 멀쩡한 판정이다.</p>
+
+  <h4>② 자르기 — 폐기하지 않는다</h4>
+<pre><code>대사 81자      clampSentence(text, 80)     <span class="c">문장 경계에서</span>
+갈래 제목      clampSentence(title, 100)
+요약·기억 제목  <span class="k">자르지 않는다</span>                 <span class="c">← 상세에서 되살릴 방법이 없다</span></code></pre>
+  <div class="note"><b>여기서 크게 데었다</b> — 예전에는 대사가 <code>.max(80)</code> 이라 81자면 zod 가 <b>출력 전체를 반려</b>했다. 멀쩡한 summary·category·outcome·skills 까지 통째로 버려져 그 세션은 경험이 되지 못했다. 대사는 파이프라인에서 <b>가장 안 중요한 값</b>(슬롯당 1행씩 덮어써지는 캐시)인데 그게 <b>가장 중요한 값을 죽였다.</b><br><br><b>자를 수 있는 것을 폐기 사유로 삼지 않는다.</b> 개수도 강제하지 않는다 — 대사가 3개만 와도 부족한 슬롯은 이전 것으로 버틴다.</div>
+
+  <h4>③ 방어 — 환각 강등</h4>
+<pre><code>thread.action === 'attach' 인데
+  existing_thread_id 가 <span class="k">이번에 보낸 목록에 없다</span>
+      → action = 'new' 로 강등, 새 갈래를 만든다</code></pre>
+  <p>스키마가 <code>existing_thread_id</code>를 <code>z.uuid()</code>로 조이지 않는 것도 이 때문이다. 모델이 <code>"thread-1"</code> 같은 걸 내면 <strong>스키마 단계에서 실패해 경험 전체가 폐기</strong>되어, 강등 경로에 도달조차 못 한다. 형태만 보고(<code>string().max(64)</code>) 존재 여부는 코드가 목록과 대조한다.</p>
+
+  <h4>④ 보강 — 규칙이 먼저고 모델이 보탠다</h4>
+<pre><code>isFirstTime = <span class="k">hasNewSkill</span> || 모델판정
+              ↑ user_skills 에 없던 이름이 있는가 (코드가 확정)
+
+skill.domain = 모델판정 ?? <span class="k">CATEGORY_DOMAIN[category]</span>
+                            ↑ 모델이 빠뜨렸을 때의 대비책</code></pre>
+  <div class="why">
+    프롬프트가 <code>is_first_time</code> 을 "보유 스킬 목록에 없던 것을 다뤘는가"로 정의했는데,
+    그건 추론이 아니라 <b>비교 연산</b>이다. 그런데 모델에게 물으니 실측 5/5 로 어긋났고 —
+    <b>보유 목록이 텅 빈 첫 경험</b>에서도 false 를 냈다. 규칙대로면 무조건 true 여야 하는 자리다.<br><br>
+    그 결과 이 컬럼에 매달린 것들이 전부 죽어 있었다: 기억 점수 +40 이 안 붙고, 감정 '흥분'이
+    발동하지 않고, 성격의 개척형↔숙련형 축이 늘 숙련형 극단에 고정된다(사흘에 스킬 8개가 는
+    사용자가 "숙련형"으로 찍혔다).<br><br>
+    프롬프트를 또 고치는 건 이미 한 번 실패한 방법이라, <b>확실히 아는 부분은 규칙이 채우고</b>
+    모델은 규칙이 못 보는 것(주제·방식·환경)만 보탠다.
+  </div>
+
+  <h4>⑤ 회계 — 다음 절 전체</h4>
+  <p>분할 여부·시간 계산이 여기 속한다. 가장 크고 판단이 많은 자리라 따로 다룬다.</p>
+
+  <h3>한 세션을 여럿으로 나누기 — 누가 무엇을 정하나</h3>
+
+  <div class="maxim">의미는 모델이, 회계는 코드가.</div>
+
+  <p>이 층에서 가장 헷갈리는 것이 <strong>"누가 나누는가"</strong>다. 답은 <strong>둘 다</strong>이고, 묻는 질문이 서로 다르다.</p>
+  <table>
+    <thead><tr><th>단계</th><th>묻는 것</th><th>보는 것</th><th>결과</th></tr></thead>
+    <tbody>
+      <tr><td><strong>① 모델</strong></td><td>이게 <strong>다른 일</strong>인가</td><td>압축 로그 — 도메인·제목·검색어·시간</td><td><code>also</code> 에 갈래 + <code>segment_ids</code></td></tr>
+      <tr><td><strong>② 코드</strong></td><td>이걸 <strong>따로 셀</strong> 만한가</td><td>그 구간들의 실제 초</td><td>유지 · 흡수 · 통째로 되돌림</td></tr>
+    </tbody>
+  </table>
+  <p>흔한 오해가 있다 — "코드가 하나로 세니까 모델이 못 나눈다". <strong>반대다.</strong> 모델은 나누고, 코드가 그걸 되돌린다. 모델은 자기가 본 세션 하나만 아는지라 <strong>나눔의 대가를 모른다</strong>(레벨·갈래·지도·성격이 따라 움직이는 것). 그 대가를 아는 쪽이 코드다.</p>
+
+  <h4>① 모델이 내는 것</h4>
+  <p>실제 세션(2026-08-07 12:21, 241분)에서 나온 출력이다.</p>
+<pre><code>{
+  "summary": "Project NA 데이터베이스 테이블을 검토하고 로컬 환경에서…",
+  "segment_ids": [0,2,3,4,5,7,8,9,10,11,12,13,14],
+
+  "also": [
+    { "summary": "SOLDIER: A DAY 게임을 테스트했다.",
+      "segment_ids": <span class="k">[6]</span> }        <span class="c">← 6번 구간 하나. 실제 7분</span>
+  ]
+}</code></pre>
+  <p>판단은 옳다 — SOLDIER : A DAY 는 정말 다른 프로젝트이고 6번이 맞는 구간이다.</p>
+
+  <h4>② 코드가 재는 것</h4>
+<pre><code><span class="c">먼저 — 아래 중 하나라도 걸리면 통째로 안 나눈다</span>
 · 구간 번호가 범위 밖이거나 두 경험에 겹쳐 배정됐다
 · 갈라진 것에 배정이 하나도 없다 <span class="c">(시간을 잴 수 없다)</span>
-· 구간 시간의 총합이 0 <span class="c">(옛 세션이라 sec 이 없다)</span>
+· 구간 시간의 총합이 0 <span class="c">(sec 이 없던 옛 세션)</span>
 
-<span class="c">통과하면</span>
-· 문턱 <span class="k">10분</span> 미달 → 버리지 않고 주 경험에 흡수 <span class="c">(detail·skills 합침)</span>
+<span class="c">통과하면 — 갈래마다 따로 판정</span>
+· 문턱 <span class="k">7분</span> 미달 → <span class="k">버리지 않고</span> 주 경험에 흡수
 · 최대 <span class="k">3개</span>, 넘치면 오래 머문 것부터
 · duration_min = 세션 길이 × (그 구간들의 초 / 전체 초)</code></pre>
-  <p><strong>주 경험의 <code>segment_ids</code>가 빈 배열이면 "세션 전체"라는 뜻</strong>이라, 갈라져 나간 몫만 빼고 나머지를 전부 갖는다. 배정 안 된 구간의 몫은 어느 경험에도 안 간다 — 세션은 관측이고 경험은 해석이라, 해석이 관측 전부를 덮을 필요가 없다.</p>
+
+  <p>같은 출력에 문턱만 달리 대면 결과가 갈린다.</p>
+<pre><code><span class="c">문턱 10분</span>   7분 &lt; 10분 → <span class="k">✗ 흡수</span>
+             곁가지 summary 가 주 경험 detail 뒤에 붙는다
+             스킬이 주 경험에 합쳐진다
+             6번 구간도 주 경험이 가져간다
+             <span class="c">→ 경험 1건. "SOLDIER" 는 문장으로만 남는다</span>
+
+<span class="c">문턱  7분</span>   7분 ≥ 7분  → <span class="k">✓ 유지</span>
+             <span class="c">→ 경험 2건. SOLDIER 가 제 경험이 되고 제 갈래를 갖는다</span></code></pre>
+
+  <h4>흡수는 삭제가 아니다</h4>
+  <p>문턱을 못 넘겨도 <strong>정보는 남는다</strong>. 요약 문장은 주 경험의 <code>detail</code> 로, 스킬은 스킬 목록으로 합쳐진다. 일기에도 그 문장이 들어간다. 사라지는 것은 <strong>"한 건"이라는 카운트</strong>뿐이다.</p>
+
+  <h4>왜 회계를 코드가 갖고 있나</h4>
+  <p>경험 하나로 세는 순간 다섯 군데가 따라 움직이는데, <strong>경험을 다시 합치는 수단이 없다.</strong></p>
+  <table>
+    <thead><tr><th>따라 움직이는 것</th><th>어떻게</th></tr></thead>
+    <tbody>
+      <tr><td>레벨</td><td><code>1 + floor(√(경험수 × 스킬수))</code> — 잘게 쪼갤수록 부푼다</td></tr>
+      <tr><td>갈래</td><td><strong>모든 경험은 갈래를 갖는다.</strong> 3분짜리도 갈래를 하나 만든다</td></tr>
+      <tr><td>지도</td><td>그 갈래가 별 하나로 뜬다</td></tr>
+      <tr><td>성격</td><td>개척형 축이 <code>is_first_time</code> <strong>비율</strong>이라 분모가 바뀐다</td></tr>
+      <tr><td>프롬프트</td><td>"최근 경험 3건" 창을 3분짜리가 차지한다</td></tr>
+    </tbody>
+  </table>
+  <p>갈래는 반대 방향이다 — "애매하면 new". 잘못 붙이면 영영 못 떼지만 잘못 나누면 사람이 합칠 수 있어서다. <strong>경험은 그 되돌릴 장치가 없어서</strong> 반대로 보수적이다.</p>
+
+  <h4>문턱은 왜 7분인가</h4>
+  <p>10분이었다. 전송 필터의 "10분 미만" 을 그대로 가져온 값인데 <strong>성격이 다르다</strong> — 저쪽은 <strong>세션 하나를 통째로 버리는</strong> 문턱이고 여기는 <strong>이미 있는 세션 안에서 나누는</strong> 문턱이다. 241분 안의 7분짜리 다른 프로젝트를 "너무 짧다"고 볼 이유가 저쪽에는 있고 이쪽에는 없다.</p>
+  <p>실세션 18건에서 <strong>같은 모델 출력 위에</strong> 문턱만 바꿔 쓸었다. 매번 LLM 을 다시 부르면 출력이 흔들려 문턱 효과와 구분되지 않으므로, 출력을 캐시하고 판정만 재계산한다(<code>probe-threshold.mts</code>).</p>
+  <table>
+    <thead><tr><th>문턱</th><th>경험 총수</th><th>새로 갈라지는 것</th></tr></thead>
+    <tbody>
+      <tr><td class="num">10분</td><td class="num">27건</td><td>—</td></tr>
+      <tr><td class="num">7분</td><td class="num">30건</td><td>전부 <strong>긴 세션에 묻혀 있던 다른 프로젝트</strong> (241분 안의 SOLDIER 7분)</td></tr>
+      <tr><td class="num">5분</td><td class="num">32건</td><td>62분 세션의 5분짜리 곁다리가 섞이기 시작</td></tr>
+      <tr><td class="num">3분</td><td class="num">38건</td><td><strong>1분짜리까지</strong> 경험이 된다 — 경유지지 경험이 아니다</td></tr>
+    </tbody>
+  </table>
+  <p>7분에 근거가 하나 더 있다: 압축기가 1분 미만 구간은 칸을 안 주고 접으므로(<code>FOLD_UNDER_SEC</code>), <strong>살아남은 구간은 이미 "1분은 머문 곳"</strong>이다. 그게 몇 개 모여 7분이면 스쳐간 것이 아니다.</p>
+  <p>바꾼 뒤 재구축에서 경험 25 → 28, 갈래 5 → 8이 됐고 <code>SOLDIER: A DAY</code>·<code>대한항공 마일리지 활용</code> 같은 것들이 처음으로 제 갈래를 얻었다.</p>
+
+  <h4>빈 배열의 뜻</h4>
+  <p><strong>주 경험의 <code>segment_ids</code>가 빈 배열이면 "세션 전체"</strong>다. 그래서 갈라져 나간 몫만 빼고 나머지를 전부 갖는다. 배정 안 된 구간의 몫은 어느 경험에도 안 간다 — 세션은 관측이고 경험은 해석이라, 해석이 관측 전부를 덮을 필요가 없다. "197분 중 설명되는 건 27분" 이 사실 그대로다.</p>
+  <div class="note"><b>여기서 한 번 크게 데었다</b> — 흡수할 때 곁가지 번호를 주 경험에 그냥 <code>push</code> 했더니, 전체를 뜻하던 빈 배열이 <b>곁가지 크기로 쪼그라들었다.</b> 130분 세션의 주 경험이 5분짜리가 되고 77분이 아무 경험에도 안 들어갔다. 지금은 빈 배열이면 전체에서 갈라진 몫만 빼는 방식으로 계산한다.</div>
 
   <h3>중복 처리를 막는 법</h3>
   <p>트랜잭션 맨 앞에서 <strong>처리 권리를 선점</strong>한다.</p>
@@ -1174,7 +1373,7 @@ inferred  모델이 추론한 것     experiences · dialogues · daily_logs · 
       <tr><td>프롬프트 버전</td><td class="num">9</td><td>—</td></tr>
       <tr><td><code>max_tokens</code></td><td class="num">2048</td><td>1024에서 <code>also</code>가 잘렸다(23건 중 5건)</td></tr>
       <tr><td><code>temperature</code></td><td class="num">0</td><td>1.0이면 같은 세션에서 outcome이 4/7건 흔들렸다</td></tr>
-      <tr><td>분할 문턱</td><td class="num">10분</td><td>못 넘으면 버리지 않고 흡수</td></tr>
+      <tr><td>분할 문턱</td><td class="num">7분</td><td>못 넘으면 버리지 않고 흡수. 10분이었다 — 실세션 18건 쓸어보고 내렸다</td></tr>
       <tr><td>세션당 최대 경험</td><td class="num">3</td><td>정말 네 가지 일이었다면 세션 분할 규칙의 문제다</td></tr>
       <tr><td>경험당 최대 스킬</td><td class="num">10</td><td>넘치면 비중 높은 것부터</td></tr>
       <tr><td>갈래 후보</td><td class="num">최근 8 + 어휘 3 + 잠긴 3</td><td>5였는데 의미로만 이어진 짝이 안 걸렸다</td></tr>
