@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { correctExperience } from "@/app/actions";
-import { FIELD_OPTIONS, labelOf } from "@/lib/labels";
+import { FIELD_OPTIONS, labelOf, type ChipField } from "@/lib/labels";
 import type { CorrectionField } from "@/lib/corrections";
 
 // 층 1 — 판정 교정 UI.
@@ -23,7 +23,9 @@ type Values = {
   is_first_time: string;
 };
 
-const FIELD_ORDER: CorrectionField[] = ["category", "outcome", "is_first_time"];
+// ChipField 지 CorrectionField 가 아니다 — 갈래(thread)는 선택지가 사용자의
+// 갈래 목록이라 칩으로 못 그린다. 지도에서 대상을 직접 집어서 고친다.
+const FIELD_ORDER: ChipField[] = ["category", "outcome", "is_first_time"];
 
 export function CorrectionRow({
   experienceId,
@@ -39,7 +41,7 @@ export function CorrectionRow({
   /** 사람이 손댄 필드 집합 */
   corrected: Partial<Record<CorrectionField, boolean>>;
 }) {
-  const [open, setOpen] = useState<CorrectionField | null>(null);
+  const [open, setOpen] = useState<ChipField | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -52,7 +54,7 @@ export function CorrectionRow({
     }
   }, [open]);
 
-  function choose(field: CorrectionField, next: string) {
+  function choose(field: ChipField, next: string) {
     setOpen(null);
     // 지금 값을 다시 누른 것은 교정이 아니다. 훑어보려고 열었다가 그대로
     // 닫는 동작이 대부분이라, 이걸 기록하면 "사람이 보고 맞다고 했다"는

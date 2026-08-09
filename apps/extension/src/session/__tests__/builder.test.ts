@@ -560,8 +560,8 @@ describe('조작 기록', () => {
     ];
     const draft = ingest(null, events, 180_000);
     const payload = close(draft, 'idle', 180_000);
-    const acts = (payload.compressed_log.segments as { acts?: unknown[] }[])
-      .flatMap((s) => s.acts ?? []);
+    const log = payload.compressed_log as { segments: { acts?: unknown[] }[] };
+    const acts = log.segments.flatMap((s) => s.acts ?? []);
     // 중복 제거를 하지 않는다 — 순서가 곧 절차의 모양이다
     expect(acts.map((a) => (a as { label: string }).label)).toEqual(['테이블', '필터', '내보내기']);
     expect(acts.some((a) => (a as { mut?: true }).mut === true)).toBe(true);

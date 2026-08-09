@@ -50,6 +50,7 @@ import {
   type CorrectionPattern,
 } from './corrections';
 import {
+  DEEPENED_THREAD_EXPERIENCES,
   MEMORY_SCORE_THRESHOLD,
   calculateMemoryScore,
   clampImportance,
@@ -467,10 +468,6 @@ export const RECORD_EXPERIENCE_TOOL: Anthropic.Tool = {
 // 없었다(50/40/30/20 조합상 두 개가 겹쳐야만 도달). is_first_time 이 잘 안 뜨면
 // 그 유일한 길마저 막혀서 하루 여섯 경험에 기억 0건이 나온다. 60 으로 낮추면
 // 신규 스킬 하나만으로는 여전히 부족하지만(50), 거기에 뭐라도 하나 겹치면 남는다.
-
-/** 갈래에 경험이 이만큼 쌓이면 그 자체로 기억이 된다(trigger='deepened').
- *  6개월치 분포에서 상위 21%. 자세한 근거는 사용처 주석에 있다. */
-const DEEPENED_THREAD_EXPERIENCES = 6;
 
 /** 경험 하나에 붙일 수 있는 스킬 수. 넘치면 비중 높은 것부터 남긴다. */
 const MAX_SKILLS_PER_EXPERIENCE = 10;

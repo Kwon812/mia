@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { answerQuestion, dismissQuestion } from "@/app/actions";
-import { FIELD_OPTIONS } from "@/lib/labels";
+import { FIELD_OPTIONS, isChipField } from "@/lib/labels";
 import type { CorrectionField } from "@/lib/corrections";
 
 // 층 2 — 캐릭터가 먼저 묻는다.
@@ -31,6 +31,10 @@ export function AskCard({ question }: { question: AskQuestion }) {
 
   if (gone) return null;
 
+  // 캐릭터는 갈래를 묻지 않는다 — 선택지가 사용자의 갈래 목록이라 물음으로
+  // 성립하지 않는다("갈래가 A 야 B 야 … 열일곱 개 중에?"). 갈래는 지도에서
+  // 대상을 직접 집어서 고친다. 만들어질 일이 없지만 타입이 열려 있으므로 막는다.
+  if (!isChipField(question.field)) return null;
   const { options } = FIELD_OPTIONS[question.field];
 
   function answer(value: string) {

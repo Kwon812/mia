@@ -71,10 +71,15 @@ export function isCorrected(map: CorrectionMap, experienceId: string, field: Cor
   return map.has(key(experienceId, field));
 }
 
-/** 모델이 낸 값을 문자열로 통일한다. is_first_time 은 boolean 이라 'true'/'false' 로 눕힌다. */
+/**
+ * 모델이 낸 값을 문자열로 통일한다. is_first_time 은 boolean 이라 'true'/'false' 로 눕힌다.
+ *
+ * thread 는 받지 않는다 — 갈래의 model_value 는 experiences 행이 아니라
+ * **옮기기 전 갈래의 제목**이라 출처가 다르다. 갈래 교정 경로가 직접 박제한다.
+ */
 export function modelValueOf(
   row: { outcome: string | null; category: string; isFirstTime: boolean },
-  field: CorrectionField,
+  field: Exclude<CorrectionField, 'thread'>,
 ): string {
   switch (field) {
     case 'outcome':
@@ -101,7 +106,13 @@ export type RecordResult = { ok: true } | { ok: false; error: string };
 export async function recordCorrection(params: {
   userId: string;
   experienceId: string;
-  field: CorrectionField;
+  /**
+   * thread 는 받지 않는다. 이 함수는 model_value 를 experiences 행에서 읽는데,
+   * 갈래의 model_value 는 **옮기기 전 갈래의 제목**이라 출처가 다르다. 게다가
+   * 갈래 교정은 experiences.thread_id 를 실제로 옮기고 양쪽 기억을 다시
+   * 판정해야 해서 트랜잭션 범위 자체가 다르다 — moveExperience 가 맡는다.
+   */
+  field: Exclude<CorrectionField, 'thread'>;
   humanValue: string;
   source: 'diary' | 'ask';
   questionId?: string;

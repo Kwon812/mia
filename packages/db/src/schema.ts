@@ -454,9 +454,24 @@ export const llmOutputs = pgTable(
 // 사람의 판단이 시스템에 들어오는 유일한 통로다.
 // ============================================================
 
-/** 교정 가능한 필드 — 이산값만 받는다. 자유 서술은 받지 않는다(사용자 결정). */
-export const CORRECTION_FIELDS = ['outcome', 'category', 'is_first_time'] as const;
-export const CORRECTION_SOURCES = ['diary', 'ask'] as const;
+/**
+ * 교정 가능한 필드 — 이산값만 받는다. 자유 서술은 받지 않는다(사용자 결정).
+ *
+ * thread 만 성질이 다르다. 나머지 셋은 라벨이라 읽을 때 겹치면 되지만
+ * 갈래는 관계(FK)라 experiences.thread_id 를 실제로 옮긴다. 후보 목록·
+ * "최근:" 줄·경험 개수가 전부 thread_id 조인에서 나오므로, 겹쳐 읽기로만
+ * 처리하면 조인 지점 하나만 빠뜨려도 교정이 아무 데도 안 쓰이는 라벨
+ * 더미가 된다. (모델 출력, 사람 정답) 쌍은 corrections 행에 그대로 남는다.
+ *
+ * 한 번 넣었다 뺐다가 다시 넣었다 — 이유는
+ * supabase/migrations/20260809000001_thread_correction_again.sql 에 있다.
+ * 요약하면, 옮기기가 만드는 미정의 상태 다섯을 규칙 다섯 개가 아니라
+ * 원칙 하나로 답했다: **기억은 발화한 사실이므로, 옮기기는 갈래 배정만
+ * 바꾸고 기억 평가를 다시 돌리지 않는다.**
+ */
+export const CORRECTION_FIELDS = ['outcome', 'category', 'is_first_time', 'thread'] as const;
+/** map — 지도에서 직접 고친 것. 캐릭터가 물어서(ask)도 일기에서(diary)도 아니다. */
+export const CORRECTION_SOURCES = ['diary', 'ask', 'map'] as const;
 
 /**
  * 캐릭터가 던진 질문. **침묵을 기록하기 위한 테이블**이다.
@@ -485,7 +500,7 @@ export const questions = pgTable(
   },
   (t) => [
     index('idx_questions_open').on(t.userId, t.askedAt.desc()),
-    check('questions_field_check', sql`${t.field} in ('outcome','category','is_first_time')`),
+    check('questions_field_check', sql`${t.field} in ('outcome','category','is_first_time','thread')`),
     unique('questions_unique_target').on(t.experienceId, t.field),
   ],
 );
@@ -523,8 +538,8 @@ export const corrections = pgTable(
   (t) => [
     index('idx_corrections_latest').on(t.experienceId, t.field, t.createdAt.desc()),
     index('idx_corrections_user_time').on(t.userId, t.createdAt.desc()),
-    check('corrections_field_check', sql`${t.field} in ('outcome','category','is_first_time')`),
-    check('corrections_source_check', sql`${t.source} in ('diary','ask')`),
+    check('corrections_field_check', sql`${t.field} in ('outcome','category','is_first_time','thread')`),
+    check('corrections_source_check', sql`${t.source} in ('diary','ask','map')`),
   ],
 );
 

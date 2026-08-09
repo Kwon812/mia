@@ -129,6 +129,18 @@ export function calculateMemoryScore(input: MemoryScoreInput): MemoryScoreResult
 export const MEMORY_SCORE_THRESHOLD = 60;
 const MAX_MEMORY_SCORE = 200;
 
+/**
+ * 갈래에 경험이 이만큼 쌓이면 그 자체로 기억이 된다(trigger='deepened').
+ * 6개월치 분포에서 상위 21%(평균 3.5건). 자세한 근거는 experience-engine 의
+ * 사용처 주석에 있다.
+ *
+ * 여기 있는 이유: 엔진만 쓰는 값이 아니다. 갈래 교정이 경험을 옮길 때
+ * 양쪽 갈래를 이 문턱으로 다시 판정한다(thread-correction.ts). 두 곳이
+ * 각자 6을 적어두면 한쪽만 고쳐졌을 때 같은 갈래가 경로에 따라 기억이
+ * 되기도 하고 안 되기도 한다.
+ */
+export const DEEPENED_THREAD_EXPERIENCES = 6;
+
 /** 경험 하나의 점수를 1~10 으로 옮긴다. */
 export function clampImportance(score: number): number {
   const t = (score - MEMORY_SCORE_THRESHOLD) / (MAX_MEMORY_SCORE - MEMORY_SCORE_THRESHOLD);

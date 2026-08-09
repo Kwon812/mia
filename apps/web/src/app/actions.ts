@@ -8,7 +8,7 @@ import { getCurrentUser } from "@/lib/current-user";
 import { recordCorrection, type CorrectionField } from "@/lib/corrections";
 import { memoryImportance } from "@/lib/memory-score";
 import { recheckMemoryAfterCorrection } from "@/lib/memory-recheck";
-import { FIELD_OPTIONS } from "@/lib/labels";
+import { FIELD_OPTIONS, isChipField } from "@/lib/labels";
 
 const MIN_NAME_LENGTH = 1;
 const MAX_NAME_LENGTH = 12;
@@ -60,8 +60,15 @@ export async function correctExperience(
 
   // 클라이언트가 보내는 값이라 열거값 화이트리스트로 막는다. DB CHECK 가
   // 최후 방어선이지만, 여기서 걸러야 500 이 아니라 사람이 읽는 메시지가 나간다.
+  //
+  // thread 는 여기로 오지 않는다 — 선택지가 사용자의 갈래 목록이라 고정 표가
+  // 없고, 옮기기는 experiences.thread_id 까지 건드려야 해서 경로가 다르다.
+  // (갈래 교정은 지도의 전용 액션이 처리한다)
+  if (!isChipField(field)) {
+    return { error: "이 방식으로는 고칠 수 없는 항목이야." };
+  }
   const allowed = FIELD_OPTIONS[field];
-  if (!allowed || !allowed.options.some((o) => o.value === humanValue)) {
+  if (!allowed.options.some((o) => o.value === humanValue)) {
     return { error: "고를 수 없는 값이야." };
   }
 
@@ -112,6 +119,12 @@ export async function answerQuestion(
     .limit(1);
   if (!q) return { error: "그 질문을 찾을 수 없어." };
 
+  // 캐릭터는 갈래를 묻지 않는다 — 선택지가 열일곱 개짜리 갈래 목록이라
+  // 물음으로 성립하지 않는다. questions.field 에 thread 가 들어올 일은
+  // 없지만, DB CHECK 가 허용하는 값이므로 여기서 좁힌다.
+  if (!isChipField(q.field)) {
+    return { error: "이 방식으로는 답할 수 없는 질문이야." };
+  }
   const allowed = FIELD_OPTIONS[q.field];
   if (!allowed.options.some((o) => o.value === humanValue)) {
     return { error: "고를 수 없는 값이야." };

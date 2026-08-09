@@ -160,13 +160,19 @@
     return role ? `[role="${role}"]` : undefined;
   }
 
-  /** 보이는 텍스트. 버튼 라벨이 절차의 이름표가 된다. */
+  /**
+   * 요소의 이름표. 버튼 라벨이 절차의 이름이 된다.
+   *
+   * innerText 를 쓰지 않는다. 그쪽이 "화면에 실제로 보이는" 텍스트라 더
+   * 정확하지만, 읽는 순간 **스타일·레이아웃을 다시 계산하게 만든다.** 클릭
+   * 한 번이면 눈에 안 띄어도 무한 스크롤·드래그처럼 클릭이 연달아 오는
+   * 화면에서는 끊김으로 드러난다. 관측이 사용을 방해하면 안 된다.
+   *
+   * textContent 는 숨은 자식의 텍스트까지 딸려올 수 있는데, 버튼 라벨은
+   * 대개 자식이 하나라 실무상 같은 값이 나온다. 절차의 이름표로는 충분하다.
+   */
   function labelOf(el: Element): string | undefined {
-    const t =
-      el.getAttribute('aria-label') ??
-      (el as HTMLElement).innerText ??
-      el.textContent ??
-      undefined;
+    const t = el.getAttribute('aria-label') ?? el.textContent ?? undefined;
     return t?.trim().replace(/\s+/g, ' ').slice(0, MAX_LABEL) || undefined;
   }
 
