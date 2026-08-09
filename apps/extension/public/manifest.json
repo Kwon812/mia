@@ -39,8 +39,8 @@
     },
     {
       "matches": [
-        "https://mia-web-nine.vercel.app/procedures*",
-        "http://localhost:3000/procedures*"
+        "https://mia-web-nine.vercel.app/*",
+        "http://localhost:3000/*"
       ],
       "js": [
         "run-content.js"

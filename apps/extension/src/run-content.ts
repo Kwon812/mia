@@ -42,6 +42,7 @@
             ok: !chrome.runtime.lastError && res?.ok === true,
             sel: res?.sel ?? null,
             sample: res?.sample ?? null,
+            error: chrome.runtime.lastError?.message ?? null,
           },
           '*',
         );

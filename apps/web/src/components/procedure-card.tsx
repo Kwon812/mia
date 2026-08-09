@@ -109,11 +109,24 @@ export function ProcedureCard({
    *  셀렉터가 돌아온다 — 개발자도구 요소 선택기와 같은 방식이다. */
   function pick(after: number, domain: string) {
     setPicking(after);
-    const onAck = (e: MessageEvent) => {
-      if (e.source !== window || e.data?.__na !== "pick-ack" || e.data.after !== after) return;
+    setError(null);
+    // 확장이 없거나 다리가 안 붙었으면 아무 답도 안 온다. 그러면 "저 창에서
+    // 클릭해…" 가 영영 남아서, 사람은 창을 기다리는데 실은 아무 일도 일어나지
+    // 않는 상태가 된다. 조용한 실패가 제일 나쁘다.
+    const dead = setTimeout(() => {
       window.removeEventListener("message", onAck);
       setPicking(null);
-      if (!e.data.ok || !e.data.sel) return;
+      setError("확장이 응답하지 않아. 확장을 새로고침하고 이 페이지도 새로고침해줘.");
+    }, 4000);
+    const onAck = (e: MessageEvent) => {
+      if (e.source !== window || e.data?.__na !== "pick-ack" || e.data.after !== after) return;
+      clearTimeout(dead);
+      window.removeEventListener("message", onAck);
+      setPicking(null);
+      if (!e.data.ok || !e.data.sel) {
+        setError(e.data.error ?? "집기가 취소됐어");
+        return;
+      }
       setReads((v) => [
         ...v.filter((r) => r.after !== after),
         { after, sel: e.data.sel, label: e.data.sample || `${domain} 값` },
@@ -126,8 +139,15 @@ export function ProcedureCard({
 
   function start() {
     setError(null);
+    // 집기와 같은 이유로 시한을 둔다 — 확장이 없으면 아무 답도 안 오는데,
+    // 그러면 버튼을 눌렀는데 아무 일도 안 일어난 것처럼 보인다.
+    const dead = setTimeout(() => {
+      window.removeEventListener("message", onAck);
+      setError("확장이 응답하지 않아. 확장을 새로고침하고 이 페이지도 새로고침해줘.");
+    }, 4000);
     const onAck = (e: MessageEvent) => {
       if (e.source !== window || e.data?.__na !== "run-ack") return;
+      clearTimeout(dead);
       window.removeEventListener("message", onAck);
       if (!e.data.ok) setError(e.data.error ?? "확장이 응답하지 않아");
       else setLive({ id: c.signature, name: answer?.name ?? "", index: 0, steps: c.steps });
