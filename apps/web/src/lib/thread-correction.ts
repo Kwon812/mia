@@ -358,6 +358,18 @@ async function promoteIfEarned(
 
   if (earned.length === 0) return null;
 
+  // 제목을 무엇으로 할지는 **무엇이 발동했는가**로 갈린다. 엔진과 같은 규칙이다.
+  //   deepened — 오래 붙들었다는 사실이 남을 만한 것이므로 **갈래**가 제목이다
+  //   점수     — 그 경험 하나가 특별했던 것이므로 **경험 요약**이 제목이다
+  // 갈래 제목이 여기서 필요하다.
+  const [dstThread] = await tx
+    .select({ title: threads.title })
+    .from(threads)
+    .where(eq(threads.id, args.threadId))
+    .limit(1);
+  const title =
+    earned[0] === 'deepened' && dstThread ? dstThread.title : args.experience.summary;
+
   const [existing] = await tx
     .select({
       id: memories.id,
@@ -382,12 +394,13 @@ async function promoteIfEarned(
       experienceId: args.experience.id,
       experienceIds: ids,
       occurredAt: args.experience.occurredAt,
-      title: args.experience.summary,
+      title,
       body: args.experience.detail ?? args.experience.summary,
       importance: await importanceOf(tx, ids, args.threadExperienceCount),
       trigger: earned[0],
       triggers: earned,
-      // 제목이 옮긴 경험의 요약이라 갈래 전체를 대표하지 못한다. 밤에 다시 뽑는다.
+      // 어느 쪽으로 잡았든 지금 제목은 임시다 — 근거 하나만 보고 지은 것이라
+      // 갈래 전체를 대표하지 못한다. 밤 배치가 근거 전부를 놓고 다시 쓴다.
       needsResummary: true,
     });
     return 'created';
@@ -535,7 +548,16 @@ export async function mergeThreads(params: {
   });
 }
 
-/** 갈래 이름만 고친다 — 이름이 활동이지 대상이 아닐 때. */
+/**
+ * 갈래 이름만 고친다 — 이름이 활동이지 대상이 아닐 때.
+ *
+ * 갈래 제목은 사람이 지은 것이 이긴다. 밤 배치도 이 값을 **읽기만** 하고
+ * 덮어쓰지 않는다(declared > inferred).
+ *
+ * 다만 기억 제목은 따라가야 한다. 밤 배치가 기억을 다시 쓸 때 갈래 제목을
+ * 재료로 쓰기 때문에, 재료가 바뀌었으면 결과도 바뀌어야 한다 — 안 그러면
+ * 「알파 대시보드」 갈래에 「배포 점검」이라는 기억이 걸려 있게 된다.
+ */
 export async function renameThread(params: {
   userId: string;
   threadId: string;
@@ -544,14 +566,30 @@ export async function renameThread(params: {
   const title = params.title.trim();
   if (!title) return { ok: false, error: '갈래 이름을 적어줘.' };
 
-  const [row] = await db
-    .update(threads)
-    .set({ title })
-    .where(and(eq(threads.id, params.threadId), eq(threads.userId, params.userId)))
-    .returning({ id: threads.id });
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(threads)
+      .set({ title })
+      .where(and(eq(threads.id, params.threadId), eq(threads.userId, params.userId)))
+      .returning({ id: threads.id });
 
-  if (!row) return { ok: false, error: '그 갈래를 찾을 수 없어.' };
-  return { ok: true, threadId: row.id, effects: [`「${title}」로 바꿨어`] };
+    if (!row) return { ok: false as const, error: '그 갈래를 찾을 수 없어.' };
+
+    const marked = await tx
+      .update(memories)
+      .set({ needsResummary: true })
+      .where(and(eq(memories.threadId, row.id), isNull(memories.forgottenAt)))
+      .returning({ id: memories.id });
+
+    return {
+      ok: true as const,
+      threadId: row.id,
+      effects: [
+        `「${title}」로 바꿨어`,
+        ...(marked.length > 0 ? ['기억 제목은 오늘 밤에 맞춰져'] : []),
+      ],
+    };
+  });
 }
 
 /** 이 사용자의 갈래 목록 — 옮길 대상을 고르는 화면이 쓴다. */
