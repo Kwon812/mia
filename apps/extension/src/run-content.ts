@@ -30,6 +30,27 @@
     }
   });
 
+  // "저 화면에서 뭘 확인하는지 집을게" — 확장이 그 탭을 열고 집기 모드를 켠다.
+  window.addEventListener('message', (e) => {
+    if (e.source !== window || !e.data || e.data.__na !== 'pick') return;
+    try {
+      chrome.runtime.sendMessage({ type: 'START_PICK', url: e.data.url }, (res) => {
+        window.postMessage(
+          {
+            __na: 'pick-ack',
+            after: e.data.after,
+            ok: !chrome.runtime.lastError && res?.ok === true,
+            sel: res?.sel ?? null,
+            sample: res?.sample ?? null,
+          },
+          '*',
+        );
+      });
+    } catch {
+      window.postMessage({ __na: 'pick-ack', after: e.data.after, ok: false }, '*');
+    }
+  });
+
   // 진행 상황을 사이트가 물을 수 있게 한다. 절차가 도는 동안 화면이 조용하면
   // 멈춘 건지 도는 건지 알 수 없다.
   window.addEventListener('message', (e) => {

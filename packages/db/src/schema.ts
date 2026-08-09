@@ -599,6 +599,14 @@ export const procedures = pgTable(
     /** 성공했다는 걸 무엇으로 아나. 이게 있어야 나중에 리플레이·검증자를
      *  붙일 수 있다 — 없으면 그때 절차를 전부 다시 써야 한다. */
     postcondition: text('postcondition'),
+    /** 어느 단계에서 무엇을 확인하는가 — `[{ after, sel, label }]`.
+     *
+     *  관측에서 안 나온다. 클릭은 기록되지만 **본 것은 기록되지 않는다** —
+     *  눈은 이벤트를 안 만들기 때문이다. 사람이 승인할 때 짚어줘야 한다.
+     *
+     *  이게 없으면 이동만 자동화된다. 네 군데를 순서대로 열어주고 보는 건
+     *  여전히 사람이 한다. 있으면 상태가 한 화면에 모인다. */
+    reads: jsonb('reads').notNull().default([]),
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

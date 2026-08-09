@@ -24,13 +24,22 @@ type RunState = {
   steps: unknown[];
   error?: string;
   doneAt?: number;
+  /** 읽어낸 값들. 절차가 끝나면 이게 결과다 — 네 군데를 열어보는 대신
+   *  한 화면에 모이는 것이 이 자동화의 값어치 대부분이다. */
+  results?: { label: string; value: string }[];
 } | null;
+
+/** 어느 단계 뒤에 무엇을 확인하는가. 관측에서 안 나온다 — 클릭은 기록돼도
+ *  본 것은 기록되지 않아서(눈은 이벤트를 안 만든다) 사람이 짚어줘야 한다. */
+type Read = { after: number; sel: string; label: string };
 
 type Answer = {
   status: "approved" | "rejected";
   name: string | null;
   /** 승인한 것에만 있다. 실패했으면 없다 — 곁들이지 본체가 아니다. */
   skillMd?: string | null;
+  /** 승인 때 짚어준 확인 자리. 실행할 때 이걸 읽어 온다. */
+  reads?: Read[];
 } | null;
 type Result = { ok: true } | { ok: false; error: string };
 
@@ -60,6 +69,7 @@ export function ProcedureCard({
     steps: unknown,
     mutates: boolean,
     stats: { runs: number; medianSec: number },
+    reads: Read[],
   ) => Promise<Result>;
   onReject: (signature: string) => Promise<Result>;
   onForget: (signature: string) => Promise<Result>;
@@ -74,6 +84,8 @@ export function ProcedureCard({
   const [vals, setVals] = useState<Record<number, string>>({});
   const [asking, setAsking] = useState(false);
   const [live, setLive] = useState<RunState>(null);
+  const [reads, setReads] = useState<Read[]>([]);
+  const [picking, setPicking] = useState<number | null>(null);
 
   // 확장이 어디까지 갔는지 물어본다. 절차가 도는 동안 화면이 조용하면
   // 멈춘 건지 도는 건지 알 수 없다.
@@ -93,6 +105,25 @@ export function ProcedureCard({
     };
   }, [live]);
 
+  /** 그 도메인의 탭을 열고 확장이 집기 모드를 켠다. 사람이 클릭한 자리의
+   *  셀렉터가 돌아온다 — 개발자도구 요소 선택기와 같은 방식이다. */
+  function pick(after: number, domain: string) {
+    setPicking(after);
+    const onAck = (e: MessageEvent) => {
+      if (e.source !== window || e.data?.__na !== "pick-ack" || e.data.after !== after) return;
+      window.removeEventListener("message", onAck);
+      setPicking(null);
+      if (!e.data.ok || !e.data.sel) return;
+      setReads((v) => [
+        ...v.filter((r) => r.after !== after),
+        { after, sel: e.data.sel, label: e.data.sample || `${domain} 값` },
+      ]);
+    };
+    window.addEventListener("message", onAck);
+    const url = domain.startsWith("localhost") ? `http://${domain}` : `https://${domain}`;
+    window.postMessage({ __na: "pick", after, url }, "*");
+  }
+
   function start() {
     setError(null);
     const onAck = (e: MessageEvent) => {
@@ -111,6 +142,7 @@ export function ProcedureCard({
           steps: c.steps,
           index: 0,
           params: vals,
+          reads: answer?.reads ?? [],
           startedAt: Date.now(),
         },
       },
@@ -239,9 +271,57 @@ export function ProcedureCard({
               다시 정하기
             </button>
           </div>
+
+          {/* 모아 온 것. 네 군데를 열어보는 대신 여기 모이는 것이 이 자동화의
+              값어치 대부분이다 — 이동만 자동화하면 4분이 3분이 될 뿐이다. */}
+          {live?.results && live.results.length > 0 && (
+            <div className="mt-2 flex flex-col gap-0.5 border-l border-[rgba(99,230,210,0.3)] pl-3">
+              {live.results.map((r, i) => (
+                <div key={i} className="flex items-baseline gap-2 text-[12.5px]">
+                  <span className="readout shrink-0 text-lum-4">{r.label}</span>
+                  <span className="min-w-0 flex-1 truncate text-lum-0">{r.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       ) : naming ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-col gap-2">
+          {/* 여기서 무엇을 확인하는지는 관측에 없다 — 클릭은 기록돼도 본 것은
+              기록되지 않는다. 짚어주면 절차가 상태를 모아 오고, 안 짚으면
+              이동만 자동화된다(네 군데를 열어주고 보는 건 여전히 사람이 한다). */}
+          <div className="tick">여기서 뭘 확인해? (안 짚으면 이동만 한다)</div>
+          {c.steps.map((s, i) => {
+            const got = reads.find((r) => r.after === i);
+            return (
+              <div key={`pick-${i}`} className="flex items-baseline gap-2 text-[12px]">
+                <span className="readout w-4 shrink-0 text-right text-lum-4">{i + 1}</span>
+                <span className="readout w-32 shrink-0 truncate text-lum-4">{s.domain}</span>
+                {got ? (
+                  <>
+                    <span className="min-w-0 flex-1 truncate text-lum-1">{got.label}</span>
+                    <button
+                      type="button"
+                      onClick={() => setReads((v) => v.filter((r) => r.after !== i))}
+                      className="readout shrink-0 text-lum-4 hover:text-lum-2"
+                    >
+                      빼기
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={picking !== null}
+                    onClick={() => pick(i, s.domain)}
+                    className="readout shrink-0 text-lum-3 transition-colors hover:text-lum-0 disabled:opacity-40"
+                  >
+                    {picking === i ? "저 창에서 클릭해…" : "집기"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          <div className="flex flex-wrap items-center gap-2">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -255,10 +335,14 @@ export function ProcedureCard({
             disabled={pending || !name.trim()}
             onClick={() =>
               run(() =>
-                onApprove(c.signature, name, c.steps, c.mutates, {
-                  runs: c.runs,
-                  medianSec: c.medianSec,
-                }),
+                onApprove(
+                  c.signature,
+                  name,
+                  c.steps,
+                  c.mutates,
+                  { runs: c.runs, medianSec: c.medianSec },
+                  reads,
+                ),
               )
             }
             className="readout shrink-0 rounded-sm border border-[rgba(99,230,210,0.3)] px-2 py-1 text-[12.5px] text-lum-1 transition-colors hover:border-[rgba(99,230,210,0.6)] hover:text-lum-0 disabled:opacity-40"
@@ -272,6 +356,7 @@ export function ProcedureCard({
           >
             그만
           </button>
+          </div>
         </div>
       ) : (
         <div className="mt-3 flex items-center gap-2">

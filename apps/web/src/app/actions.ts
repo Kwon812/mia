@@ -362,7 +362,12 @@ export type ProcedureResult = { ok: true } | { ok: false; error: string };
 async function answerProcedure(
   signature: string,
   status: "approved" | "rejected",
-  extra: { name?: string; steps?: unknown; mutates?: boolean },
+  extra: {
+    name?: string;
+    steps?: unknown;
+    mutates?: boolean;
+    reads?: { after: number; sel: string; label: string }[];
+  },
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
@@ -377,6 +382,7 @@ async function answerProcedure(
       name: extra.name?.trim() || null,
       steps: extra.steps ?? [],
       mutates: extra.mutates ?? false,
+      reads: extra.reads ?? [],
     })
     // 마음이 바뀌면 덮어쓴다. 승인 이력을 남기지 않는 이유 — 교정과 달리
     // 여기서 배울 것이 없다. 절차는 맞거나 아니거나지, 사람이 무엇을 두 번
@@ -388,6 +394,7 @@ async function answerProcedure(
         name: extra.name?.trim() || null,
         steps: extra.steps ?? [],
         mutates: extra.mutates ?? false,
+        reads: extra.reads ?? [],
       },
     });
 
@@ -414,9 +421,13 @@ export async function approveProcedure(
   /** 몇 번 되풀이했고 매번 얼마나 걸렸나. 설명에 실린다 — 이 절차가 얼마나
    *  손이 가는 일이었는지가 문서의 값어치를 정한다. */
   stats: { runs: number; medianSec: number },
+  /** 어느 단계 뒤에 무엇을 확인하는가. 관측에서 안 나오는 값이라 사람이
+   *  승인할 때 짚어준 것이다 — 클릭은 기록돼도 본 것은 기록되지 않는다.
+   *  이게 있으면 절차가 상태를 모아 오고, 없으면 이동만 자동화된다. */
+  reads: { after: number; sel: string; label: string }[] = [],
 ): Promise<ProcedureResult> {
   if (!name.trim()) return { ok: false, error: "이름을 지어줘." };
-  const r = await answerProcedure(signature, "approved", { name, steps, mutates });
+  const r = await answerProcedure(signature, "approved", { name, steps, mutates, reads });
   if (!r.ok) return r;
 
   const user = await getCurrentUser();

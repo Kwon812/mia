@@ -275,6 +275,20 @@
   }
 
   type RunStep = { sel?: string; label?: string; isInput: boolean; dt: number };
+  type RunRead = { after: number; sel: string; label: string };
+
+  /** 짚어준 자리의 값을 읽는다. 클릭은 기록돼도 **본 것은 기록되지 않아서**,
+   *  무엇을 확인하는지는 사람이 승인할 때 알려준 것뿐이다. */
+  async function doReads(reads: RunRead[]): Promise<{ label: string; value: string }[]> {
+    const out: { label: string; value: string }[] = [];
+    for (const r of reads) {
+      // 값이 늦게 채워지는 화면이 많다(대시보드는 대개 그렇다). 잠깐 기다린다.
+      const el = await waitFor(r.sel, 6000);
+      const raw = el ? ((el as HTMLElement).innerText ?? el.textContent ?? '') : '';
+      out.push({ label: r.label, value: raw.trim().replace(/\s+/g, ' ').slice(0, 120) || '(못 읽음)' });
+    }
+    return out;
+  }
 
   async function doStep(step: RunStep, value: string | null): Promise<string | null> {
     const budget = Math.max(4000, Math.min(20000, Math.round(step.dt * 1000) + 4000));
@@ -304,32 +318,44 @@
 
   async function pump(): Promise<void> {
     let guard = 0;
-    let ask: { step: RunStep; index: number; value: string | null } | null = await new Promise(
-      (resolve) => {
-        try {
-          chrome.runtime.sendMessage({ type: 'RUN_STEP_ASK', host }, (res) => {
-            if (chrome.runtime.lastError || !res?.step) return resolve(null);
-            resolve({ step: res.step, index: res.index, value: res.value ?? null });
+    let ask: {
+      step: RunStep;
+      index: number;
+      value: string | null;
+      reads: RunRead[];
+    } | null = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'RUN_STEP_ASK', host }, (res) => {
+          if (chrome.runtime.lastError || !res?.step) return resolve(null);
+          resolve({
+            step: res.step,
+            index: res.index,
+            value: res.value ?? null,
+            reads: res.reads ?? [],
           });
-        } catch {
-          resolve(null);
-        }
-      },
-    );
+        });
+      } catch {
+        resolve(null);
+      }
+    });
 
     // 한 페이지에서 여러 단계를 이어서 한다. 단계마다 페이지가 바뀌는 것은
     // 아니라서, 이동이 없으면 여기서 계속 돈다. guard 는 무한 루프 방어다.
     while (ask && guard++ < 50) {
       const err = await doStep(ask.step, ask.value);
+      // 실패해도 읽기는 해본다 — 그 화면까지는 갔으니 값이 있을 수 있고,
+      // 절반쯤 진행된 결과라도 없는 것보다 낫다.
+      const got = ask.reads.length > 0 ? await doReads(ask.reads) : undefined;
       const next: {
         more?: boolean;
         step?: RunStep;
         index?: number;
         value?: string | null;
+        reads?: RunRead[];
       } | null = await new Promise((resolve) => {
         try {
           chrome.runtime.sendMessage(
-            { type: 'RUN_STEP_DONE', host, ok: !err, error: err },
+            { type: 'RUN_STEP_DONE', host, ok: !err, error: err, got },
             (res) => resolve(chrome.runtime.lastError ? null : res),
           );
         } catch {
@@ -337,11 +363,107 @@
         }
       });
       if (err || !next?.more || !next.step) break;
-      ask = { step: next.step, index: next.index ?? 0, value: next.value ?? null };
+      ask = {
+        step: next.step,
+        index: next.index ?? 0,
+        value: next.value ?? null,
+        reads: next.reads ?? [],
+      };
       // 클릭이 화면을 바꿀 틈을 준다. 이동이 일어나면 이 스크립트는 죽고
       // 새 페이지의 content script 가 이어받는다.
       await new Promise((r) => setTimeout(r, 400));
     }
+  }
+
+  // ── 요소 집기 ──────────────────────────────────────────
+  //
+  // "이 화면에서 뭘 확인해?" 를 사람이 클릭으로 답한다. 관측으로는 못 얻는
+  // 값이라(눈은 이벤트를 안 만든다) 이 길이 유일하다.
+  //
+  // 개발자도구의 요소 선택기와 같은 방식이다. 켜지면 다음 클릭 한 번을
+  // 가로채서 그 자리의 셀렉터를 잡고 끈다.
+  let picking = false;
+
+  function pickSelector(el: Element): string {
+    const id = el.id;
+    if (id && !/\d{4,}/.test(id)) return `#${id}`;
+    for (const a of ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label']) {
+      const v = el.getAttribute(a);
+      if (v) return `[${a}="${v.slice(0, 60)}"]`;
+    }
+    // 안정된 이름이 없으면 구조로 짚는다. 정확도가 떨어지지만 없는 것보다 낫다.
+    const parts: string[] = [];
+    let cur: Element | null = el;
+    for (let d = 0; cur && d < 4; d++) {
+      const p: Element | null = cur.parentElement;
+      if (!p) break;
+      const i = Array.prototype.indexOf.call(p.children, cur) + 1;
+      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${i})`);
+      cur = p;
+    }
+    return parts.join(' > ');
+  }
+
+  function startPicking(): void {
+    if (picking) return;
+    picking = true;
+    const veil = document.createElement('div');
+    veil.style.cssText =
+      'position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:rgba(10,14,22,.12)';
+    const tip = document.createElement('div');
+    tip.textContent = '확인할 것을 클릭하세요 — Esc 로 취소';
+    tip.style.cssText =
+      'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:2147483647;' +
+      'background:rgba(10,14,22,.92);color:#dfe8f5;padding:8px 14px;border-radius:4px;' +
+      'font:13px -apple-system,sans-serif;pointer-events:none';
+    const stop = () => {
+      picking = false;
+      veil.remove();
+      tip.remove();
+      document.removeEventListener('keydown', onKey, true);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        stop();
+        try {
+          chrome.runtime.sendMessage({ type: 'PICK_RESULT', ok: false });
+        } catch {
+          /* 확장 컨텍스트 무효 */
+        }
+      }
+    };
+    veil.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // 덮개 밑의 진짜 요소를 찾는다.
+      veil.style.pointerEvents = 'none';
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      veil.style.pointerEvents = '';
+      stop();
+      if (!el) return;
+      const text = ((el as HTMLElement).innerText ?? el.textContent ?? '').trim().slice(0, 60);
+      try {
+        chrome.runtime.sendMessage({
+          type: 'PICK_RESULT',
+          ok: true,
+          sel: pickSelector(el),
+          sample: text,
+          host,
+        });
+      } catch {
+        /* 확장 컨텍스트 무효 */
+      }
+    });
+    document.addEventListener('keydown', onKey, true);
+    document.body.append(veil, tip);
+  }
+
+  try {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === 'START_PICK') startPicking();
+    });
+  } catch {
+    /* 확장 컨텍스트 무효 */
   }
 
   // 페이지가 자리 잡은 뒤에 시작한다 — 로드 직후에는 아직 그릴 것을 안 그렸다.

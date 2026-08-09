@@ -65,10 +65,19 @@ export default async function ProceduresPage() {
           status: procedures.status,
           name: procedures.name,
           skillMd: procedures.skillMd,
+          reads: procedures.reads,
         })
         .from(procedures)
         .where(eq(procedures.userId, user.userId))
-    ).map((r) => [r.signature, { status: r.status, name: r.name, skillMd: r.skillMd }]),
+    ).map((r) => [
+      r.signature,
+      {
+        status: r.status,
+        name: r.name,
+        skillMd: r.skillMd,
+        reads: (r.reads ?? []) as { after: number; sel: string; label: string }[],
+      },
+    ]),
   );
 
   // 승인 → 아직 안 물은 것 → 거절 순. 거절한 것도 아주 감추지는 않는다 —

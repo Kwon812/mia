@@ -29,6 +29,14 @@ export interface RunStep {
   isInput: boolean;
 }
 
+/** 어느 단계 뒤에 무엇을 확인하는가. 사람이 승인할 때 짚어준 것이다. */
+export interface RunRead {
+  /** 이 인덱스의 단계를 마친 뒤에 읽는다 */
+  after: number;
+  sel: string;
+  label: string;
+}
+
 export interface RunState {
   id: string;
   name: string;
@@ -43,6 +51,11 @@ export interface RunState {
   error?: string;
   /** 끝난 시각. 있으면 더 진행하지 않는다. */
   doneAt?: number;
+  /** 확인할 것들. 관측에서 안 나오는 값이라 사람이 짚어준다. */
+  reads?: RunRead[];
+  /** 읽어낸 값. 절차가 끝나면 이게 결과다 — 네 군데를 열어보는 대신
+   *  한 화면에 모이는 것이 이 자동화의 값어치 대부분이다. */
+  results?: { label: string; value: string }[];
 }
 
 const KEY = 'na_run';
@@ -89,10 +102,21 @@ export function stepFor(run: RunState, host: string): { step: RunStep; index: nu
   return { step, index: run.index };
 }
 
+/** 이 단계를 마친 뒤에 읽을 것이 있나. */
+export function readsAfter(run: RunState, index: number): RunRead[] {
+  return (run.reads ?? []).filter((r) => r.after === index);
+}
+
 /** 한 단계가 끝났다. 성공이면 다음으로, 실패면 멈춘다. */
-export async function advance(ok: boolean, error?: string): Promise<RunState | null> {
+export async function advance(
+  ok: boolean,
+  error?: string,
+  /** 그 단계에서 읽어낸 값들 */
+  got?: { label: string; value: string }[],
+): Promise<RunState | null> {
   const run = await getRun();
   if (!run) return null;
+  if (got && got.length > 0) run.results = [...(run.results ?? []), ...got];
   if (!ok) {
     // 멈추되 지우지는 않는다 — 사람이 무엇이 왜 안 됐는지 봐야 한다.
     // 절반쯤 진행된 채로 멈춘 것 자체가 중요한 정보다.

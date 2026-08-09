@@ -18,10 +18,14 @@ import {
   clearRun,
   getRun,
   setRun,
+  readsAfter,
   stepFor,
   type RunState,
 } from './session/runner';
 import type { SessionDraft, SessionPayloadLike } from './session';
+
+/** 집기 결과를 기다리는 사이트. 한 번에 하나만 — 두 개를 동시에 집을 일이 없다. */
+let pickWaiter: { tabId: number; reply: (r: unknown) => void } | null = null;
 import type { SessionSnapshot, SnapshotDraft, SnapshotPreview } from './snapshot';
 
 // 서비스 워커: manifest 에서 "type": "module" 이므로 정적 import 사용 가능.
@@ -708,7 +712,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const next = stepFor(run, String(message.host ?? ''));
       sendResponse(
         next
-          ? { step: next.step, index: next.index, value: run.params?.[next.index] ?? null }
+          ? {
+              step: next.step,
+              index: next.index,
+              value: run.params?.[next.index] ?? null,
+              reads: readsAfter(run, next.index),
+            }
           : { step: null },
       );
     });
@@ -717,7 +726,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 한 단계가 끝났다. 다음 단계가 같은 도메인이면 이어서 하라고 알려준다.
   if (message?.type === 'RUN_STEP_DONE') {
-    void advance(message.ok !== false, message.error).then((run) => {
+    void advance(message.ok !== false, message.error, message.got).then((run) => {
       if (!run) return sendResponse({ more: false });
       const next = run.doneAt || run.error ? null : stepFor(run, String(message.host ?? ''));
       sendResponse({
@@ -727,6 +736,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         step: next?.step ?? null,
         index: next?.index ?? null,
         value: next ? (run.params?.[next.index] ?? null) : null,
+        reads: next ? readsAfter(run, next.index) : [],
+        results: run.results ?? [],
       });
     });
     return true;
@@ -735,6 +746,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // 팝업·사이트가 진행 상황을 묻는다.
   if (message?.type === 'RUN_STATUS') {
     void getRun().then((run) => sendResponse({ run: run ?? null }));
+    return true;
+  }
+
+  // 사이트가 "저 화면에서 뭘 확인하는지 집을게" 라고 한다. 그 도메인으로
+  // 탭을 열고 집기 모드를 켠다 — 관측으로는 못 얻는 값이라 이 길뿐이다.
+  if (message?.type === 'START_PICK') {
+    const url = String(message.url ?? '');
+    if (!url) {
+      sendResponse({ ok: false });
+      return true;
+    }
+    void chrome.tabs.create({ url, active: true }).then((tab) => {
+      pickWaiter = { tabId: tab.id ?? -1, reply: sendResponse };
+      // content script 가 주입될 때까지 기다린다. document_idle 이라 페이지가
+      // 자리 잡은 뒤이고, 그보다 일찍 보내면 리스너가 아직 없다.
+      setTimeout(() => {
+        if (tab.id != null) void chrome.tabs.sendMessage(tab.id, { type: 'START_PICK' }).catch(() => undefined);
+      }, 1200);
+    });
+    return true;
+  }
+
+  // 집기 결과가 돌아왔다. 기다리던 사이트에 넘기고 그 탭은 닫는다.
+  if (message?.type === 'PICK_RESULT') {
+    if (pickWaiter) {
+      pickWaiter.reply({
+        ok: message.ok === true,
+        sel: message.sel ?? null,
+        sample: message.sample ?? null,
+      });
+      if (pickWaiter.tabId > 0) void chrome.tabs.remove(pickWaiter.tabId).catch(() => undefined);
+      pickWaiter = null;
+    }
+    sendResponse({ ok: true });
     return true;
   }
 
