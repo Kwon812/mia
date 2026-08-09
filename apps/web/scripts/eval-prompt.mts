@@ -337,6 +337,63 @@ const CASES: Case[] = [
     // 갈랐는가** 하나다. 채점은 아래 SEGMENT_CASE 블록이 따로 한다.
     expect: {},
   },
+  {
+    // v10 후보 — **다른 프로젝트가 섞였는데 안 나뉜다.**
+    //
+    // 실측(2026-08-08, 세션 230분): 모델이 요약에 "여러 프로젝트의 API 설정과
+    // 인증 구성을 점검하며" 라고 **스스로 적고도** 하나로 냈다. 그 경험이
+    // Project NA 갈래에 붙어서, 다른 프로젝트 두 개가 통째로 기록에서 사라졌다.
+    // 같은 날 다른 세션에서는 SOLDIER : A DAY 38분이 그렇게 묻혔다.
+    //
+    // 이 케이스가 어려운 이유는 **두 판단을 동시에 요구**하기 때문이다.
+    //   localhost·Project NA + supabase·Project NA 테이블  → 같은 일 (도메인이 달라도)
+    //   localhost·달팽이 관리자                            → 다른 일 (도메인이 같아도)
+    // 프롬프트가 이미 둘 다 말하고 있다 — "저장소·배포·로컬·DB 콘솔은 도메인이
+    // 달라도 한 프로젝트의 다른 표면", "같은 localhost 라도 제목이 다르면 다른 일".
+    // 그런데 실제로는 큰 쪽(Project NA)에 전부 흡수된다.
+    //
+    // **규모를 실제와 맞춰야 뭔가를 잰다.** 처음엔 6구간짜리 깨끗한 픽스처로
+    // 짰는데 v9 가 3/3 으로 통과했다 — 실제로 무너진 건 20구간에 대상이 일곱일
+    // 때다(segment_ids 케이스에서도 5구간은 i 없이 통과했고 20구간에서 0/3 이
+    // 나왔다). 그래서 실측 세션(08-06 20:02, 226분)의 모양을 그대로 본떴다:
+    // Project NA 76분 · SOLDIER : A DAY 38분 · supabase 37분.
+    //
+    // 두 프로젝트가 **번갈아** 나오고 각각 표면이 여럿이다.
+    //   Project NA  localhost · supabase 테이블 셋 · claude.ai
+    //   SOLDIER     localhost · vercel 배포 · github 저장소
+    // 정답: SOLDIER 43분이 갈라져 나온다.
+    //   SOLDIER     5, 9, 12, 15   (14+13+5+11 = 43분)
+    //   Project NA  나머지          (109분)
+    name: '분할 — 다른 프로젝트가 섞였다 (같은 프로젝트의 다른 표면과 구분)',
+    검증: '분할',
+    session: { primaryCategory: 'dev', durationMin: 155,
+      domains: { localhost: 6420, 'supabase.com': 1920, 'claude.ai': 900,
+                 'solider-a-day.vercel.app': 780, 'github.com': 300 },
+      compressedLog: { tags: [], queries: [],
+        segments: [
+          seg('localhost','dev','Project NA',13,0,12),
+          seg('supabase.com','dev','experiences | Table Editor | mia',13,12,8),
+          seg('localhost','dev','Project NA',13,20,10),
+          seg('www.google.com','search','next.js after() - Google 검색',13,30,1,{query:'next.js after()'}),
+          seg('claude.ai','ai','Project NA — 기술 아키텍처',13,31,9),
+          seg('localhost','dev','SOLDIER : A DAY',13,40,14),
+          seg('localhost','dev','Project NA',13,54,7),
+          seg('supabase.com','dev','memories | Table Editor | mia',14,1,11),
+          seg('www.naver.com','search','NAVER',14,12,1),
+          seg('solider-a-day.vercel.app','dev','SOLDIER : A DAY',14,13,13),
+          seg('localhost','dev','Project NA',14,26,9),
+          seg('supabase.com','dev','threads | Table Editor | mia',14,35,6),
+          seg('github.com','dev','Soldier-a-day/docs at main',14,41,5),
+          seg('localhost','dev','Project NA',14,46,8),
+          seg('claude.ai','ai','Project NA — 기술 아키텍처',14,54,6),
+          seg('localhost','dev','SOLDIER : A DAY',15,0,11),
+          seg('supabase.com','dev','experiences | Table Editor | mia',15,11,7),
+          seg('localhost','dev','Project NA',15,18,10),
+          seg('www.google.com','search','supabase rls - Google 검색',15,28,1,{query:'supabase rls'}),
+          seg('localhost','dev','Project NA',15,29,6),
+        ] } },
+    expect: {},
+  },
 ];
 
 /** 위 케이스의 정답 배정. 두 집합 중 하나가 주(主), 나머지가 곁가지다.
@@ -346,6 +403,20 @@ const SEGMENT_CASE = {
   /** 곁가지로 갈라져 나와야 하는 집합. 주 경험 쪽은 나머지라 굳이 안 적는다 —
    *  모델이 주에 "세션 전체"(빈 배열)를 적을 수도 있고 그게 틀린 것도 아니다. */
   branch: [6, 13, 17],
+};
+
+/**
+ * 다른 프로젝트가 갈라져 나와야 하는 케이스.
+ *
+ * SEGMENT_CASE 와 달리 **곁가지가 정확히 하나여야** 통과다(`exact`). 저쪽은
+ * "번호를 정확히 짚었나"를 재는 자리라 다른 곁가지가 더 있어도 상관없었지만,
+ * 여기서 재는 것은 **나누는 판단 자체**다. 없어야 할 곁가지가 하나 생기면
+ * 그건 저장 시점에 가짜 경험 하나가 되어 어느 갈래엔가 붙는다 — 통과로 셀 수 없다.
+ */
+const SPLIT_CASE = {
+  name: '분할 — 다른 프로젝트가 섞였다 (같은 프로젝트의 다른 표면과 구분)',
+  branch: [5, 9, 12, 15],
+  exact: true,
 };
 
 const get = (o: any, path: string) => path.split('.').reduce((a, k) => a?.[k], o);
@@ -456,14 +527,21 @@ for (const c of CASES.filter((c) => !ONLY || c.name.includes(ONLY))) {
   // 주 경험이 어느 덩어리를 맡을지는 자유다. 물어보는 것은 **두 덩어리를 번호로
   // 정확히 갈랐는가** 하나라, 주/곁가지를 합친 집합이 정답 분할과 같은지를 본다.
   // 순서도 어느 쪽이 주인지도 안 따진다.
-  if (c.name === SEGMENT_CASE.name) {
+  const branchCase = [SEGMENT_CASE, SPLIT_CASE].find((x) => x.name === c.name);
+  if (branchCase) {
     const key = (ids: number[]) => [...ids].sort((a, b) => a - b).join(',');
-    const want = key(SEGMENT_CASE.branch);
+    const want = key(branchCase.branch);
     // 갈라져 나온 것 중 **정답 집합과 정확히 같은 게 하나라도 있는가.**
     // 주 경험이 나머지를 어떻게 적든(전체를 뜻하는 빈 배열이어도) 상관없다 —
     // 재려는 것은 "그 대상의 구간을 정확히 짚었는가" 하나다.
     const gots = outs.map((o) => (o.also ?? []).map((a: any) => key(a.segment_ids ?? [])));
-    const hit = gots.filter((g) => g.includes(want)).length;
+    // exact 면 곁가지가 **정확히 그것 하나**여야 한다. 아니면 정답 집합이
+    // 하나라도 있으면 통과 — 두 케이스가 재는 것이 다르다(SPLIT_CASE 주석 참고).
+    const hit = gots.filter((gs) =>
+      'exact' in branchCase && branchCase.exact
+        ? gs.length === 1 && gs[0] === want
+        : gs.includes(want),
+    ).length;
     if (hit !== RUNS) allPass = false;
     row['기대'] = want;
     row['실제'] = gots.map((g) => (g.length ? g.join('+') : '분할없음')).join(' // ');
