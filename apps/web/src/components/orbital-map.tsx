@@ -3101,7 +3101,13 @@ export function OrbitalMap({
       if (next === zoomTarget) return;
 
       // 경험이 안 보일 만큼 물러나면 붙잡아 둔 것을 놓는다 — 계가 다시 돈다.
-      if (next < fitZoom * starLayer * REVEAL_ONSET) lockedId = null;
+      // 고른 경험의 상세도 같이 놓는다. 그 경험이 화면에서 사라졌는데 설명만
+      // 남아 있으면, 무엇에 대한 말인지 가리킬 대상이 없다 — 물러나는 동작
+      // 자체가 "이건 그만 본다"는 뜻이라 손이 따로 닫을 일이 아니다.
+      if (next < fitZoom * starLayer * REVEAL_ONSET) {
+        lockedId = null;
+        setPicked(null);
+      }
 
       if (next <= fitZoom + 1e-6) {
         // 우주 전체로 물러나면 가운데로도 같이 돌아온다. 그 배율의 뜻이

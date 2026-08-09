@@ -346,8 +346,16 @@ async function promoteIfEarned(
 ): Promise<'created' | 'appended' | null> {
   const earned: string[] = [];
 
-  // 갈래 수로 발동하는 것 — 이 경험이 와서 6건째가 됐다면 deepened 다.
-  if (args.threadExperienceCount >= DEEPENED_THREAD_EXPERIENCES) earned.push('deepened');
+  // 갈래 수로 발동하는 것. **=== 이지 >= 가 아니다.**
+  //
+  // 엔진도 === 를 쓴다. 6건째가 되는 그 순간이 남을 만한 것이고, 7건째·8건째는
+  // 이미 남긴 사실을 되풀이하는 것뿐이다. >= 로 두면 6을 넘긴 갈래에 무엇을
+  // 옮기든 deepened 가 걸려서, 그 경험이 자기 점수와 무관하게 근거가 된다.
+  //
+  // 실제로 그랬다. 열 건을 옮기니 일곱 번째부터 전부 근거가 됐고, 그 안에
+  // 0점짜리 셋과 -30점짜리 하나가 들어갔다 — 기억은 "이게 근거다"라고
+  // 하는데 경험 행은 -30 점이라고 하는 상태가 됐다.
+  if (args.threadExperienceCount === DEEPENED_THREAD_EXPERIENCES) earned.push('deepened');
 
   // 경험 점수로 발동하는 것 — **저장값**을 쓴다. 다시 재지 않는다.
   // 어느 규칙이었는지(new_skill/breakthrough/…)는 발화 시점의 breakdown 이

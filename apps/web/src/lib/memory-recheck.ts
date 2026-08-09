@@ -121,6 +121,31 @@ export async function recheckMemoryAfterCorrection(
     (repeatAfter ? -30 : 0) - (repeatBefore ? -30 : 0);
 
   const score = exp.memoryScore + delta;
+
+  // 다시 잰 점수를 **경험 행에도 쓴다.**
+  //
+  // 예전에는 이 값으로 판단만 하고 컬럼은 옛 값 그대로 두었다. 그래서 교정으로
+  // 근거가 된 경험이 DB 에는 미달로 남았다 — 실측에서 문턱 미만인데 근거인
+  // 경험 4건이 전부 교정을 하나씩 달고 있었고, 그중 하나는 -30 점이었다.
+  // 기억은 "이게 근거다"라고 하는데 경험 행은 "-30점"이라고 하는 상태다.
+  //
+  // 이 컬럼을 읽는 곳이 여기만이 아니라서 실제로 어긋난다. 기억의 중요도가
+  // 근거들의 점수로 매겨지고(memoryImportance), 갈래 교정이 경험을 옮길 때도
+  // 이 값으로 양쪽을 다시 판정한다(thread-correction.ts) — 옛 값을 읽으면
+  // 교정으로 얻은 자격이 옮기는 순간 사라진다.
+  //
+  // 문턱을 넘든 못 넘든 쓴다. 못 넘어도 점수가 달라진 것은 사실이고, 그
+  // 사실이 컬럼에 없으면 다음에 또 옛 값에서 delta 를 더하게 된다.
+  //
+  // 옮기기에서는 점수를 다시 재지 않는 것과 구별된다. 교정은 그 경험에 대한
+  // **새 정보**이고, 옮기기는 갈래가 바뀔 뿐 경험에 대해 새로 알게 된 것이 없다.
+  if (delta !== 0) {
+    await db
+      .update(experiences)
+      .set({ memoryScore: score })
+      .where(eq(experiences.id, exp.id));
+  }
+
   if (score < MEMORY_SCORE_THRESHOLD) return { created: false, appended: false };
 
   // 이미 어느 기억의 근거면 할 일이 없다.
