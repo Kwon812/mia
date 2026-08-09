@@ -4,6 +4,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { EXPERIENCE_CATEGORIES, clampSentence, type ExperienceCategory } from "@na/shared";
 
 import { formatKstYmd } from "@/lib/date";
+import { ThreadFix } from "@/components/thread-fix";
 
 // 궤도 지도 — 이 사이트의 본체.
 //
@@ -710,6 +711,7 @@ export function OrbitalMap({
   centerLabel,
   latestIds,
   onComplete,
+  onMove,
   onFocusChange,
 }: {
   bodies: Body[];
@@ -723,6 +725,13 @@ export function OrbitalMap({
   latestIds?: readonly string[];
   /** 갈래를 완결로 표시한다. 없으면 버튼 자체가 안 뜬다. */
   onComplete?: (threadId: string) => Promise<unknown>;
+  /** 고른 경험을 다른 갈래로 옮긴다. 없으면 교정 자체가 안 뜬다.
+   *  모델은 초반 오판을 되돌릴 수 없어서, 사람이 여기서 풀어야 한다
+   *  (측정: 갈래 목록이 올바르면 F1 54 → 83). */
+  onMove?: (
+    experienceId: string,
+    target: { kind: "existing"; threadId: string } | { kind: "new"; title: string },
+  ) => Promise<{ ok: true; effects: string[] } | { ok: false; error: string }>;
   /** 지금 화면이 무엇 하나에 대한 것인지. 눌러서 펼쳤거나, 당겨서 그 별의
    *  계 안에 들어와 있으면 그 천체를 넘긴다. 아니면 null.
    *  지도 바깥(계기판)이 이 값으로 물러나고 범례를 갈아 끼운다. */
@@ -3290,6 +3299,18 @@ export function OrbitalMap({
               경험 · {spanLabel(picked)} · {tag(picked.outcome)} · M{picked.memoryScore}
             </div>
             <p className="font-sans text-[15px] leading-relaxed text-lum-0">{picked.summary}</p>
+            {/* 교정은 여기 붙는다 — 무엇을 고치는지 보면서 골라야 하기 때문이다.
+                패널 자체는 pointer-events-none 이라 안쪽에서 되살린다. */}
+            {onMove && (
+              <ThreadFix
+                key={picked.id}
+                experienceId={picked.id}
+                experienceSummary={picked.summary}
+                currentThreadId={picked.threadId}
+                threads={threads}
+                onMove={onMove}
+              />
+            )}
           </div>
         </div>
       )}

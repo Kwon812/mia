@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { completeThread } from "@/app/actions";
+import { completeThread, moveExperienceToThread } from "@/app/actions";
 import {
   CAT_GROUPS,
   OrbitalMap,
@@ -143,6 +143,18 @@ export function MapStage({
   // "끝냈다고 눌렀는데 기억이 없다"가 된다.
   const handleComplete = useCallback((threadId: string) => completeThread(threadId), []);
 
+  // 갈래 교정. 완결과 같은 이유로 낙관적 갱신을 하지 않는다 — 옮기기 하나가
+  // 양쪽 갈래의 기억을 다시 판정하므로(강등되거나 새로 생긴다), 실패했는데
+  // 화면만 바뀌면 있지도 않은 별을 보게 된다. 서버 액션이 revalidatePath 로
+  // 다시 그리고, 무엇이 달라졌는지는 패널이 말로 알린다.
+  const handleMove = useCallback(
+    (
+      experienceId: string,
+      target: { kind: "existing"; threadId: string } | { kind: "new"; title: string },
+    ) => moveExperienceToThread(experienceId, target),
+    [],
+  );
+
   return (
     <main className="relative h-screen w-full overflow-hidden">
       {/* 관측 영역 */}
@@ -153,6 +165,7 @@ export function MapStage({
           centerLabel={name}
           onFocusChange={handleFocusChange}
           onComplete={handleComplete}
+          onMove={handleMove}
           // 펼치면 위성 층이라 최근 경험이, 계 화면에서는 그 경험이 속한 갈래가 표식을 켠다.
           latestIds={reading ? latestExperienceIds : latestThreadIds}
         />

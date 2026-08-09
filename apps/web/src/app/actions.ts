@@ -9,6 +9,7 @@ import { recordCorrection, type CorrectionField } from "@/lib/corrections";
 import { memoryImportance } from "@/lib/memory-score";
 import { recheckMemoryAfterCorrection } from "@/lib/memory-recheck";
 import { FIELD_OPTIONS, isChipField } from "@/lib/labels";
+import { mergeThreads, moveExperience, renameThread } from "@/lib/thread-correction";
 
 const MIN_NAME_LENGTH = 1;
 const MAX_NAME_LENGTH = 12;
@@ -274,4 +275,70 @@ export async function completeThread(threadId: string): Promise<CorrectResult> {
   revalidatePath("/");
   revalidatePath("/memories");
   return {};
+}
+
+// ============================================================
+// 갈래 교정 — 지도에서 직접 고친다
+//
+// 왜 지도인가. 갈래는 선택지가 사용자의 갈래 목록이라 일기의 칩으로도,
+// 캐릭터의 물음으로도 못 다룬다("갈래가 A 야 B 야 … 열일곱 개 중에?").
+// 대상을 눈으로 보고 집는 화면이 필요하고, 그게 지도다.
+//
+// 왜 필요한가. 통제된 시험(40세션 × 3회)에서 쌍 F1 54.3% 였고, 오라클
+// 시험이 이유를 답했다 — 갈래 목록만 올바르면 프롬프트를 안 고쳐도 89.2%다.
+// 남은 30pt 는 사람이 고쳐야 온다. (docs/HANDOFF-attach.md)
+//
+// 실제 판정과 트랜잭션은 lib/thread-correction.ts 가 한다. 여기는 인증과
+// 화면 갱신만 맡는다.
+// ============================================================
+
+export type ThreadFixResult = { ok: true; effects: string[] } | { ok: false; error: string };
+
+/** 갈래 교정 뒤 다시 그려야 하는 화면들. 지도·기억·일기가 같은 데이터를 본다. */
+function revalidateAfterFix(): void {
+  revalidatePath("/");
+  revalidatePath("/memories");
+  revalidatePath("/diary");
+}
+
+/** 경험 하나를 다른 갈래로 옮긴다. 대상이 없으면 새로 만든다. */
+export async function moveExperienceToThread(
+  experienceId: string,
+  target: { kind: "existing"; threadId: string } | { kind: "new"; title: string },
+): Promise<ThreadFixResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+
+  const r = await moveExperience({ userId: user.userId, experienceId, target });
+  if (!r.ok) return r;
+  revalidateAfterFix();
+  return { ok: true, effects: r.effects };
+}
+
+/** 갈래 둘을 합친다 — 붙어야 할 것이 갈라져 있을 때. */
+export async function mergeThreadInto(
+  fromThreadId: string,
+  intoThreadId: string,
+): Promise<ThreadFixResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+
+  const r = await mergeThreads({ userId: user.userId, fromThreadId, intoThreadId });
+  if (!r.ok) return r;
+  revalidateAfterFix();
+  return { ok: true, effects: r.effects };
+}
+
+/** 갈래 이름만 고친다 — 이름이 활동이지 대상이 아닐 때. */
+export async function renameThreadTitle(
+  threadId: string,
+  title: string,
+): Promise<ThreadFixResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+
+  const r = await renameThread({ userId: user.userId, threadId, title });
+  if (!r.ok) return r;
+  revalidateAfterFix();
+  return { ok: true, effects: r.effects };
 }
