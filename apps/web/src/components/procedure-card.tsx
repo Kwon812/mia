@@ -16,7 +16,12 @@ import { useState, useTransition } from "react";
 
 import type { Candidate } from "@/lib/procedure";
 
-type Answer = { status: "approved" | "rejected"; name: string | null } | null;
+type Answer = {
+  status: "approved" | "rejected";
+  name: string | null;
+  /** 승인한 것에만 있다. 실패했으면 없다 — 곁들이지 본체가 아니다. */
+  skillMd?: string | null;
+} | null;
 type Result = { ok: true } | { ok: false; error: string };
 
 function dur(sec: number): string {
@@ -44,6 +49,7 @@ export function ProcedureCard({
     name: string,
     steps: unknown,
     mutates: boolean,
+    stats: { runs: number; medianSec: number },
   ) => Promise<Result>;
   onReject: (signature: string) => Promise<Result>;
   onForget: (signature: string) => Promise<Result>;
@@ -102,14 +108,28 @@ export function ProcedureCard({
       </div>
 
       {answer ? (
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() => run(() => onForget(c.signature))}
-          className="readout mt-2 text-[11.5px] text-lum-4 transition-colors hover:text-lum-2"
-        >
-          다시 정하기
-        </button>
+        <>
+          {/* 설명은 접어둔다. 목록은 무엇이 있는지 훑는 자리라 본문이 펼쳐져
+              있으면 다음 절차가 화면 밖으로 밀린다. */}
+          {answer.skillMd && (
+            <details className="mt-3">
+              <summary className="readout cursor-pointer text-[12px] text-lum-3 transition-colors hover:text-lum-1">
+                설명 보기
+              </summary>
+              <pre className="readout mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-sm border border-[rgba(160,185,220,0.12)] p-3 text-[12px] leading-relaxed text-lum-2">
+                {answer.skillMd}
+              </pre>
+            </details>
+          )}
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => run(() => onForget(c.signature))}
+            className="readout mt-2 text-[11.5px] text-lum-4 transition-colors hover:text-lum-2"
+          >
+            다시 정하기
+          </button>
+        </>
       ) : naming ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <input
@@ -124,7 +144,12 @@ export function ProcedureCard({
             type="button"
             disabled={pending || !name.trim()}
             onClick={() =>
-              run(() => onApprove(c.signature, name, c.steps, c.mutates))
+              run(() =>
+                onApprove(c.signature, name, c.steps, c.mutates, {
+                  runs: c.runs,
+                  medianSec: c.medianSec,
+                }),
+              )
             }
             className="readout shrink-0 rounded-sm border border-[rgba(99,230,210,0.3)] px-2 py-1 text-[12.5px] text-lum-1 transition-colors hover:border-[rgba(99,230,210,0.6)] hover:text-lum-0 disabled:opacity-40"
           >

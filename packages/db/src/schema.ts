@@ -591,6 +591,15 @@ export const procedures = pgTable(
      *  읽기 전용은 최악이 헛수고고 바꾸는 것은 최악이 되돌릴 수 없다. */
     mutates: boolean('mutates').notNull().default(false),
 
+    /** 사람과 에이전트가 읽는 설명. steps 가 기계용 명세라면 이쪽은 뜻이다.
+     *  둘 다 두는 이유 — 실행은 steps 로 하고(빠르고 공짜), 화면이 바뀌어
+     *  셀렉터가 안 맞으면 이걸로 떨어진다(에이전트가 읽고 새 자리를 찾는다).
+     *  하나만 두면 그 복구 경로가 없다. */
+    skillMd: text('skill_md'),
+    /** 성공했다는 걸 무엇으로 아나. 이게 있어야 나중에 리플레이·검증자를
+     *  붙일 수 있다 — 없으면 그때 절차를 전부 다시 써야 한다. */
+    postcondition: text('postcondition'),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

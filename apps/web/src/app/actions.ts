@@ -10,6 +10,7 @@ import { memoryImportance } from "@/lib/memory-score";
 import { recheckMemoryAfterCorrection } from "@/lib/memory-recheck";
 import { FIELD_OPTIONS, isChipField } from "@/lib/labels";
 import { mergeThreads, moveExperience, renameThread } from "@/lib/thread-correction";
+import { writeSkillDoc } from "@/lib/skill-md";
 
 const MIN_NAME_LENGTH = 1;
 const MAX_NAME_LENGTH = 12;
@@ -394,15 +395,46 @@ async function answerProcedure(
   return { ok: true };
 }
 
-/** 절차로 인정한다. 이 시점의 단계가 얼어붙는다. */
+/**
+ * 절차로 인정한다. 이 시점의 단계가 얼어붙는다.
+ *
+ * 설명(SKILL.md)도 여기서 쓴다 — LLM 한 번이다. 밤 배치로 미루지 않는 이유:
+ * 절차는 평생 열 개쯤 생기는 것이라 하루 한 번 도는 배치에 맡기면 승인하고
+ * 다음 날까지 빈칸을 보게 된다. 그리고 이건 사람이 버튼을 눌러 기다리는
+ * 자리라, 세션 처리 경로처럼 조용히 잘릴 걱정이 없다.
+ *
+ * 실패해도 승인은 남는다. 설명은 곁들이지 본체가 아니다 — steps 만 있으면
+ * 실행은 된다.
+ */
 export async function approveProcedure(
   signature: string,
   name: string,
   steps: unknown,
   mutates: boolean,
+  /** 몇 번 되풀이했고 매번 얼마나 걸렸나. 설명에 실린다 — 이 절차가 얼마나
+   *  손이 가는 일이었는지가 문서의 값어치를 정한다. */
+  stats: { runs: number; medianSec: number },
 ): Promise<ProcedureResult> {
   if (!name.trim()) return { ok: false, error: "이름을 지어줘." };
-  return answerProcedure(signature, "approved", { name, steps, mutates });
+  const r = await answerProcedure(signature, "approved", { name, steps, mutates });
+  if (!r.ok) return r;
+
+  const user = await getCurrentUser();
+  if (!user) return r;
+  const doc = await writeSkillDoc({
+    name: name.trim(),
+    steps: (steps ?? []) as never,
+    runs: stats.runs,
+    medianSec: stats.medianSec,
+  });
+  if (doc) {
+    await db
+      .update(procedures)
+      .set({ skillMd: doc.markdown, postcondition: doc.postcondition })
+      .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)));
+    revalidatePath("/procedures");
+  }
+  return r;
 }
 
 /** 자동화할 값어치가 없다. 다시 안 묻는다. */
