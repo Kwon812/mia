@@ -61,6 +61,7 @@ export function ProcedureCard({
   onForget,
   onRepoint,
   onDropStep,
+  onRepointRead,
 }: {
   candidate: Candidate;
   /** 이미 답한 것이면 그 답. 아니면 null. */
@@ -87,6 +88,14 @@ export function ProcedureCard({
   /** 있어선 안 될 단계를 뺀다. 다시 집어도 안 고쳐지는 것 — 그 자리에
    *  있어야 할 것이 애초에 없는 경우다. */
   onDropStep?: (signature: string, index: number) => Promise<Result>;
+  /** 확인 자리를 다시 짚는다. 읽기가 단계보다 자주 깨진다 — 단계는 대개
+   *  버튼이라 이름이라도 남지만 값은 숫자라 기댈 이름이 없다. */
+  onRepointRead?: (
+    signature: string,
+    readIndex: number,
+    sel: string,
+    label: string,
+  ) => Promise<Result>;
 }) {
   const c = candidate;
   const [naming, setNaming] = useState(false);
@@ -179,13 +188,16 @@ export function ProcedureCard({
   }
 
   /**
-   * 깨진 단계를 다시 짚는다. 집기와 같은 길을 쓰되, 결과를 reads 가 아니라
-   * 그 단계의 셀렉터로 보낸다.
+   * 깨진 자리를 다시 짚는다. 단계든 읽기든 같은 길을 쓰고, 잡은 것을
+   * 어디에 쓸지만 다르다.
    */
-  function repoint(index: number) {
-    const domain = c.steps[index]?.domain ?? "";
-    if (!domain || !onRepoint) return;
-    setPicking(index);
+  function repointAt(
+    slot: number,
+    domain: string,
+    apply: (sel: string, sample: string) => Promise<Result>,
+  ) {
+    if (!domain) return;
+    setPicking(slot);
     setError(null);
 
     let timer: number | undefined;
@@ -196,7 +208,7 @@ export function ProcedureCard({
     };
     const onMsg = (e: MessageEvent) => {
       if (e.source !== window) return;
-      if (!e.data?.push && e.data?.after !== index) return;
+      if (!e.data?.push && e.data?.after !== slot) return;
       if (e.data.__na === "pick-started") {
         if (!e.data.ok) {
           cleanup();
@@ -208,7 +220,7 @@ export function ProcedureCard({
       cleanup();
       if (!e.data.ok || !e.data.sel) return;
       startTransition(async () => {
-        const r = await onRepoint(c.signature, index, e.data.sel, e.data.sample ?? "");
+        const r = await apply(e.data.sel, e.data.sample ?? "");
         if (!r.ok) setError(r.error);
         else setLive(null); // 고쳤으니 멈춘 자리를 지운다 — 다시 돌리면 된다
       });
@@ -217,10 +229,17 @@ export function ProcedureCard({
     window.addEventListener("message", onMsg);
     setCancelPick(() => cleanup);
     timer = window.setInterval(() => {
-      window.postMessage({ __na: "pick-poll", after: index }, "*");
+      window.postMessage({ __na: "pick-poll", after: slot }, "*");
     }, 700);
     const url = domain.startsWith("localhost") ? `http://${domain}` : `https://${domain}`;
-    window.postMessage({ __na: "pick", after: index, url }, "*");
+    window.postMessage({ __na: "pick", after: slot, url }, "*");
+  }
+
+  function repoint(index: number) {
+    if (!onRepoint) return;
+    repointAt(index, c.steps[index]?.domain ?? "", (sel, sample) =>
+      onRepoint(c.signature, index, sel, sample),
+    );
   }
 
   function start() {
@@ -415,6 +434,37 @@ export function ProcedureCard({
               다시 정하기
             </button>
           </div>
+
+          {/* 확인 자리. 여기가 깨지면 절차는 성공했는데 정작 보려던 것이
+              없는 상태가 된다 — 값은 숫자라 기댈 이름이 없어서 단계보다 자주
+              깨진다. 그 자리에서 다시 집는다. */}
+          {onRepointRead && (answer.reads?.length ?? 0) > 0 && (
+            <div className="mt-2 flex flex-col gap-0.5">
+              {answer.reads!.map((r, i) => (
+                <div key={`rd-${i}`} className="flex items-baseline gap-2 text-[12px]">
+                  <span className="readout w-4 shrink-0 text-right text-lum-4">
+                    {r.after + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-lum-2" title={r.sel}>
+                    {r.label}
+                    <span className="ml-2 text-[11px] text-lum-4">{r.sel}</span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={picking !== null || pending}
+                    onClick={() =>
+                      repointAt(r.after, c.steps[r.after]?.domain ?? "", (sel, sample) =>
+                        onRepointRead(c.signature, i, sel, sample),
+                      )
+                    }
+                    className="readout shrink-0 text-lum-4 transition-colors hover:text-lum-2 disabled:opacity-40"
+                  >
+                    {picking === r.after ? "집는 중…" : "다시 집기"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* 모아 온 것. 네 군데를 열어보는 대신 여기 모이는 것이 이 자동화의
               값어치 대부분이다 — 이동만 자동화하면 4분이 3분이 될 뿐이다. */}

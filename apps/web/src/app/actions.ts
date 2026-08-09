@@ -551,3 +551,41 @@ export async function dropProcedureStep(
   revalidatePath("/procedures");
   return { ok: true };
 }
+
+/**
+ * 승인된 절차의 확인 자리를 다시 짚는다.
+ *
+ * 단계와 같은 이유로 필요하다 — 셀렉터는 깨진다. 다만 읽기 쪽이 더 자주
+ * 깨진다. 단계는 대개 버튼이라 이름이라도 남지만, 값은 숫자라 기댈 이름이
+ * 없다. 그 자리를 못 찾으면 "(못 읽음)" 만 남고, 절차는 성공했는데 정작
+ * 보려던 것이 없는 상태가 된다.
+ */
+export async function repointProcedureRead(
+  signature: string,
+  readIndex: number,
+  sel: string,
+  label: string,
+): Promise<ProcedureResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+
+  const [row] = await db
+    .select({ reads: procedures.reads })
+    .from(procedures)
+    .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)))
+    .limit(1);
+  if (!row) return { ok: false, error: "그 절차를 찾을 수 없어." };
+
+  const reads = (row.reads ?? []) as Record<string, unknown>[];
+  if (!reads[readIndex]) return { ok: false, error: "그 자리가 없어." };
+  // after 는 그대로 둔다. 어느 화면에서 읽는지는 안 바뀌고, 무엇을 읽는지만 바뀐다.
+  reads[readIndex] = { ...reads[readIndex], sel, label: label || reads[readIndex].label };
+
+  await db
+    .update(procedures)
+    .set({ reads })
+    .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)));
+
+  revalidatePath("/procedures");
+  return { ok: true };
+}

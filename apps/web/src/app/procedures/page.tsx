@@ -25,6 +25,7 @@ import {
   rejectProcedure,
   repointProcedureStep,
   dropProcedureStep,
+  repointProcedureRead,
 } from "@/app/actions";
 
 /** 훑을 세션 수. 절차는 몇 주에 걸쳐 반복되므로 최근 것만 봐서는 안 잡힌다. */
@@ -137,6 +138,7 @@ export default async function ProceduresPage() {
                   onForget={forgetProcedureAnswer}
                   onRepoint={repointProcedureStep}
                   onDropStep={dropProcedureStep}
+                  onRepointRead={repointProcedureRead}
                 />
               ))}
             </div>
