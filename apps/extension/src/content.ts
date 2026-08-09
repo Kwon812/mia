@@ -429,6 +429,52 @@
     return parts.join(' > ');
   }
 
+  /**
+   * 집기 대기 — 띠만 띄우고 페이지는 그대로 쓸 수 있게 둔다.
+   *
+   * 확인하려는 값이 첫 화면에 있다는 보장이 없다. 메뉴를 눌러 들어가야
+   * 보이는 숫자가 대부분이다. 열자마자 덮개를 씌우면 거기까지 갈 수가 없다.
+   *
+   * 그래서 두 단계다: 자유롭게 돌아다니다가 → 「집기」를 누르면 그때 덮개.
+   * 띠는 페이지를 옮겨도 다시 뜬다 — content script 가 로드마다 PICK_ASK 로
+   * 묻고, 서비스 워커는 아직 기다리는 중이라고 답하기 때문이다.
+   */
+  function showPickBar(): void {
+    if (document.getElementById('na-pick-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'na-pick-bar';
+    bar.style.cssText =
+      'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:2147483646;' +
+      'display:flex;align-items:center;gap:10px;background:rgba(10,14,22,.94);color:#dfe8f5;' +
+      'padding:8px 12px;border-radius:5px;font:13px -apple-system,sans-serif;' +
+      'box-shadow:0 4px 16px rgba(0,0,0,.4)';
+    const label = document.createElement('span');
+    label.textContent = '확인할 화면까지 이동한 뒤 눌러줘';
+    const go = document.createElement('button');
+    go.textContent = '집기';
+    go.style.cssText =
+      'border:1px solid rgba(99,230,210,.5);background:none;color:#63e6d2;' +
+      'padding:3px 10px;border-radius:3px;cursor:pointer;font:inherit';
+    go.addEventListener('click', () => {
+      bar.remove();
+      startPicking();
+    });
+    const no = document.createElement('button');
+    no.textContent = '취소';
+    no.style.cssText =
+      'border:none;background:none;color:#8b98ab;cursor:pointer;font:inherit';
+    no.addEventListener('click', () => {
+      bar.remove();
+      try {
+        chrome.runtime.sendMessage({ type: 'PICK_RESULT', ok: false });
+      } catch {
+        /* 확장 컨텍스트 무효 */
+      }
+    });
+    bar.append(label, go, no);
+    document.body.append(bar);
+  }
+
   function startPicking(): void {
     if (picking) return;
     picking = true;
@@ -485,7 +531,7 @@
 
   try {
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg?.type === 'START_PICK') startPicking();
+      if (msg?.type === 'START_PICK') showPickBar();
       // 이미 열려 있는 탭으로 옮겨왔다. 페이지 로드가 없으니 스스로 물을
       // 계기가 없어서, 서비스 워커가 직접 깨운다.
       if (msg?.type === 'RUN_PUMP') void pump();
@@ -554,7 +600,7 @@
     try {
       chrome.runtime.sendMessage({ type: 'PICK_ASK' }, (res) => {
         if (chrome.runtime.lastError) return;
-        if (res?.pick) startPicking();
+        if (res?.pick) showPickBar();
       });
     } catch {
       /* 확장 컨텍스트 무효 */

@@ -113,11 +113,14 @@ export function ProcedureCard({
     // 확장이 없거나 다리가 안 붙었으면 아무 답도 안 온다. 그러면 "저 창에서
     // 클릭해…" 가 영영 남아서, 사람은 창을 기다리는데 실은 아무 일도 일어나지
     // 않는 상태가 된다. 조용한 실패가 제일 나쁘다.
+    // 집기는 사람이 화면을 옮겨 다니는 시간이 든다. 시한은 **다리가 붙었나**만
+    // 재는 것이라 짧게 두면 안 된다 — 확장이 응답만 하면 그 뒤로는 사람 속도다.
+    // 대신 창이 뜨면 다리는 살아 있는 것이므로, 그때부터는 안 재도 된다.
     const dead = setTimeout(() => {
       window.removeEventListener("message", onAck);
       setPicking(null);
       setError("확장이 응답하지 않아. 확장을 새로고침하고 이 페이지도 새로고침해줘.");
-    }, 4000);
+    }, 180_000);
     const onAck = (e: MessageEvent) => {
       if (e.source !== window || e.data?.__na !== "pick-ack" || e.data.after !== after) return;
       clearTimeout(dead);
@@ -335,7 +338,7 @@ export function ProcedureCard({
                     onClick={() => pick(i, s.domain)}
                     className="readout shrink-0 text-lum-3 transition-colors hover:text-lum-0 disabled:opacity-40"
                   >
-                    {picking === i ? "저 창에서 클릭해…" : "집기"}
+                    {picking === i ? "저 창에서 집어줘…" : "집기"}
                   </button>
                 )}
               </div>

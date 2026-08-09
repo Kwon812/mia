@@ -841,7 +841,15 @@ async function announce(run: RunState): Promise<void> {
   // content script 가 뜨자마자 묻는다 — 이 탭이 집기 대상인가.
   // 밀어넣기의 타이밍 경합을 없애는 쪽이다.
   if (message?.type === 'PICK_ASK') {
-    sendResponse({ pick: pickWaiter != null && pickWaiter.tabId === sender.tab?.id });
+    // 그 탭이거나, 그 탭이 연 탭이면 대상이다. 대시보드는 새 탭으로 여는
+    // 링크가 흔해서, 탭 하나만 보면 따라간 곳에서 띠가 사라진다.
+    const t = sender.tab;
+    const mine =
+      pickWaiter != null &&
+      (pickWaiter.tabId === t?.id || pickWaiter.tabId === t?.openerTabId);
+    // 따라간 탭에서 집었으면 그 탭을 닫아야 하므로 대상을 옮겨둔다.
+    if (mine && pickWaiter && t?.id != null) pickWaiter.tabId = t.id;
+    sendResponse({ pick: mine });
     return true;
   }
 
