@@ -20,6 +20,9 @@ const SCALES = [
   { href: "/memories", label: "기억", tick: 24 },
   { href: "/diary", label: "일기", tick: 28 },
   { href: "/skills", label: "스킬", tick: 31 },
+  // 스킬 바로 옆이다. 둘 다 "할 줄 아는 것"을 말하지만 층이 다르다 —
+  // 스킬은 무엇을 다루는가(React·Docker), 되풀이는 어떤 순서로 하는가.
+  { href: "/procedures", label: "되풀이", tick: 32 },
   { href: "/personality", label: "성격", tick: 34 },
 ] as const;
 
