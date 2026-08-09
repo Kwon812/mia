@@ -366,7 +366,7 @@ async function answerProcedure(
     name?: string;
     steps?: unknown;
     mutates?: boolean;
-    reads?: { after: number; sel: string; label: string }[];
+    reads?: { after: number; sel: string; label: string; path?: string }[];
   },
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
@@ -424,10 +424,26 @@ export async function approveProcedure(
   /** 어느 단계 뒤에 무엇을 확인하는가. 관측에서 안 나오는 값이라 사람이
    *  승인할 때 짚어준 것이다 — 클릭은 기록돼도 본 것은 기록되지 않는다.
    *  이게 있으면 절차가 상태를 모아 오고, 없으면 이동만 자동화된다. */
-  reads: { after: number; sel: string; label: string }[] = [],
+  reads: { after: number; sel: string; label: string; path?: string }[] = [],
 ): Promise<ProcedureResult> {
   if (!name.trim()) return { ok: false, error: "이름을 지어줘." };
-  const r = await answerProcedure(signature, "approved", { name, steps, mutates, reads });
+
+  // 집은 자리의 경로를 그 단계에 실어준다. 읽기는 스스로 이동하지 않고
+  // 단계가 데려다 놓은 화면에서 읽으므로, 화면을 아는 쪽은 단계여야 한다.
+  // 도메인만 들고 가면 /usage 에서 집은 값을 루트에서 찾게 된다.
+  const withPath = (steps ?? []) as Record<string, unknown>[];
+  for (const rd of reads) {
+    if (rd.path && withPath[rd.after]) {
+      withPath[rd.after] = { ...withPath[rd.after], path: rd.path };
+    }
+  }
+
+  const r = await answerProcedure(signature, "approved", {
+    name,
+    steps: withPath,
+    mutates,
+    reads,
+  });
   if (!r.ok) return r;
 
   const user = await getCurrentUser();
@@ -479,6 +495,9 @@ export async function repointProcedureStep(
   index: number,
   sel: string,
   label: string,
+  /** 집은 자리의 경로. 도메인만으로는 못 돌아온다 — /usage 에서 집었는데
+   *  루트로 가면 그 자리가 거기 없다. */
+  path?: string,
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
@@ -492,7 +511,7 @@ export async function repointProcedureStep(
 
   const steps = (row.steps ?? []) as Record<string, unknown>[];
   if (!steps[index]) return { ok: false, error: "그 단계가 없어." };
-  steps[index] = { ...steps[index], sel, label };
+  steps[index] = { ...steps[index], sel, label, ...(path ? { path } : {}) };
 
   await db
     .update(procedures)
@@ -565,12 +584,15 @@ export async function repointProcedureRead(
   readIndex: number,
   sel: string,
   label: string,
+  /** 집은 자리의 경로. **그 앞 단계에 실어준다** — 읽기는 이동하지 않고
+   *  단계가 데려다 놓은 화면에서 읽는다. 그러니 화면을 아는 쪽은 단계다. */
+  path?: string,
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
 
   const [row] = await db
-    .select({ reads: procedures.reads })
+    .select({ reads: procedures.reads, steps: procedures.steps })
     .from(procedures)
     .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)))
     .limit(1);
@@ -578,12 +600,18 @@ export async function repointProcedureRead(
 
   const reads = (row.reads ?? []) as Record<string, unknown>[];
   if (!reads[readIndex]) return { ok: false, error: "그 자리가 없어." };
-  // after 는 그대로 둔다. 어느 화면에서 읽는지는 안 바뀌고, 무엇을 읽는지만 바뀐다.
+  // after 는 그대로 둔다. 어느 단계 뒤에 읽는지는 안 바뀌고, 무엇을 읽는지만 바뀐다.
   reads[readIndex] = { ...reads[readIndex], sel, label: label || reads[readIndex].label };
+
+  // 경로는 그 앞 단계에 실어준다. 읽기는 스스로 이동하지 않고 단계가
+  // 데려다 놓은 화면에서 읽으므로, 화면을 아는 쪽은 단계여야 한다.
+  const steps = (row.steps ?? []) as Record<string, unknown>[];
+  const after = Number(reads[readIndex].after ?? -1);
+  if (path && steps[after]) steps[after] = { ...steps[after], path };
 
   await db
     .update(procedures)
-    .set({ reads })
+    .set({ reads, steps })
     .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)));
 
   revalidatePath("/procedures");

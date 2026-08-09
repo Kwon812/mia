@@ -31,7 +31,7 @@ type RunState = {
 
 /** 어느 단계 뒤에 무엇을 확인하는가. 관측에서 안 나온다 — 클릭은 기록돼도
  *  본 것은 기록되지 않아서(눈은 이벤트를 안 만든다) 사람이 짚어줘야 한다. */
-type Read = { after: number; sel: string; label: string };
+type Read = { after: number; sel: string; label: string; path?: string };
 
 type Answer = {
   status: "approved" | "rejected";
@@ -84,6 +84,7 @@ export function ProcedureCard({
     index: number,
     sel: string,
     label: string,
+    path?: string,
   ) => Promise<Result>;
   /** 있어선 안 될 단계를 뺀다. 다시 집어도 안 고쳐지는 것 — 그 자리에
    *  있어야 할 것이 애초에 없는 경우다. */
@@ -95,6 +96,7 @@ export function ProcedureCard({
     readIndex: number,
     sel: string,
     label: string,
+    path?: string,
   ) => Promise<Result>;
 }) {
   const c = candidate;
@@ -174,7 +176,9 @@ export function ProcedureCard({
       }
       setReads((v) => [
         ...v.filter((r) => r.after !== after),
-        { after, sel: e.data.sel, label: e.data.sample || `${domain} 값` },
+        // 경로를 같이 들고 간다. 승인할 때 이 값이 그 단계에 실린다 —
+        // 읽기는 이동하지 않고 단계가 데려다 놓은 화면에서 읽는다.
+        { after, sel: e.data.sel, label: e.data.sample || `${domain} 값`, path: e.data.path },
       ]);
     };
 
@@ -194,7 +198,7 @@ export function ProcedureCard({
   function repointAt(
     slot: number,
     domain: string,
-    apply: (sel: string, sample: string) => Promise<Result>,
+    apply: (sel: string, sample: string, path?: string) => Promise<Result>,
   ) {
     if (!domain) return;
     setPicking(slot);
@@ -220,7 +224,7 @@ export function ProcedureCard({
       cleanup();
       if (!e.data.ok || !e.data.sel) return;
       startTransition(async () => {
-        const r = await apply(e.data.sel, e.data.sample ?? "");
+        const r = await apply(e.data.sel, e.data.sample ?? "", e.data.path ?? undefined);
         if (!r.ok) setError(r.error);
         else setLive(null); // 고쳤으니 멈춘 자리를 지운다 — 다시 돌리면 된다
       });
@@ -237,8 +241,8 @@ export function ProcedureCard({
 
   function repoint(index: number) {
     if (!onRepoint) return;
-    repointAt(index, c.steps[index]?.domain ?? "", (sel, sample) =>
-      onRepoint(c.signature, index, sel, sample),
+    repointAt(index, c.steps[index]?.domain ?? "", (sel, sample, path) =>
+      onRepoint(c.signature, index, sel, sample, path),
     );
   }
 
@@ -453,8 +457,8 @@ export function ProcedureCard({
                     type="button"
                     disabled={picking !== null || pending}
                     onClick={() =>
-                      repointAt(r.after, c.steps[r.after]?.domain ?? "", (sel, sample) =>
-                        onRepointRead(c.signature, i, sel, sample),
+                      repointAt(r.after, c.steps[r.after]?.domain ?? "", (sel, sample, path) =>
+                        onRepointRead(c.signature, i, sel, sample, path),
                       )
                     }
                     className="readout shrink-0 text-lum-4 transition-colors hover:text-lum-2 disabled:opacity-40"

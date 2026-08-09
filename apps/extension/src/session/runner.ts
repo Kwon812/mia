@@ -21,6 +21,9 @@
 /** 실행 명세의 한 단계. 웹이 승인 시점의 steps 를 그대로 넘긴다. */
 export interface RunStep {
   domain: string;
+  /** 어느 화면인가. 도메인만으로는 못 돌아온다 — /usage 에서 집은 값이
+   *  루트에는 없다. 사람이 집을 때 그 자리의 경로를 같이 잡는다. */
+  path?: string;
   sel?: string;
   label?: string;
   tag: string;

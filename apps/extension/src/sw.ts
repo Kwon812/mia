@@ -44,7 +44,7 @@ type PickState = {
   /** 집기를 시작한 시각. 오래 묵으면 없는 셈 친다. */
   at: number;
   /** 사람이 집은 결과. 아직이면 없다. */
-  result?: { ok: boolean; sel?: string; sample?: string };
+  result?: { ok: boolean; sel?: string; sample?: string; path?: string };
 };
 
 async function getPick(): Promise<PickState | null> {
@@ -70,25 +70,57 @@ async function getPick(): Promise<PickState | null> {
  * 이미 열려 있는 탭을 재사용하는 게 중요하다. 매번 새로 열면 절차를 한 번
  * 돌 때마다 탭이 네 개씩 쌓인다.
  */
-async function goTo(domain: string): Promise<void> {
+async function goTo(domain: string, path?: string): Promise<void> {
   if (!domain) return;
-  const url = domain.startsWith('localhost') ? `http://${domain}/` : `https://${domain}/`;
+  const base = domain.startsWith('localhost') ? `http://${domain}` : `https://${domain}`;
+  const url = base + (path && path.startsWith('/') ? path : '/');
   const tabs = await chrome.tabs.query({});
-  const hit = tabs.find((t) => {
+  // 경로까지 맞는 탭을 먼저 찾는다. 같은 도메인이어도 다른 화면이면
+  // 거기서는 그 자리를 못 읽는다 — /usage 에서 집은 값이 루트에는 없다.
+  const sameUrl = (t: chrome.tabs.Tab) => {
     try {
-      return t.url ? new URL(t.url).host === domain : false;
+      if (!t.url) return false;
+      const u = new URL(t.url);
+      return u.host === domain && (!path || u.pathname + u.search === path);
     } catch {
       return false;
     }
-  });
+  };
+  let hit = tabs.find(sameUrl);
+  // 도메인만 맞는 탭이 있으면 그 탭을 그 화면으로 옮긴다 — 새 탭을 또
+  // 여는 것보다 낫다.
+  if (!hit && path) {
+    const sameHost = tabs.find((t) => {
+      try {
+        return t.url ? new URL(t.url).host === domain : false;
+      } catch {
+        return false;
+      }
+    });
+    if (sameHost?.id != null) {
+      await chrome.tabs.update(sameHost.id, { url });
+      return; // 로드가 끝나면 content script 가 스스로 이어받는다
+    }
+  }
+
+  // **앞으로 끌어오지 않는다.**
+  //
+  // 예전에는 active: true 였다. 절차 한 번에 탭이 네 번 튀어나와서, 보고
+  // 있던 화면을 빼앗긴다 — 자동화가 손을 덜어주는 대신 주의를 가져가면
+  // 남는 게 없다. 사람은 결과만 보면 되고 그건 사이트가 보여준다.
+  //
+  // 배경 탭에서도 content script 는 그대로 돈다. 크롬이 타이머를 1초
+  // 단위로 늦추긴 하는데, 절차는 몇 초짜리라 그 정도는 견딘다.
+  //
+  // 창을 아예 안 띄우는 길은 없다. DOM 을 읽어야 하고, 크롬은 그리지 않는
+  // 페이지의 DOM 을 주지 않는다.
   if (hit?.id != null) {
-    await chrome.tabs.update(hit.id, { active: true });
     // 이미 그 페이지에 있으면 content script 가 다시 물을 계기가 없다.
     // 직접 깨운다 — 없으면 절차가 그 자리에서 멈춘 채로 남는다.
     await chrome.tabs.sendMessage(hit.id, { type: 'RUN_PUMP' }).catch(() => undefined);
     return;
   }
-  await chrome.tabs.create({ url, active: true });
+  await chrome.tabs.create({ url, active: false });
 }
 import type { SessionSnapshot, SnapshotDraft, SnapshotPreview } from './snapshot';
 
@@ -762,7 +794,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     void setRun({ ...run, index: 0, startedAt: Date.now(), results: [] })
-      .then(() => goTo(run.steps[0]?.domain ?? ''))
+      .then(() => goTo(run.steps[0]?.domain ?? '', run.steps[0]?.path))
       .then(() => sendResponse({ ok: true }));
     return true;
   }
@@ -796,7 +828,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // 여기서 이어지지 않는다는 것은 다음 단계가 다른 자리에 있다는 뜻이다.
       // 데려간다 — 안 그러면 절차가 이 페이지에서 조용히 멈춘다.
       if (!next && !run.doneAt && !run.error) {
-        await goTo(run.steps[run.index]?.domain ?? '');
+        await goTo(run.steps[run.index]?.domain ?? '', run.steps[run.index]?.path);
       }
       if (run.doneAt || run.error) await announce(run);
       sendResponse({
@@ -908,6 +940,7 @@ async function announce(run: RunState): Promise<void> {
             ok: message.ok === true,
             sel: message.sel ?? undefined,
             sample: message.sample ?? undefined,
+            path: message.path ?? undefined,
           },
         } satisfies PickState,
       });
@@ -921,6 +954,7 @@ async function announce(run: RunState): Promise<void> {
             ok: message.ok === true,
             sel: message.sel ?? null,
             sample: message.sample ?? null,
+            path: message.path ?? null,
           })
           .catch(() => undefined);
       }

@@ -665,6 +665,9 @@
             sel,
             sample: text.slice(0, 60),
             host,
+            // **경로도 보낸다.** 도메인만으로는 못 돌아온다 — /usage 에서
+            // 집었는데 실행기가 루트로 가면 그 자리가 거기 없다.
+            path: location.pathname + location.search,
           });
         } catch {
           /* 확장 컨텍스트 무효 */
