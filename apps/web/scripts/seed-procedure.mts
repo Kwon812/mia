@@ -31,7 +31,17 @@ if (REMOVE) {
 const [u] = await sql`select id from users order by created_at limit 1`;
 if (!u) { console.log('사용자가 없다'); await sql.end(); process.exit(1); }
 
-const act = (label: string, sel: string, dt: number) => ({ t: 'a', label, sel, dt });
+// **셀렉터를 지어내지 않는다.**
+//
+// 단계는 관측에서 온다 — 사람이 실제로 누른 것을 확장이 기록한다. 여기서는
+// 그 관측을 위조하는 것이라 셀렉터도 위조해야 하는데, 없는 셀렉터를 넣으면
+// 실행기가 그걸 몇 초씩 기다렸다가 라벨로 넘어간다. 낭비이고, 무엇보다
+// 실패의 원인이 "이 절차가 안 맞다"인지 "내가 지어낸 값이 틀렸다"인지
+// 구별이 안 된다.
+//
+// 라벨만 남긴다. 실행기는 셀렉터가 없으면 보이는 텍스트로 찾는다 —
+// 실제 사이트에서 그게 통하는지 보는 것이 이 시험의 목적이기도 하다.
+const act = (label: string, dt: number) => ({ t: 'a', label, dt });
 
 /** GPT 콘솔에서 사용량을 보고 Render 배포를 확인하는 흐름. */
 const segments = () => [
@@ -43,8 +53,8 @@ const segments = () => [
     sec: 240,
     title: 'Usage — OpenAI API',
     acts: [
-      act('Usage', '[href="/usage"]', 3),
-      act('Cost', '[data-testid="cost-tab"]', 4),
+      act('Usage', 3),
+      act('Cost', 4),
     ],
   },
   {
@@ -54,7 +64,7 @@ const segments = () => [
     end: '2026-08-07T09:07:00+09:00',
     sec: 180,
     title: 'Render Dashboard',
-    acts: [act('na-nightly-batch', '[data-testid="service-link"]', 6)],
+    acts: [act('na-nightly-batch', 6)],
   },
 ];
 

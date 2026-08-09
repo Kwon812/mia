@@ -263,15 +263,58 @@
     });
   }
 
-  /** 셀렉터가 없는 단계는 보이는 텍스트로 찾는다 — 녹화 때 안정 셀렉터가
-   *  없었던 요소들이다. 정확도가 떨어지므로 첫 번째 것만 쓴다. */
+  /**
+   * 셀렉터로 못 찾았을 때 보이는 텍스트로 찾는다.
+   *
+   * 이게 절차의 **복구 경로**다. 사이트가 화면을 고치면 셀렉터는 깨지지만
+   * 버튼 이름은 웬만해선 그대로다. 그래서 여기가 무르면 절차 전체가 무르다.
+   *
+   * 예전에는 완전 일치에 태그도 여섯 종뿐이라 실제 UI 를 거의 못 잡았다.
+   * 실제로 "Cost" 가 화면에 있는데도 못 찾았다 — 요즘 UI 는 div[role=tab]
+   * 안에 아이콘과 글자가 섞이거나 뒤에 배지가 붙는다.
+   *
+   * 넓히되 순서를 둔다. 정확히 같은 것 → 그 글자로 시작하는 것 → 품고 있는
+   * 것. 그리고 **가장 안쪽 것**을 고른다 — 바깥 컨테이너도 그 글자를 품고
+   * 있어서, 안 그러면 페이지 절반을 클릭하게 된다.
+   */
   function findByLabel(label: string): Element | null {
-    const cands = document.querySelectorAll('button, a, [role], input, select, summary, label');
-    for (let i = 0; i < cands.length; i++) {
-      const t = (cands[i].getAttribute('aria-label') ?? cands[i].textContent ?? '').trim();
-      if (t === label) return cands[i];
+    const want = label.trim().toLowerCase();
+    if (!want) return null;
+
+    const clickable =
+      'button, a, [role="button"], [role="tab"], [role="link"], [role="menuitem"], ' +
+      'input, select, summary, label, li, td, div, span';
+    const cands = Array.from(document.querySelectorAll(clickable));
+
+    const exact: Element[] = [];
+    const starts: Element[] = [];
+    const has: Element[] = [];
+
+    for (const el of cands) {
+      // 화면에 없는 것은 누를 수 없다. 숨은 메뉴 항목이 먼저 잡히면 클릭이
+      // 아무 일도 안 한 것처럼 끝난다.
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+
+      const t = (el.getAttribute('aria-label') ?? el.textContent ?? '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+      if (!t) continue;
+      if (t === want) exact.push(el);
+      else if (t.startsWith(want)) starts.push(el);
+      // 너무 긴 것에 품긴 것은 그 글자가 우연히 들어 있는 컨테이너다.
+      else if (t.includes(want) && t.length < want.length * 4) has.push(el);
     }
-    return null;
+
+    // 가장 안쪽 것을 고른다. 바깥 컨테이너도 같은 글자를 품고 있어서,
+    // 그냥 첫 번째를 쓰면 페이지 절반을 클릭하게 된다.
+    const innermost = (list: Element[]) =>
+      list.length === 0
+        ? null
+        : list.reduce((a, b) => (a.contains(b) ? b : b.contains(a) ? a : a));
+
+    return innermost(exact) ?? innermost(starts) ?? innermost(has);
   }
 
   type RunStep = { sel?: string; label?: string; isInput: boolean; dt: number };
@@ -316,9 +359,21 @@
   }
 
   async function doStep(step: RunStep, value: string | null): Promise<string | null> {
-    const budget = Math.max(4000, Math.min(20000, Math.round(step.dt * 1000) + 4000));
+    // 셀렉터를 오래 기다리지 않는다. 라벨이 있으면 그게 더 튼튼한 길이라,
+    // 없는 셀렉터를 8초씩 기다리는 것은 낭비다 — 사이트가 화면을 고치면
+    // 셀렉터는 깨져도 버튼 이름은 웬만해선 그대로다.
+    const budget = step.label
+      ? 2500
+      : Math.max(4000, Math.min(20000, Math.round(step.dt * 1000) + 4000));
     let el: Element | null = step.sel ? await waitFor(step.sel, budget) : null;
-    if (!el && step.label) el = findByLabel(step.label);
+    if (!el && step.label) {
+      // 라벨로도 늦게 그려지는 것을 기다린다.
+      const t0 = Date.now();
+      while (!el && Date.now() - t0 < 6000) {
+        el = findByLabel(step.label);
+        if (!el) await new Promise((r) => setTimeout(r, 150));
+      }
+    }
     if (!el) return `"${step.label ?? step.sel ?? '요소'}" 를 못 찾았어`;
 
     if (step.isInput) {
