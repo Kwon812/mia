@@ -284,6 +284,19 @@
       const useHeaders = headers ?? past?.headers ?? {};
       const useCreds = past?.creds ?? 'include';
 
+      // **무엇을 보내는지 찍는다.**
+      //
+      // 여기까지 오는 동안 원인을 세 번 잘못 짚었다. 자격이 어떻게 실리는지가
+      // 눈에 안 보이면 다음에도 같은 일이 반복된다 — 401 이 났을 때 헤더가
+      // 없었던 건지, 엿들은 기록을 못 찾은 건지, 방식이 안 맞은 건지가
+      // 이 한 줄로 갈린다.
+      console.log(
+        `[NA] 부른다 ${pathOf(url)}`,
+        `자격=${useCreds}`,
+        `헤더=[${Object.keys(useHeaders).join(', ') || '없음'}]`,
+        past ? '(엿들은 기록 있음)' : '(기록 없음 — 짐작으로 부른다)',
+      );
+
       // 원본 fetch 를 쓴다. 감싼 쪽을 부르면 이 호출까지 엿듣게 되어,
       // 재현한 응답이 다시 후보로 쌓인다.
       const once = (creds: RequestCredentials) =>
@@ -305,9 +318,17 @@
         )
         .then(async (r) => {
           const text = await r.text();
+          if (!r.ok) {
+            // 서버가 왜 거절했는지는 대개 본문에 있다. 상태 코드만으로는
+            // 토큰이 없는 건지 권한이 모자란 건지 모른다.
+            console.log(`[NA] ${r.status} ${pathOf(url)}`, text.slice(0, 300));
+          }
           answer({ ok: r.ok, status: r.status, text: text.slice(0, MAX_BYTES) });
         })
-        .catch((err) => answer({ ok: false, status: 0, error: String(err?.message ?? err) }));
+        .catch((err) => {
+          console.log(`[NA] 못 불렀다 ${pathOf(url)}`, err);
+          answer({ ok: false, status: 0, error: String(err?.message ?? err) });
+        });
       return;
     }
     if (e.source !== window || e.data?.__naNet !== 'ask') return;
