@@ -35,6 +35,16 @@
     method: string;
     /** POST 본문. GraphQL 처럼 경로가 하나뿐인 곳은 이게 있어야 재현된다. */
     body?: string;
+    /**
+     * 요청에 붙은 헤더. **이게 없으면 재현이 안 된다.**
+     *
+     * 쿠키만으로 되는 줄 알았는데 아니었다. 대시보드는 세션 토큰을
+     * Authorization 헤더로 보내는 곳이 많고(OpenAI 가 그렇다), 조직 id 나
+     * CSRF 토큰을 커스텀 헤더로 얹기도 한다. 집을 때는 페이지가 부른 응답의
+     * 사본을 봐서 성공하는데, 실행할 때는 확장이 직접 불러 401 이 났다 —
+     * 로그인은 멀쩡한데.
+     */
+    headers?: Record<string, string>;
     /** 파싱된 응답. 객체가 아니면 안 든다 — 값 찾기는 JSON 에서만 한다. */
     json: unknown;
     at: number;
@@ -55,14 +65,55 @@
     if (caught.length > MAX_KEEP) caught.length = MAX_KEEP;
   }
 
+  /**
+   * 재현에 필요한 헤더만 고른다.
+   *
+   * 전부 들고 가면 안 된다. 브라우저가 스스로 채우는 것(Host·Origin·
+   * Content-Length)을 우리가 다시 얹으면 오히려 거부당하고, User-Agent 나
+   * Accept-Encoding 은 붙일 이유가 없다.
+   *
+   * 인증에 쓰이는 것과 그 서비스가 정한 커스텀 헤더(x- 로 시작하거나
+   * 서비스 이름이 붙은 것)만 남긴다.
+   */
+  const KEEP_HEADER = /^(authorization|openai-|anthropic-|x-|.*-token$|.*-key$|content-type)/i;
+  const DROP_HEADER = /^(host|origin|referer|cookie|content-length|user-agent|accept-encoding|connection|sec-)/i;
+
+  function pickHeaders(h: HeadersInit | undefined, req?: Request): Record<string, string> {
+    const out: Record<string, string> = {};
+    const add = (k: string, v: string) => {
+      const key = k.toLowerCase();
+      if (DROP_HEADER.test(key) || !KEEP_HEADER.test(key)) return;
+      if (v && v.length < 4000) out[k] = v;
+    };
+    try {
+      if (req) req.headers.forEach((v, k) => add(k, v));
+      if (h instanceof Headers) h.forEach((v, k) => add(k, v));
+      else if (Array.isArray(h)) h.forEach(([k, v]) => add(k, v));
+      else if (h && typeof h === 'object') {
+        for (const [k, v] of Object.entries(h)) add(k, String(v));
+      }
+    } catch {
+      // 헤더를 못 읽어도 나머지는 그대로 간다.
+    }
+    return out;
+  }
+
   /** JSON 으로 읽히는 것만 든다. HTML·이미지는 값 찾기에 쓸 데가 없다. */
-  function tryKeep(url: string, method: string, body: string | undefined, text: string): void {
+  function tryKeep(
+    url: string,
+    method: string,
+    body: string | undefined,
+    text: string,
+    headers?: Record<string, string>,
+  ): void {
     if (!text || text.length > MAX_BYTES) return;
     const head = text.slice(0, 200).trimStart();
     if (!head.startsWith('{') && !head.startsWith('[')) return;
     try {
       const json = JSON.parse(text);
-      if (json && typeof json === 'object') keep({ url, method, body, json, at: Date.now() });
+      if (json && typeof json === 'object') {
+        keep({ url, method, body, json, headers, at: Date.now() });
+      }
     } catch {
       // JSON 이 아니면 그만이다.
     }
@@ -80,10 +131,11 @@
       const body = typeof init?.body === 'string' ? init.body.slice(0, 4000) : undefined;
       // **복제해서 읽는다.** 원본 스트림을 읽으면 페이지가 못 읽는다 —
       // 엿듣기가 페이지를 망가뜨리면 안 된다.
+      const headers = pickHeaders(init?.headers, req instanceof Request ? req : undefined);
       res
         .clone()
         .text()
-        .then((t) => tryKeep(new URL(url, location.href).href, method, body, t))
+        .then((t) => tryKeep(new URL(url, location.href).href, method, body, t, headers))
         .catch(() => undefined);
     } catch {
       // 무슨 일이 있어도 원래 응답은 그대로 돌려준다.
@@ -95,7 +147,23 @@
   // 요즘 앱은 대개 fetch 를 쓰지만, 오래된 대시보드는 아직 XHR 이다.
   const OrigOpen = XMLHttpRequest.prototype.open;
   const OrigSend = XMLHttpRequest.prototype.send;
-  type Tagged = XMLHttpRequest & { __naUrl?: string; __naMethod?: string; __naBody?: string };
+  type Tagged = XMLHttpRequest & {
+    __naUrl?: string;
+    __naMethod?: string;
+    __naBody?: string;
+    __naHeaders?: Record<string, string>;
+  };
+
+  // XHR 은 setRequestHeader 로 하나씩 얹는다. 그걸 가로채야 인증 헤더를 안다.
+  const OrigSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.setRequestHeader = function (this: Tagged, name: string, value: string) {
+    const key = String(name).toLowerCase();
+    if (!DROP_HEADER.test(key) && KEEP_HEADER.test(key)) {
+      this.__naHeaders = { ...(this.__naHeaders ?? {}), [name]: String(value) };
+    }
+    // eslint-disable-next-line prefer-rest-params
+    return OrigSetHeader.apply(this, arguments as never);
+  } as typeof XMLHttpRequest.prototype.setRequestHeader;
 
   XMLHttpRequest.prototype.open = function (this: Tagged, method: string, url: string, ...rest: unknown[]) {
     this.__naMethod = String(method).toUpperCase();
@@ -113,7 +181,13 @@
     this.addEventListener('load', () => {
       try {
         if (this.responseType === '' || this.responseType === 'text') {
-          tryKeep(this.__naUrl ?? '', this.__naMethod ?? 'GET', this.__naBody, this.responseText);
+          tryKeep(
+            this.__naUrl ?? '',
+            this.__naMethod ?? 'GET',
+            this.__naBody,
+            this.responseText,
+            this.__naHeaders,
+          );
         }
       } catch {
         // 무시 — 엿듣기 실패가 페이지에 영향을 주면 안 된다.
@@ -133,7 +207,13 @@
       {
         __naNet: 'ans',
         id: e.data.id,
-        caught: caught.map((c) => ({ url: c.url, method: c.method, body: c.body, json: c.json })),
+        caught: caught.map((c) => ({
+          url: c.url,
+          method: c.method,
+          body: c.body,
+          headers: c.headers,
+          json: c.json,
+        })),
       },
       '*',
     );

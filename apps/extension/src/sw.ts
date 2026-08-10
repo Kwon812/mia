@@ -48,6 +48,42 @@ const KEYS_KEY = 'na_api_keys';
 const NET_KEY = 'na_net_hit';
 
 /**
+ * 요청에 붙일 헤더. **로컬에만 둔다.**
+ *
+ * 세션 토큰이라 서버로 나가면 안 된다. 사이트 DB 에는 어느 URL 의 어느
+ * 필드인지만 남고, 그 요청을 어떤 자격으로 부르는지는 이 브라우저에만 있다.
+ *
+ * 만료되면 401 이 난다. 그때는 그 사이트를 한 번 열면 된다 — 페이지가 새
+ * 토큰으로 API 를 부르고 엿듣기가 그걸 갱신한다. 사람이 키를 다시 넣을
+ * 일이 없다.
+ */
+const HEADERS_KEY = 'na_net_headers';
+
+/** 같은 API 는 같은 자격으로 부른다. 쿼리스트링은 떼고 경로로만 잡는다. */
+function headerKeyOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.host}${u.pathname}`;
+  } catch {
+    return url.slice(0, 120);
+  }
+}
+
+async function rememberHeaders(url: string, headers?: Record<string, string>): Promise<void> {
+  if (!headers || Object.keys(headers).length === 0) return;
+  const got = await chrome.storage.local.get(HEADERS_KEY);
+  const map = (got[HEADERS_KEY] ?? {}) as Record<string, Record<string, string>>;
+  map[headerKeyOf(url)] = headers;
+  await chrome.storage.local.set({ [HEADERS_KEY]: map });
+}
+
+async function headersFor(url: string): Promise<Record<string, string>> {
+  const got = await chrome.storage.local.get(HEADERS_KEY);
+  const map = (got[HEADERS_KEY] ?? {}) as Record<string, Record<string, string>>;
+  return map[headerKeyOf(url)] ?? {};
+}
+
+/**
  * 왜 못 가져왔는지 사람 말로 옮긴다.
  *
  * "실패했어" 는 아무 것도 안 알려준다. 로그인이 풀린 것과 API 가 없어진 것과
@@ -1117,6 +1153,8 @@ async function announce(run: RunState): Promise<void> {
       url: string;
       method: string;
       body?: string;
+      /** 요청에 붙었던 자격. 로컬에만 기억하고 서버로는 안 보낸다. */
+      headers?: Record<string, string>;
       json: unknown;
     }[];
     const picked = String(message.picked ?? '');
@@ -1127,6 +1165,9 @@ async function announce(run: RunState): Promise<void> {
     const near: string[] = [];
     const wantNum = numberIn(picked);
     for (const c of caught) {
+      // 자격을 기억해둔다. 실행할 때 이걸 붙여야 재현된다 — 쿠키만으로는
+      // 401 이 났다. 로컬에만 두고 서버로는 안 보낸다.
+      void rememberHeaders(c.url, c.headers as Record<string, string> | undefined);
       const flat = flatten(c.json);
       for (const m of findValue(flat, picked, c.url)) {
         hits.push({ ...m, url: c.url, method: c.method, body: c.body });
@@ -1198,19 +1239,30 @@ async function announce(run: RunState): Promise<void> {
   if (message?.type === 'NET_READ') {
     void (async () => {
       try {
-        const res = await fetch(String(message.url ?? ''), {
+        const url = String(message.url ?? '');
+        // 엿들을 때 본 자격을 그대로 붙인다. 쿠키만으로 되는 곳도 있지만
+        // 세션 토큰을 헤더로 보내는 곳이 많다 — 그때는 이게 없으면 401 이다.
+        const saved = await headersFor(url);
+        const res = await fetch(url, {
           method: String(message.method ?? 'GET'),
           credentials: 'include',
-          headers: message.body ? { 'Content-Type': 'application/json' } : undefined,
+          headers: {
+            Accept: 'application/json',
+            ...(message.body ? { 'Content-Type': 'application/json' } : {}),
+            ...saved,
+          },
           body: message.body ? String(message.body) : undefined,
         });
-        let host = '그 사이트';
-        try {
-          host = new URL(String(message.url ?? '')).host;
-        } catch {
-          /* 그대로 둔다 */
+        // 안내에는 **사람이 들어가는 사이트**를 적는다. API 호스트를 적으면
+        // (api.openai.com 처럼) 거기 들어가 봐야 아무것도 없다.
+        const site = String(message.site ?? '') || headerKeyOf(url).split('/')[0];
+        if (!res.ok) {
+          const why =
+            res.status === 401 || res.status === 403
+              ? `인증이 만료됐어 (${res.status}). ${site} 를 한 번 열면 갱신돼 — 다시 넣을 건 없어.`
+              : reasonOf(res.status, site);
+          return sendResponse({ ok: false, error: why });
         }
-        if (!res.ok) return sendResponse({ ok: false, error: reasonOf(res.status, host) });
 
         const path = String(message.path ?? '');
         const body = await res.json();

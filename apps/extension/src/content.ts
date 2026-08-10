@@ -367,8 +367,10 @@
       // **API 로 읽는 자리는 화면을 안 본다.** 셀렉터도 렌더링 타이밍도
       // 상관없다 — 서비스 워커가 배경에서 호출 한 번으로 가져온다.
       if (r.api || r.net) {
+        // 인증이 만료됐을 때 안내에 쓸 사이트. API 호스트가 아니라 사람이
+        // 들어가는 곳이어야 한다.
         const msg = r.net
-          ? { type: 'NET_READ', ...r.net }
+          ? { type: 'NET_READ', ...r.net, site: host }
           : { type: 'API_READ', ...r.api };
         const got = await new Promise<{ ok?: boolean; value?: string; error?: string }>((res) => {
           try {
