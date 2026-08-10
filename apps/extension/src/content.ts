@@ -317,7 +317,14 @@
     return innermost(exact) ?? innermost(starts) ?? innermost(has);
   }
 
-  type RunStep = { sel?: string; label?: string; isInput: boolean; dt: number };
+  type RunStep = {
+    sel?: string;
+    /** 셀렉터 후보들. 다시 집은 단계에 붙는다 — 하나만 두면 깨지는 순간 끝이다. */
+    sels?: string[];
+    label?: string;
+    isInput: boolean;
+    dt: number;
+  };
   type RunRead = {
     after: number;
     sel: string;
@@ -374,7 +381,11 @@
     const budget = step.label
       ? 2500
       : Math.max(4000, Math.min(20000, Math.round(step.dt * 1000) + 4000));
-    let el: Element | null = step.sel ? await waitFor(step.sel, budget) : null;
+    // 후보를 앞에서부터. 첫 것만 넉넉히 기다리고 나머지는 이미 그려진 뒤라
+    // 짧게 본다 — 라벨이 있으면 그게 더 튼튼한 길이라 오래 붙들 이유가 없다.
+    const cands = step.sels?.length ? step.sels : step.sel ? [step.sel] : [];
+    let el: Element | null = cands.length ? await waitFor(cands[0], budget) : null;
+    for (let i = 1; !el && i < cands.length; i++) el = document.querySelector(cands[i]);
     if (!el && step.label) {
       // 라벨로도 늦게 그려지는 것을 기다린다.
       const t0 = Date.now();

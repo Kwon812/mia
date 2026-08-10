@@ -509,9 +509,9 @@ export async function repointProcedureStep(
   index: number,
   sel: string,
   label: string,
-  /** 집은 자리의 경로. 도메인만으로는 못 돌아온다 — /usage 에서 집었는데
-   *  루트로 가면 그 자리가 거기 없다. */
-  path?: string,
+  /** 집은 자리에 딸린 것들. path 는 어느 화면인지 — 도메인만으로는 못
+   *  돌아온다. sels 는 셀렉터 후보들이고, 하나만 두면 깨지는 순간 끝이다. */
+  extra: { path?: string; sels?: string[] } = {},
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
@@ -525,7 +525,13 @@ export async function repointProcedureStep(
 
   const steps = (row.steps ?? []) as Record<string, unknown>[];
   if (!steps[index]) return { ok: false, error: "그 단계가 없어." };
-  steps[index] = { ...steps[index], sel, label, ...(path ? { path } : {}) };
+  steps[index] = {
+    ...steps[index],
+    sel,
+    sels: extra.sels ?? [],
+    label,
+    ...(extra.path ? { path: extra.path } : {}),
+  };
 
   await db
     .update(procedures)

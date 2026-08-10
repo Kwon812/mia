@@ -93,7 +93,7 @@ export function ProcedureCard({
     index: number,
     sel: string,
     label: string,
-    path?: string,
+    extra: { path?: string; sels?: string[] },
   ) => Promise<Result>;
   /** 있어선 안 될 단계를 뺀다. 다시 집어도 안 고쳐지는 것 — 그 자리에
    *  있어야 할 것이 애초에 없는 경우다. */
@@ -262,7 +262,7 @@ export function ProcedureCard({
   function repoint(index: number) {
     if (!onRepoint) return;
     repointAt(index, c.steps[index]?.domain ?? "", (sel, sample, x) =>
-      onRepoint(c.signature, index, sel, sample, x.path),
+      onRepoint(c.signature, index, sel, sample, { path: x.path, sels: x.sels }),
     );
   }
 
