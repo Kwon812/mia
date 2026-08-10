@@ -33,6 +33,12 @@ import {
   urlFor,
   type Match,
 } from './session/api-registry';
+import {
+  buildUsageSnapshot,
+  USAGE_PROVIDER_IDS,
+  type UsageProviderId,
+  type UsageSnapshot,
+} from './usage';
 import type { SessionDraft, SessionPayloadLike } from './session';
 
 // ── API 키 ─────────────────────────────────────────────────
@@ -210,6 +216,49 @@ async function setKey(serviceId: string, key: string): Promise<void> {
   if (key) map[serviceId] = key;
   else delete map[serviceId];
   await chrome.storage.local.set({ [KEYS_KEY]: map });
+}
+
+// ── 사용량 캐시 ────────────────────────────────────────────
+//
+// 팝업은 열릴 때마다 문서째 새로 만들어진다. 캐시가 없으면 팝업을 열 때마다
+// 세 곳을 다시 부르게 되는데, 그러면 **열 때마다 1~3초 빈 화면**이고 아무것도
+// 안 바뀐 날에도 API 를 하루 수십 번 두드린다(429 를 부른다).
+//
+// 그래서 결과를 storage 에 두고 5분은 그대로 쓴다. 사람이 지금 당장 보고
+// 싶으면 갱신 버튼이 있다 — 그때만 force 다.
+const USAGE_KEY = 'na_usage_cache';
+const USAGE_TTL_MS = 5 * 60 * 1000;
+/** 사람이 적어둔 월 구독료. API 가 안 주는 값이라 여기 따로 둔다. */
+const SUB_KEY = 'na_usage_sub';
+
+async function readUsageCache(): Promise<UsageSnapshot | null> {
+  const got = await chrome.storage.local.get(USAGE_KEY);
+  const snap = got[USAGE_KEY] as UsageSnapshot | undefined;
+  return snap && typeof snap.fetchedAt === 'number' ? snap : null;
+}
+
+/**
+ * 키가 하나도 없으면 **부르지 않는다.** 세 번 헛도는 대신 즉시 빈 칸을
+ * 그려주고, 팝업이 "키를 넣어라"를 보여준다.
+ */
+async function getUsage(force: boolean): Promise<UsageSnapshot> {
+  const now = Date.now();
+  const cached = await readUsageCache();
+  if (!force && cached && now - cached.fetchedAt < USAGE_TTL_MS) return cached;
+
+  const stored = await chrome.storage.local.get([KEYS_KEY, SUB_KEY]);
+  const map = (stored[KEYS_KEY] ?? {}) as Record<string, string>;
+  const subMap = (stored[SUB_KEY] ?? {}) as Record<string, number>;
+  const keys: Partial<Record<UsageProviderId, string>> = {};
+  const subs: Partial<Record<UsageProviderId, number>> = {};
+  for (const id of USAGE_PROVIDER_IDS) {
+    if (map[id]) keys[id] = map[id];
+    if (typeof subMap[id] === 'number') subs[id] = subMap[id];
+  }
+
+  const snap = await buildUsageSnapshot(keys, subs, now);
+  await chrome.storage.local.set({ [USAGE_KEY]: snap });
+  return snap;
 }
 
 /**
@@ -1530,6 +1579,58 @@ async function announce(run: RunState): Promise<void> {
   // (알람이 도는 시점은 그대로다). 팝업을 열어보는 행위가 데이터에 영향을 주면 안 된다.
   if (message?.type === 'GET_SESSION_SNAPSHOT') {
     void buildSessionSnapshot(Date.now()).then(sendResponse);
+    return true;
+  }
+
+  // 팝업 전용 — API 사용량. 5분 캐시라 대개 즉시 답한다.
+  if (message?.type === 'GET_API_USAGE') {
+    void getUsage(message.force === true)
+      .then(sendResponse)
+      .catch((err) => {
+        console.error('[NA] 사용량 조회 실패', err);
+        sendResponse(null);
+      });
+    return true;
+  }
+
+  // 팝업의 키 입력. 값 집기(api-registry) 와 **같은 저장소**를 쓴다 —
+  // Render 키를 두 번 넣게 하지 않으려고.
+  //
+  // 키가 바뀌면 캐시를 버린다. 안 그러면 방금 넣은 키로 5분 동안 옛 오류가
+  // 그대로 떠서 "키를 넣었는데 왜 그대로냐" 가 된다.
+  if (message?.type === 'SET_USAGE_KEY') {
+    const id = String(message.service ?? '');
+    if (!(USAGE_PROVIDER_IDS as string[]).includes(id)) {
+      sendResponse({ ok: false });
+      return true;
+    }
+    void setKey(id, String(message.key ?? '').trim())
+      .then(() => chrome.storage.local.remove(USAGE_KEY))
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // 월 구독료. 빈 값이면 지운다 — "$0 요금제"와 "안 적음"은 다른 상태다.
+  if (message?.type === 'SET_USAGE_SUB') {
+    const id = String(message.service ?? '');
+    if (!(USAGE_PROVIDER_IDS as string[]).includes(id)) {
+      sendResponse({ ok: false });
+      return true;
+    }
+    void (async () => {
+      const got = await chrome.storage.local.get(SUB_KEY);
+      const map = (got[SUB_KEY] ?? {}) as Record<string, number>;
+      const raw = String(message.amount ?? '').trim();
+      // "$20", "20.00", "20" 을 다 받는다. 사람은 화면에 적힌 대로 붙여넣는다.
+      const n = Number(raw.replace(/[$,\s]/g, ''));
+      if (raw && Number.isFinite(n) && n >= 0) map[id] = n;
+      else delete map[id];
+      await chrome.storage.local.set({ [SUB_KEY]: map });
+      // 캐시를 버려야 방금 적은 구독료가 바로 합계에 든다.
+      await chrome.storage.local.remove(USAGE_KEY);
+      sendResponse({ ok: true });
+    })().catch(() => sendResponse({ ok: false }));
     return true;
   }
 

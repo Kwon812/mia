@@ -50,7 +50,10 @@
       }
 
       body {
-        width: 320px;
+        /* 두 칸이다 — 왼쪽 세션, 오른쪽 사용량. 320px 에 둘을 넣으면 도메인
+           막대도 금액도 다 뭉개져서, 한눈에 보려고 나눈 것이 되레 안 보인다.
+           크롬 팝업 상한은 800px 이라 여유가 있다. */
+        width: 580px;
         /* 최소 높이가 없으면 내용이 비었을 때 팝업이 납작하게 쭈그러든다.
            서비스 워커가 잠들었거나 크롬이 방금 재시작한 직후가 그렇다 —
            고장난 것처럼 보이는데 실은 스냅샷을 못 받은 것뿐이다. */
@@ -65,6 +68,22 @@
       }
 
       #app {
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* 신원 경고(#notice)는 이 위에 **가로로 꽉 차게** 남는다 — 한쪽 칸에
+         밀어 넣으면 "이 아래 숫자가 다 엉뚱한 계정 것"이라는 말이 한쪽
+         얘기처럼 읽힌다. */
+      .cols {
+        display: flex;
+        align-items: stretch;
+      }
+
+      #session {
+        flex: 1;
+        /* 없으면 도메인 이름 같은 긴 글자가 칸을 밀어내 오른쪽을 찌그러뜨린다 */
+        min-width: 0;
         display: flex;
         flex-direction: column;
       }
@@ -270,7 +289,9 @@
 
       .bar-row {
         display: grid;
-        grid-template-columns: 96px 1fr 40px;
+        /* 320px 시절엔 96px 이 최선이었다. 칸이 넓어졌으니 이름을 살린다 —
+           "platform.opena…" 와 "platform.openai.com" 은 읽는 값이 다르다. */
+        grid-template-columns: 150px 1fr 44px;
         align-items: center;
         gap: 8px;
         padding: 3px 0;
@@ -326,6 +347,221 @@
         color: var(--sub);
       }
 
+      /* ── API 사용량 ── */
+
+      .usage {
+        width: 236px;
+        flex: none;
+        padding: 12px 16px 14px;
+        /* 세로 줄 하나로 두 칸을 가른다. align-items:stretch 덕에 짧은 쪽도
+           바닥까지 따라 내려간다 — 줄이 중간에서 끊기면 칸이 아니라 그냥
+           떠 있는 상자로 보인다. */
+        border-left: 1px solid var(--rule);
+      }
+
+      .u-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        /* 좁은 칸이라 한 줄에 다 못 들어가는 날이 있다. 그때는 잘리는 대신
+           접힌다 — 갱신·키 버튼이 사라지면 손쓸 방법이 없어진다. */
+        flex-wrap: wrap;
+        gap: 8px;
+        row-gap: 2px;
+        margin-bottom: 8px;
+      }
+
+      .u-head .block-h {
+        margin-bottom: 0;
+      }
+
+      .u-head-r {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .u-since {
+        font-size: 10.5px;
+        color: var(--faint);
+      }
+
+      /* 버튼처럼 안 보이는 버튼 — 이 화면의 주인공은 숫자다 */
+      .u-link {
+        font: inherit;
+        font-size: 11px;
+        color: var(--sub);
+        background: none;
+        border: 0;
+        padding: 0;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .u-link:hover {
+        color: var(--fg);
+      }
+
+      .u-item + .u-item {
+        margin-top: 9px;
+        padding-top: 9px;
+        border-top: 1px solid var(--rule);
+      }
+
+      .u-top {
+        display: grid;
+        /* 가운데 칸이 남는 자리를 다 먹는다 — 막대가 있든 없든 이름과
+           금액의 자리가 안 흔들린다. */
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .u-name {
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+
+      /* 큰 숫자 + 그게 뭔지. 세로로 쌓아 오른쪽 정렬한다 — 좁은 칸에서
+         이름을 옆에 두면 금액이 밀려 줄바꿈된다. */
+      .u-amt-box {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        line-height: 1.2;
+      }
+
+      .u-amt {
+        font-size: 15px;
+        font-weight: 650;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .u-amt-k {
+        font-size: 9.5px;
+        letter-spacing: 0.04em;
+        color: var(--faint);
+      }
+
+      .u-amt-none {
+        font-size: 13px;
+        font-weight: 400;
+        color: var(--faint);
+      }
+
+      .u-spark {
+        display: flex;
+        align-items: flex-end;
+        justify-content: flex-end;
+        gap: 1.5px;
+        height: 16px;
+      }
+
+      .u-bar {
+        width: 3px;
+        background: var(--live);
+        opacity: 0.65;
+        border-radius: 1px;
+      }
+
+      .u-bar-zero {
+        background: var(--rule);
+        opacity: 1;
+      }
+
+      .u-sub {
+        margin-top: 2px;
+        font-size: 11.5px;
+        color: var(--sub);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .u-quiet {
+        color: var(--faint);
+      }
+
+      .u-err {
+        color: var(--warn);
+        line-height: 1.45;
+      }
+
+      button.u-sub {
+        display: block;
+        font-family: inherit;
+        background: none;
+        border: 0;
+        padding: 0;
+        text-align: left;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .u-total {
+        margin-top: 9px;
+        padding-top: 7px;
+        border-top: 1px solid var(--rule);
+        font-size: 11.5px;
+        color: var(--sub);
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ── 키 입력 ── */
+
+      .keys-f + .keys-f {
+        margin-top: 10px;
+      }
+
+      .keys-l {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+
+      .keys-i {
+        width: 100%;
+        padding: 6px 8px;
+        font: inherit;
+        font-size: 12px;
+        color: var(--fg);
+        background: var(--bg);
+        border: 1px solid var(--rule);
+        border-radius: 6px;
+      }
+
+      .keys-i:focus {
+        outline: none;
+        border-color: var(--live);
+      }
+
+      /* 구독료는 비밀이 아니라 상수다 — 가리지 않고 그대로 보인다.
+         그래야 지우려는 건지 안 건드린 건지가 눈에 보인다. */
+      .keys-money {
+        margin-top: 5px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .keys-h {
+        margin-top: 3px;
+        font-size: 10.5px;
+        color: var(--faint);
+        line-height: 1.4;
+      }
+
+      .keys-h-warn {
+        color: var(--warn);
+      }
+
+      .keys-drop {
+        margin-top: 3px;
+      }
+
       /* ── 빈 상태 ── */
 
       .empty {
@@ -355,6 +591,9 @@
       .foot {
         padding: 10px 16px 12px;
         background: var(--sunken);
+        /* 오른쪽 칸이 더 길면 왼쪽 아래에 빈 흰 띠가 남는다. 푸터를 바닥으로
+           밀어 그 자리를 채운다 — 세션이 없는 날(빈 상태)이 특히 그렇다. */
+        margin-top: auto;
       }
 
       .foot-row {

@@ -8,6 +8,7 @@
 // 여기에 복제하지 않기 위해서다 (sw.ts 의 buildSessionSnapshot 주석 참고).
 
 import type { SessionSnapshot } from './snapshot';
+import type { UsageEntry, UsageSnapshot } from './usage';
 
 // 팝업이 열려 있는 동안의 갱신 주기. 드래프트 자체는 1분 알람에서만 변하지만
 // 남은 시간·경과 시간이 매초 흘러야 살아있는 화면이 된다.
@@ -290,31 +291,334 @@ function renderFooter(root: HTMLElement, snap: SessionSnapshot): void {
   root.append(foot);
 }
 
-function render(snap: SessionSnapshot): void {
-  const root = document.getElementById('app');
+// ── API 사용량 ──────────────────────────────────────────────
+//
+// 대시보드를 세 군데 열지 않으려고 붙인 자리다. 숫자를 만드는 일은 전부
+// 서비스 워커가 한다(usage.ts) — 여기는 받은 문자열을 그리기만 한다.
+// 그래서 팝업에 API 키도, 통화 계산도 들어오지 않는다.
+
+let usage: UsageSnapshot | null = null;
+/** 한 번도 못 받았을 때와 "받았는데 비었다"를 구분한다 */
+let usageLoading = true;
+/** 키 입력칸이 열려 있나. 열려 있는 동안은 이 블록을 다시 그리지 않는다 */
+let keysOpen = false;
+/** 방금 갱신을 눌렀나 — 버튼이 눌린 티가 나야 한다 */
+let usageBusy = false;
+
+/** 값이 없어도 자리를 지킨다 — 매 초 재배치되면 눈이 따라가지 못한다. */
+function sparkline(values: number[]): HTMLElement {
+  const box = el('div', 'u-spark');
+  for (const v of values) {
+    const bar = el('span', 'u-bar');
+    // 0 인 날도 보이게 최소 높이를 준다. 안 그러면 "그 날은 데이터가 없다"와
+    // "그 날은 안 썼다"가 똑같이 빈칸으로 보인다.
+    bar.style.height = `${Math.max(12, Math.round(v * 100))}%`;
+    if (v === 0) bar.classList.add('u-bar-zero');
+    box.append(bar);
+  }
+  return box;
+}
+
+function renderUsageEntry(entry: UsageEntry): HTMLElement {
+  const box = el('div', 'u-item');
+
+  const top = el('div', 'u-top');
+  top.append(el('span', 'u-name', entry.label));
+  if (entry.spark.length > 0) top.append(sparkline(entry.spark));
+  else top.append(el('span', 'u-spark'));
+
+  // 큰 숫자와 그 이름을 세로로 쌓는다. 칸마다 줄 수 있는 것이 달라서
+  // (금액이거나, Render 처럼 애초에 금액이 아니거나) 이름이 없으면 못 읽는다.
+  const amountBox = el('div', 'u-amt-box');
+  const amount = el('span', 'u-amt', entry.headline ?? '—');
+  if (entry.headline === null && entry.hasKey && !entry.error) {
+    // Render 가 여기다. 비용 API 가 없어서 못 적는 것이지 0 이 아니다.
+    amount.classList.add('u-amt-none');
+    amount.title = '이 서비스는 요금을 API 로 주지 않아 — 대시보드에서 봐야 해';
+  }
+  amountBox.append(amount);
+  if (entry.headlineLabel) amountBox.append(el('span', 'u-amt-k', entry.headlineLabel));
+  top.append(amountBox);
+  box.append(top);
+
+  if (!entry.hasKey && entry.subUsd === null) {
+    const ask = el('button', 'u-sub u-link', '키를 넣으면 여기에 보여요');
+    ask.addEventListener('click', () => {
+      keysOpen = true;
+      paintUsage();
+    });
+    box.append(ask);
+  } else if (entry.error) {
+    box.append(el('div', 'u-sub u-err', entry.error));
+  } else if (entry.lines.length > 0) {
+    box.append(el('div', 'u-sub', entry.lines.map((l) => `${l.k} ${l.v}`).join(' · ')));
+  }
+
+  return box;
+}
+
+/**
+ * 키 입력칸.
+ *
+ * **저장된 키를 되돌려 받지 않는다.** 팝업은 "있다/없다"만 안다 — 키가
+ * DOM 에 들어오는 순간 확장 화면을 여는 누구나 읽을 수 있게 된다. 바꿀
+ * 때는 새로 넣는다. 구독료는 반대다 — 비밀이 아니라 상수라 그대로 보인다.
+ */
+function renderKeyForm(): HTMLElement {
+  const box = el('div', 'keys');
+  const inputs = new Map<string, HTMLInputElement>();
+  const subs = new Map<string, HTMLInputElement>();
+  /** 손댄 칸만 저장한다 — 안 건드린 구독료를 매번 다시 쓰지 않으려고 */
+  const subDirty = new Set<string>();
+
+  // 목록은 서비스 워커가 준다. 못 받았다면 저장도 못 하는 상태라 —
+  // 빈 입력칸 세 개를 그려놓고 안 되는 것보다 그렇다고 말하는 게 낫다.
+  if (!usage) {
+    box.append(el('div', 'u-sub u-err', '서비스 워커가 응답을 안 해 — 팝업을 닫았다 다시 열어봐'));
+    return box;
+  }
+
+  for (const entry of usage.entries) {
+    const field = el('div', 'keys-f');
+
+    const head = el('div', 'keys-l');
+    head.append(el('span', undefined, entry.label));
+    const issue = el('button', 'u-link', '키 발급');
+    issue.addEventListener('click', () => void chrome.tabs.create({ url: entry.keyUrl }));
+    head.append(issue);
+    field.append(head);
+
+    const input = document.createElement('input');
+    input.type = 'password';
+    input.className = 'keys-i';
+    input.placeholder = entry.hasKey ? '저장됨 — 바꾸려면 새로 입력' : '키 붙여넣기';
+    // 브라우저 비밀번호 관리자가 끼어들면 엉뚱한 값이 채워진다.
+    input.autocomplete = 'off';
+    field.append(input);
+    inputs.set(entry.id, input);
+
+    const hint = el('div', 'keys-h', entry.keyHint);
+    field.append(hint);
+
+    // 넣는 그 자리에서 종류를 봐준다. 일반 키를 넣고 저장한 뒤 401 을 보고
+    // 나서야 아는 것과, 넣자마자 아는 것은 다르다.
+    input.addEventListener('input', () => {
+      const v = input.value.trim();
+      const wrong =
+        v.length > 8 &&
+        ((entry.id === 'openai' && !v.startsWith('sk-admin')) ||
+          (entry.id === 'anthropic' && !v.startsWith('sk-ant-admin')) ||
+          (entry.id === 'render' && !v.startsWith('rnd_')));
+      hint.textContent = wrong ? `이 키로는 안 될 거야 — ${entry.keyHint}` : entry.keyHint;
+      hint.classList.toggle('keys-h-warn', wrong);
+    });
+
+    // 월 구독료. **API 가 안 주는 값이라 사람이 적는다** — cost_report 에는
+    // API 사용액만 있고 Pro/Max·Plus 구독료는 청구 주체가 아예 다르다.
+    // 비우면 지운다.
+    const sub = document.createElement('input');
+    sub.type = 'text';
+    sub.inputMode = 'decimal';
+    sub.className = 'keys-i keys-money';
+    sub.placeholder = '월 구독료 $ (없으면 비워둬)';
+    sub.autocomplete = 'off';
+    if (entry.subUsd !== null) sub.value = String(entry.subUsd);
+    sub.addEventListener('input', () => subDirty.add(entry.id));
+    field.append(sub);
+    subs.set(entry.id, sub);
+
+    if (entry.hasKey) {
+      const drop = el('button', 'u-link keys-drop', '키 지우기');
+      drop.addEventListener('click', () => {
+        saveKeys([[entry.id, '']]);
+      });
+      field.append(drop);
+    }
+
+    box.append(field);
+  }
+
+  const actions = el('div', 'notice-actions');
+  const save = el('button', 'btn btn-main', '저장');
+  save.addEventListener('click', () => {
+    const pairs: [string, string][] = [];
+    for (const [id, input] of inputs) {
+      const v = input.value.trim();
+      // 빈 칸은 "지우기"가 아니라 "안 건드림"이다. 지우기는 따로 있다.
+      if (v) pairs.push([id, v]);
+    }
+    // 구독료는 빈 칸이 곧 "지움"이다 — 키와 달리 값이 그대로 보이므로
+    // 지우려는 건지 안 건드린 건지가 눈에 보인다.
+    const money: [string, string][] = [];
+    for (const [id, input] of subs) {
+      if (subDirty.has(id)) money.push([id, input.value.trim()]);
+    }
+    saveKeys(pairs, money);
+  });
+  const close = el('button', 'btn', '닫기');
+  close.addEventListener('click', () => {
+    keysOpen = false;
+    paintUsage();
+  });
+  actions.append(save, close);
+  box.append(actions);
+
+  return box;
+}
+
+/** 저장 → 캐시가 비워지고 → 곧바로 다시 부른다. 저장했는데 옛 오류가 남아 있으면 안 된다. */
+function saveKeys(pairs: [string, string][], money: [string, string][] = []): void {
+  const msgs = [
+    ...pairs.map(([service, key]) => ({ type: 'SET_USAGE_KEY', service, key })),
+    ...money.map(([service, amount]) => ({ type: 'SET_USAGE_SUB', service, amount })),
+  ];
+  if (msgs.length === 0) {
+    keysOpen = false;
+    paintUsage();
+    return;
+  }
+  // 마지막 하나가 끝난 뒤에 다시 부른다. 중간에 부르면 캐시를 지우는 다음
+  // 저장과 겹쳐서 방금 넣은 값이 빠진 채로 화면에 뜬다.
+  let left = msgs.length;
+  const done = () => {
+    if (--left === 0) {
+      keysOpen = false;
+      loadUsage(true);
+    }
+  };
+  for (const msg of msgs) {
+    try {
+      chrome.runtime.sendMessage(msg, () => {
+        void chrome.runtime.lastError;
+        done();
+      });
+    } catch {
+      done();
+    }
+  }
+}
+
+function paintUsage(): void {
+  const root = document.getElementById('usage');
   if (!root) return;
   root.replaceChildren();
 
+  const head = el('div', 'u-head');
+  head.append(el('span', 'block-h', 'API 사용량'));
+
+  const right = el('div', 'u-head-r');
+  if (usage) {
+    const d = new Date(usage.periodStart);
+    right.append(el('span', 'u-since', `${d.getUTCMonth() + 1}월 1일부터`));
+  }
+  const reload = el('button', 'u-link', usageBusy ? '…' : '갱신');
+  reload.addEventListener('click', () => loadUsage(true));
+  const gear = el('button', 'u-link', keysOpen ? '접기' : '키');
+  gear.addEventListener('click', () => {
+    keysOpen = !keysOpen;
+    paintUsage();
+  });
+  right.append(reload, gear);
+  head.append(right);
+  root.append(head);
+
+  if (keysOpen) {
+    root.append(renderKeyForm());
+    return;
+  }
+
+  if (!usage) {
+    root.append(el('div', 'u-sub u-quiet', usageLoading ? '읽는 중…' : '사용량을 읽지 못했어요'));
+    return;
+  }
+
+  for (const entry of usage.entries) root.append(renderUsageEntry(entry));
+
+  if (usage.totalUsd) {
+    root.append(el('div', 'u-total', `이달 합계 ${usage.totalUsd}`));
+  }
+}
+
+function loadUsage(force = false): void {
+  usageBusy = force;
+  paintUsage();
+  try {
+    chrome.runtime.sendMessage({ type: 'GET_API_USAGE', force }, (snap?: UsageSnapshot | null) => {
+      usageLoading = false;
+      usageBusy = false;
+      if (chrome.runtime.lastError || !snap) {
+        paintUsage();
+        return;
+      }
+      usage = snap;
+      paintUsage();
+    });
+  } catch {
+    usageLoading = false;
+    usageBusy = false;
+    paintUsage();
+  }
+}
+
+// ── 뼈대 ────────────────────────────────────────────────────
+//
+//   ┌─────────────────────────────────┐
+//   │ #notice  (신원 경고 — 가로 전체) │
+//   ├──────────────────┬──────────────┤
+//   │ #session         │ #usage       │
+//   │ 지금 쌓이는 세션  │ API 사용량    │
+//   └──────────────────┴──────────────┘
+//
+// 칸을 **한 번만** 만들고 각자 안쪽만 갈아 끼운다. #app 을 통째로 지우면
+// 매 초(REFRESH_MS) 오른쪽 칸도 같이 날아가는데, 그러면 키를 입력하는 중에
+// 입력칸이 사라진다 — 한 글자도 못 친다.
+
+function shell(): { notice: HTMLElement; session: HTMLElement } | null {
+  const root = document.getElementById('app');
+  if (!root) return null;
+  let notice = document.getElementById('notice');
+  if (!notice) {
+    notice = el('div');
+    notice.id = 'notice';
+
+    const session = el('div');
+    session.id = 'session';
+    const usageBox = el('div', 'usage');
+    usageBox.id = 'usage';
+
+    const cols = el('div', 'cols');
+    cols.append(session, usageBox);
+    root.append(notice, cols);
+  }
+  return { notice, session: document.getElementById('session') as HTMLElement };
+}
+
+function render(snap: SessionSnapshot): void {
+  const parts = shell();
+  if (!parts) return;
+  parts.notice.replaceChildren();
+  parts.session.replaceChildren();
+
   // 세션보다 먼저다 — 신원이 갈렸으면 그 아래 숫자는 다 엉뚱한 계정 것이다.
-  renderKeyNotice(root, snap);
+  renderKeyNotice(parts.notice, snap);
 
-  if (snap.draft) renderDraft(root, snap);
-  else renderNoSession(root, snap);
+  if (snap.draft) renderDraft(parts.session, snap);
+  else renderNoSession(parts.session, snap);
 
-  renderFooter(root, snap);
+  renderFooter(parts.session, snap);
 }
 
 function renderError(): void {
-  const root = document.getElementById('app');
-  if (!root) return;
-  root.replaceChildren();
+  const parts = shell();
+  if (!parts) return;
+  parts.session.replaceChildren();
   const empty = el('div', 'empty');
   empty.append(
     el('div', 'empty-mark', '!'),
     el('div', 'empty-t', '상태를 읽지 못했어요'),
     el('div', 'empty-s', '확장을 새로고침한 직후라면 잠시 뒤 다시 열어보세요'),
   );
-  root.append(empty);
+  parts.session.append(empty);
 }
 
 function refresh(): void {
@@ -332,6 +636,9 @@ function refresh(): void {
   }
 }
 
+shell();
+paintUsage();
+loadUsage();
 refresh();
 const timer = setInterval(refresh, REFRESH_MS);
 // 팝업이 닫히면 문서째 사라지지만, 명시적으로 정리해둔다.
