@@ -482,7 +482,18 @@ export function ProcedureCard({
       }
       if (e.data.__na !== "pick-ack" || !e.data.done) return;
       cleanup();
-      if (!e.data.ok || !e.data.sel) return;
+      // **조용히 넘기지 않는다.** 예전에는 여기서 그냥 return 이라, 집었는데
+      // 셀렉터를 못 만들면 아무 말 없이 끝났다 — 눌렀는데 아무 일도 안
+      // 일어난 것처럼 보이고, 저장된 줄 알고 다시 돌리면 같은 자리에서 또
+      // 멈춘다.
+      if (!e.data.ok) {
+        setError("집기를 그만뒀어");
+        return;
+      }
+      if (!e.data.sel) {
+        setError("그 자리를 짚지 못했어. 감싸는 칸이나 옆의 이름표를 집어봐.");
+        return;
+      }
       startTransition(async () => {
         const r = await apply(e.data.sel, e.data.sample ?? "", {
           path: e.data.path ?? undefined,

@@ -113,9 +113,27 @@ export function flatten(v: unknown, prefix = '', out: Record<string, unknown> = 
   return out;
 }
 
-/** 화면에서 집은 글자에서 숫자를 뽑는다. "$1.88 / $3.00" → 1.88 */
+/**
+ * 화면에서 집은 글자에서 숫자를 뽑는다. "$1.88 / $3.00" → 1.88
+ *
+ * **날짜·시각은 숫자로 안 본다.** 실측에서 Render 로그("Aug 10 10:35:03 AM
+ * …")를 집었더니 10 이 뽑혔고, 하필 분석 스크립트 설정의 sampleRate 가
+ * 10 이라 거기 걸렸다 — 로그를 읽으려던 자리가 엉뚱한 API 를 가리키게 됐다.
+ *
+ * 날짜에서 뽑은 숫자는 그 값을 대표하지 않는다. 우연히 맞을 뿐이다.
+ */
 export function numberIn(text: string): number | null {
-  const m = text.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+  const t = text.trim();
+  // 날짜·시각으로 시작하거나 그것이 대부분인 글자.
+  if (
+    /^\s*(mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(t) ||
+    /^\s*\d{4}[-./]\d{1,2}[-./]\d{1,2}/.test(t) ||
+    /^\s*\d{1,2}:\d{2}/.test(t) ||
+    /\d{1,2}:\d{2}:\d{2}/.test(t.slice(0, 40))
+  ) {
+    return null;
+  }
+  const m = t.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
   return m ? Number(m[0]) : null;
 }
 
