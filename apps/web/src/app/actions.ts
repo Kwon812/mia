@@ -615,7 +615,7 @@ export async function repointProcedureRead(
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
 
   const [row] = await db
-    .select({ reads: procedures.reads, steps: procedures.steps })
+    .select({ reads: procedures.reads })
     .from(procedures)
     .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)))
     .limit(1);
@@ -630,17 +630,17 @@ export async function repointProcedureRead(
     sels: extra.sels ?? [],
     anchor: extra.anchor ?? '',
     label: label || reads[readIndex].label,
+    // **경로는 읽기가 들고 간다.** 예전에는 이걸 단계에 실었는데, 그건
+    // 읽는 위치지 클릭하는 위치가 아니라 홈에서 집었는데 /usage 로 가는
+    // 일이 벌어졌다. 그래서 단계에서 걷어냈는데, 읽기에도 안 남겨서
+    // 그 화면으로 옮길 방법이 사라졌다 — 페이지가 그 API 를 부르게
+    // 유발하려면 이게 있어야 한다.
+    ...(extra.path ? { path: extra.path } : {}),
   };
-
-  // 경로는 그 앞 단계에 실어준다. 읽기는 스스로 이동하지 않고 단계가
-  // 데려다 놓은 화면에서 읽으므로, 화면을 아는 쪽은 단계여야 한다.
-  const steps = (row.steps ?? []) as Record<string, unknown>[];
-  const after = Number(reads[readIndex].after ?? -1);
-  if (extra.path && steps[after]) steps[after] = { ...steps[after], path: extra.path };
 
   await db
     .update(procedures)
-    .set({ reads, steps })
+    .set({ reads })
     .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)));
 
   revalidatePath("/procedures");

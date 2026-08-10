@@ -406,12 +406,16 @@
           if (out.length && out[out.length - 1].label === r.label) continue;
         }
 
-        // 마지막 수단으로 직접 부른다. 자격이 안 맞아 실패할 수 있다.
+        // 마지막 수단으로 직접 부른다. 자격이 안 맞아 실패할 수 있다 —
+        // 크로스 오리진에서 브라우저가 Authorization 을 떼어내기 때문이다.
         const got = await refetch(r.net.url, r.net.method, r.net.body);
         if (!got.ok) {
           const why =
             got.status === 401 || got.status === 403
-              ? `인증이 만료됐어 (${got.status}). ${host} 를 한 번 열면 갱신돼.`
+              ? // 자격이 만료된 게 아니라 **애초에 못 싣는 것**이다. 사람이
+                // 할 수 있는 일은 그 화면을 한 번 보는 것 — 그러면 페이지가
+                // 부르고 우리가 엿듣는다.
+                `그 화면을 아직 안 봐서 값이 없어. ${r.path ? `${host}${r.path}` : host} 를 한 번 열면 잡혀 — 자리를 다시 집으면 경로까지 기억해.`
               : got.status === 404
                 ? `그 API 가 없어졌어 (404). 자리를 다시 집어줘.`
                 : got.status === 0
