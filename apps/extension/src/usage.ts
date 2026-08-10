@@ -296,6 +296,23 @@ export interface RenderService {
   suspended: boolean;
   /** 어느 리전인가. 메트릭을 **리전별로 나눠 불러야** 해서 필요하다 */
   region: string;
+  /** `web_service` `cron_job` 같은 것. 대역폭이 있는 종류를 가려내는 데 쓴다 */
+  type: string;
+}
+
+/**
+ * 대역폭을 물어도 되는 것만 남긴다.
+ *
+ * **하나라도 지원 안 되는 게 섞이면 요청 전체가 404 다.** 크론 잡을 같이
+ * 물었다가 `not found: crn-…` 로 그 리전 대역폭이 통째로 날아갔다 —
+ * 부분 응답이 아니라 전부 실패다.
+ *
+ * 서비스 ID 접두사로 가른다. 돌아가는 서비스는 `srv-`, 크론 잡은 `crn-`,
+ * Postgres 는 `dpg-`, Redis 는 `red-` 다. 접두사가 타입 문자열보다 안전한
+ * 이유는, 타입 이름이 늘어나도 ID 규칙은 그대로이기 때문이다.
+ */
+export function bandwidthTargets(services: RenderService[]): RenderService[] {
+  return services.filter((s) => s.id.startsWith('srv-'));
 }
 
 /**
@@ -314,7 +331,12 @@ export function parseRenderServices(json: unknown): RenderService[] {
     const detailRegion = asRecord(svc?.serviceDetails)?.region;
     const region =
       typeof detailRegion === 'string' ? detailRegion : typeof svc?.region === 'string' ? svc.region : '';
-    out.push({ id, suspended: svc?.suspended === 'suspended' || svc?.suspended === true, region });
+    out.push({
+      id,
+      suspended: svc?.suspended === 'suspended' || svc?.suspended === true,
+      region,
+      type: typeof svc?.type === 'string' ? svc.type : '',
+    });
   }
   return out;
 }
@@ -516,8 +538,11 @@ async function fetchRender(
   // 대역폭은 서비스를 지정해야 나오고, **리전별로 나눠 물어야 한다**
   // (groupByRegion 주석 참고). 리전 수만큼 요청이 늘지만 대개 한둘이고,
   // 하루 해상도면 한 달이 31 점이라 응답도 가볍다.
-  if (live.length > 0) {
-    const groups = [...groupByRegion(live.slice(0, 40))];
+  const targets = bandwidthTargets(live);
+  const skipped = live.length - targets.length;
+
+  if (targets.length > 0) {
+    const groups = [...groupByRegion(targets.slice(0, 40))];
     const results = await Promise.all(
       groups.map(async ([region, ids]) => {
         const url = new URL('https://api.render.com/v1/metrics/bandwidth');
@@ -537,13 +562,18 @@ async function fetchRender(
 
     // 한 리전이 실패해도 나머지는 살린다. 다만 **부분 합계를 전체인 척
     // 적지 않는다** — 모르는 채로 작아 보이는 숫자가 제일 나쁘다.
+    // 제외한 것이 있으면 밝힌다. 조용히 빼면 "이게 전부"로 읽힌다.
+    const note = skipped > 0 ? ` (크론·DB ${skipped}개 제외)` : '';
     if (failed.length === 0) {
-      lines.push({ k: '이달 대역폭', v: formatBytes(bytes) });
+      lines.push({ k: '이달 대역폭', v: `${formatBytes(bytes)}${note}` });
     } else if (failed.length < results.length) {
       lines.push({ k: '이달 대역폭', v: `${formatBytes(bytes)} (일부 누락 — ${failed.join(', ')})` });
     } else {
       lines.push({ k: '이달 대역폭', v: `못 읽음 — ${failed.join(', ')}` });
     }
+  } else if (skipped > 0) {
+    // 크론 잡만 있는 계정이 여기다. "0 GB" 로 적으면 안 쓴 것처럼 보인다.
+    lines.push({ k: '이달 대역폭', v: '대역폭이 있는 서비스가 없어' });
   }
 
   // 요금 API 가 없으니 큰 글씨에 적을 것도 없다 — 구독료를 적어뒀다면 그것만은

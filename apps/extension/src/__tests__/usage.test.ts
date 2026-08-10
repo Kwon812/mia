@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bandwidthTargets,
   briefBody,
   dayStartUtc,
   groupByRegion,
@@ -212,12 +213,12 @@ describe('Render 응답', () => {
 
   it('서비스 목록은 {service} 로 한 겹 싸여 온다', () => {
     const got = parseRenderServices([
-      { service: { id: 'srv-a', suspended: 'not_suspended', serviceDetails: { region: 'oregon' } }, cursor: 'c1' },
-      { service: { id: 'srv-b', suspended: 'suspended', serviceDetails: { region: 'oregon' } }, cursor: 'c2' },
+      { service: { id: 'srv-a', type: 'web_service', suspended: 'not_suspended', serviceDetails: { region: 'oregon' } }, cursor: 'c1' },
+      { service: { id: 'srv-b', type: 'web_service', suspended: 'suspended', serviceDetails: { region: 'oregon' } }, cursor: 'c2' },
     ]);
     expect(got).toEqual([
-      { id: 'srv-a', suspended: false, region: 'oregon' },
-      { id: 'srv-b', suspended: true, region: 'oregon' },
+      { id: 'srv-a', suspended: false, region: 'oregon', type: 'web_service' },
+      { id: 'srv-b', suspended: true, region: 'oregon', type: 'web_service' },
     ]);
   });
 
@@ -232,7 +233,7 @@ describe('Render 응답', () => {
   });
 
   it('싸여 있지 않은 모양도 읽는다', () => {
-    expect(parseRenderServices([{ id: 'srv-c' }])).toEqual([{ id: 'srv-c', suspended: false, region: '' }]);
+    expect(parseRenderServices([{ id: 'srv-c' }])).toEqual([{ id: 'srv-c', suspended: false, region: '', type: '' }]);
     expect(parseRenderServices(null)).toEqual([]);
   });
 
@@ -243,19 +244,34 @@ describe('Render 응답', () => {
   // 실계정(서비스 6개, 리전 2개)에서 대역폭이 통째로 안 나온 원인이었다.
   it('리전별로 갈라 묶는다 — 섞어 물으면 400 이다', () => {
     const g = groupByRegion([
-      { id: 'a', suspended: false, region: 'oregon' },
-      { id: 'b', suspended: false, region: 'singapore' },
-      { id: 'c', suspended: false, region: 'oregon' },
+      { id: 'a', suspended: false, region: 'oregon', type: 'web_service' },
+      { id: 'b', suspended: false, region: 'singapore', type: 'web_service' },
+      { id: 'c', suspended: false, region: 'oregon', type: 'web_service' },
     ]);
     expect(g.size).toBe(2);
     expect(g.get('oregon')).toEqual(['a', 'c']);
     expect(g.get('singapore')).toEqual(['b']);
   });
 
+  // ── 회귀 ──
+  //
+  // 크론 잡을 같이 물었더니 `not found: crn-…` 로 **그 리전 전체가 404** 였다.
+  // 하나라도 지원 안 되는 게 섞이면 부분 응답이 아니라 전부 실패다.
+  it('대역폭이 없는 리소스는 빼고 묻는다 — 섞이면 요청 전체가 404 다', () => {
+    const got = bandwidthTargets([
+      { id: 'srv-web1', suspended: false, region: 'oregon', type: 'web_service' },
+      { id: 'crn-d9ou0qbm8hqs739t2kpg', suspended: false, region: 'oregon', type: 'cron_job' },
+      { id: 'dpg-pg1', suspended: false, region: 'oregon', type: 'postgres' },
+      { id: 'red-r1', suspended: false, region: 'singapore', type: 'redis' },
+      { id: 'srv-web2', suspended: false, region: 'singapore', type: 'static_site' },
+    ]);
+    expect(got.map((s) => s.id)).toEqual(['srv-web1', 'srv-web2']);
+  });
+
   it('리전이 하나뿐이면 요청도 하나다', () => {
     const g = groupByRegion([
-      { id: 'a', suspended: false, region: 'oregon' },
-      { id: 'b', suspended: false, region: 'oregon' },
+      { id: 'a', suspended: false, region: 'oregon', type: 'web_service' },
+      { id: 'b', suspended: false, region: 'oregon', type: 'web_service' },
     ]);
     expect([...g.keys()]).toEqual(['oregon']);
   });
