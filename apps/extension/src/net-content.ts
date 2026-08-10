@@ -245,6 +245,45 @@
       console.log(`[NA] 엿들은 것 ${caught.length}개 · 경로 ${Object.keys(by).length}종`, by);
       return;
     }
+    // **그 페이지가 스스로 부른다.**
+    //
+    // 확장이 요청을 재구성하면 아무리 헤더를 옮겨도 페이지와 똑같아지지
+    // 않는다 — Origin·Referer·쿠키 조합이 다르고, 브라우저가 자동으로
+    // 채우는 것들이 어긋난다. 실측에서 401 과 400 이 그렇게 났다.
+    //
+    // 여기서 부르면 그 전부가 맞는다. 페이지가 자기 API 를 부르는 것과
+    // 글자 그대로 같은 일이다.
+    if (e.source === window && e.data?.__naNet === 'refetch') {
+      const { id, url, method, body, headers } = e.data as {
+        id: string;
+        url: string;
+        method?: string;
+        body?: string;
+        headers?: Record<string, string>;
+      };
+      // 원본 fetch 를 쓴다. 감싼 쪽을 부르면 이 호출까지 엿듣게 되어,
+      // 재현한 응답이 다시 후보로 쌓인다.
+      origFetch(url, {
+        method: method ?? 'GET',
+        credentials: 'include',
+        headers: { Accept: 'application/json', ...(headers ?? {}) },
+        body: body ?? undefined,
+      })
+        .then(async (r) => {
+          const text = await r.text();
+          window.postMessage(
+            { __naNet: 'refetch-ans', id, ok: r.ok, status: r.status, text: text.slice(0, MAX_BYTES) },
+            '*',
+          );
+        })
+        .catch((err) => {
+          window.postMessage(
+            { __naNet: 'refetch-ans', id, ok: false, status: 0, error: String(err?.message ?? err) },
+            '*',
+          );
+        });
+      return;
+    }
     if (e.source !== window || e.data?.__naNet !== 'ask') return;
     window.postMessage(
       {

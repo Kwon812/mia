@@ -562,6 +562,47 @@
     });
   }
 
+  /**
+   * 그 페이지가 스스로 API 를 부르게 한다.
+   *
+   * 확장이 재구성한 요청은 페이지와 똑같아지지 않는다 — 헤더를 옮겨도
+   * Origin·Referer·쿠키 조합이 어긋나 401 이나 400 이 난다. 여기서 부르면
+   * 그 전부가 맞는다.
+   */
+  function refetch(
+    url: string,
+    method?: string,
+    body?: string,
+    headers?: Record<string, string>,
+  ): Promise<{ ok: boolean; status: number; text?: string; error?: string }> {
+    return new Promise((resolve) => {
+      const id = `${Date.now()}-${Math.random()}`;
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', onAns);
+        resolve({ ok: false, status: 0, error: '응답이 없어' });
+      }, 15000);
+      const onAns = (e: MessageEvent) => {
+        if (e.source !== window || e.data?.__naNet !== 'refetch-ans' || e.data.id !== id) return;
+        clearTimeout(timer);
+        window.removeEventListener('message', onAns);
+        resolve(e.data);
+      };
+      window.addEventListener('message', onAns);
+      window.postMessage({ __naNet: 'refetch', id, url, method, body, headers }, '*');
+    });
+  }
+
+  // 서비스 워커가 "이 URL 을 네 페이지에서 불러줘" 라고 부탁한다.
+  try {
+    chrome.runtime.onMessage.addListener((msg, _s, reply) => {
+      if (msg?.type !== 'PAGE_FETCH') return;
+      void refetch(msg.url, msg.method, msg.body, msg.headers).then(reply);
+      return true;
+    });
+  } catch {
+    /* 확장 컨텍스트 무효 */
+  }
+
   // ── 요소 집기 ──────────────────────────────────────────
   //
   // "이 화면에서 뭘 확인해?" 를 사람이 클릭으로 답한다. 관측으로는 못 얻는

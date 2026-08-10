@@ -77,6 +77,65 @@ async function rememberHeaders(url: string, headers?: Record<string, string>): P
   await chrome.storage.local.set({ [HEADERS_KEY]: map });
 }
 
+/**
+ * **그 사이트의 페이지가 대신 부르게 한다.**
+ *
+ * 확장이 직접 부르면 아무리 헤더를 옮겨도 페이지와 똑같아지지 않는다 —
+ * Origin·Referer·쿠키 조합이 어긋나고, 브라우저가 자동으로 채우는 것들이
+ * 다르다. 실측에서 401 과 400 이 그렇게 났다.
+ *
+ * 탭이 있으면 그걸 쓰고, 없으면 **배경으로 하나 연다.** 배경 탭도 fetch 는
+ * 정상이라(렌더링만 억제된다) 화면을 안 뺏는다. 우리가 연 탭은 다 쓰고 닫는다.
+ */
+async function fetchViaPage(
+  url: string,
+  method?: string,
+  body?: string,
+  headers?: Record<string, string>,
+): Promise<{ ok: boolean; status: number; text?: string; error?: string } | null> {
+  let host = '';
+  try {
+    host = new URL(url).host;
+  } catch {
+    return null;
+  }
+
+  const tabs = await chrome.tabs.query({});
+  const hit = tabs.find((t) => {
+    try {
+      return t.url ? new URL(t.url).host === host : false;
+    } catch {
+      return false;
+    }
+  });
+
+  let tabId = hit?.id;
+  let opened = false;
+  if (tabId == null) {
+    const tab = await chrome.tabs.create({ url: `https://${host}/`, active: false });
+    tabId = tab.id;
+    opened = true;
+    // content script 가 자리 잡을 틈을 준다. 이보다 이르면 리스너가 없다.
+    await new Promise((r) => setTimeout(r, 2500));
+  }
+  if (tabId == null) return null;
+
+  try {
+    return await chrome.tabs.sendMessage(tabId, {
+      type: 'PAGE_FETCH',
+      url,
+      method,
+      body,
+      headers,
+    });
+  } catch {
+    return null;
+  } finally {
+    // 우리가 연 것만 닫는다. 사람이 보던 탭을 닫으면 안 된다.
+    if (opened && tabId != null) void chrome.tabs.remove(tabId).catch(() => undefined);
+  }
+}
+
 async function headersFor(url: string): Promise<Record<string, string>> {
   const got = await chrome.storage.local.get(HEADERS_KEY);
   const map = (got[HEADERS_KEY] ?? {}) as Record<string, Record<string, string>>;
@@ -1240,19 +1299,31 @@ async function announce(run: RunState): Promise<void> {
     void (async () => {
       try {
         const url = String(message.url ?? '');
-        // 엿들을 때 본 자격을 그대로 붙인다. 쿠키만으로 되는 곳도 있지만
-        // 세션 토큰을 헤더로 보내는 곳이 많다 — 그때는 이게 없으면 401 이다.
+        const method = String(message.method ?? 'GET');
+        const body = message.body ? String(message.body) : undefined;
         const saved = await headersFor(url);
-        const res = await fetch(url, {
-          method: String(message.method ?? 'GET'),
-          credentials: 'include',
-          headers: {
-            Accept: 'application/json',
-            ...(message.body ? { 'Content-Type': 'application/json' } : {}),
-            ...saved,
-          },
-          body: message.body ? String(message.body) : undefined,
-        });
+
+        // **그 페이지가 부르게 한다.** 확장이 재구성한 요청은 페이지와
+        // 똑같아지지 않는다. 페이지에서 부르면 자격이 저절로 맞는다.
+        const viaPage = await fetchViaPage(url, method, body, saved);
+        const res = viaPage
+          ? ({
+              ok: viaPage.ok,
+              status: viaPage.status,
+              json: async () => JSON.parse(viaPage.text ?? '{}'),
+            } as { ok: boolean; status: number; json: () => Promise<unknown> })
+          : // 페이지를 못 쓰면 직접 부른다. 자격이 덜 맞아 실패할 수 있지만
+            // 아예 안 해보는 것보다 낫다.
+            await fetch(url, {
+              method,
+              credentials: 'include',
+              headers: {
+                Accept: 'application/json',
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
+                ...saved,
+              },
+              body,
+            });
         // 안내에는 **사람이 들어가는 사이트**를 적는다. API 호스트를 적으면
         // (api.openai.com 처럼) 거기 들어가 봐야 아무것도 없다.
         const site = String(message.site ?? '') || headerKeyOf(url).split('/')[0];
@@ -1265,12 +1336,13 @@ async function announce(run: RunState): Promise<void> {
         }
 
         const path = String(message.path ?? '');
-        const body = await res.json();
-        const v = readPath(body, path);
+        const payload = await res.json();
+        const v = readPath(payload, path);
         if (v === undefined || v === null) {
           // 응답은 왔는데 그 자리가 없다. 모양이 바뀐 것이다 — 목록이 줄어
           // 그 번째가 사라졌거나, 필드 이름이 달라졌거나.
-          const shrank = /\[\d+\]/.test(path) && Array.isArray((body as { data?: unknown })?.data);
+          const shrank =
+            /\[\d+\]/.test(path) && Array.isArray((payload as { data?: unknown })?.data);
           return sendResponse({
             ok: false,
             error: shrank
