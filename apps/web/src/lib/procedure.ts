@@ -151,14 +151,7 @@ export type Candidate = {
  * n-gram 을 해시로 센다. 세션 쌍마다 LCS 를 돌리면 1년 1,460세션에 쌍이
  * 100만 개라 못 돌린다. 조각을 버킷에 담으면 전체 조작 수에 선형이다.
  */
-export function findProcedures(
-  sessions: ProcSession[],
-  minRuns = MIN_RUNS,
-  /** 이보다 긴 열은 안 만든다. 한 번뿐인 것을 훑을 때는 짧게 잘라야 한다 —
-   *  극대만 남기는 규칙 탓에, 상한까지 길게 만들면 그 길이짜리만 살아남고
-   *  정작 읽을 만한 짧은 열이 전부 그 안에 먹힌다. */
-  maxLen = MAX_LEN,
-): Candidate[] {
+export function findProcedures(sessions: ProcSession[]): Candidate[] {
   type Bucket = {
     steps: Step[];
     sessions: Set<string>;
@@ -173,7 +166,7 @@ export function findProcedures(
     if (steps.length < MIN_LEN) continue;
 
     for (let i = 0; i < steps.length; i++) {
-      for (let k = MIN_LEN; k <= maxLen && i + k <= steps.length; k++) {
+      for (let k = MIN_LEN; k <= MAX_LEN && i + k <= steps.length; k++) {
         const run = steps.slice(i, i + k);
         // 긴 공백을 건너뛰는 조각은 절차가 아니다 — 그 사이에 다른 일을 했다.
         // 첫 단계의 dt 는 "이 절차를 시작하기까지"라 여기 안 든다.
@@ -200,7 +193,7 @@ export function findProcedures(
     }
   }
 
-  const survived = [...buckets.entries()].filter(([, b]) => b.sessions.size >= minRuns);
+  const survived = [...buckets.entries()].filter(([, b]) => b.sessions.size >= MIN_RUNS);
 
   // 긴 것이 살아남으면 그 안에 든 짧은 것은 버린다. 「테이블 → 필터」와
   // 「테이블 → 필터 → 내보내기」가 둘 다 뜨면 사람이 같은 것을 두 번 본다.
@@ -238,102 +231,6 @@ export function findProcedures(
   }
 
   return out.sort((a, b) => b.score - a.score);
-}
-
-/**
- * 무엇이 쌓이고 있나.
- *
- * 후보가 0개일 때 "없다" 만 말하면 사람은 이게 도는 중인지 고장인지 모른다.
- * 한 번만 나온 열을 보여주면 **한 번 더 하면 절차가 된다**가 눈에 들어오고,
- * 무엇이 걸러졌는지 보이면 문턱이 맞는지도 스스로 판단할 수 있다.
- */
-export type Digest = {
-  sessions: number;
-  /** 조작이 있는 세션. 나머지는 관측 계층을 붙이기 전 것이다. */
-  withActs: number;
-  acts: number;
-  /** 어디서 얼마나 — 무엇을 주로 하는지가 여기 드러난다. */
-  byDomain: { domain: string; n: number }[];
-  /** 아직 한 번뿐인 열. 되풀이하면 후보가 된다. */
-  once: Candidate[];
-  /** 오가기만 하고 아무것도 안 바꾼 것 */
-  oscillations: number;
-  /** 세션마다 무엇을 했나 — 도메인이 바뀌는 자리로 끊어 읽는다. */
-  flows: { at: Date; legs: { domain: string; n: number; sample: string }[] }[];
-};
-
-/** 한 세션의 흐름 — 도메인이 바뀔 때마다 한 토막. */
-function flowOf(steps: Step[]): { domain: string; n: number; sample: string }[] {
-  const legs: { domain: string; n: number; sample: string }[] = [];
-  for (const s of steps) {
-    const last = legs[legs.length - 1];
-    if (last && last.domain === s.domain) {
-      last.n += 1;
-      continue;
-    }
-    legs.push({ domain: s.domain, n: 1, sample: (s.label ?? s.sel ?? s.tag).slice(0, 36) });
-  }
-  return legs;
-}
-
-export function digest(sessions: ProcSession[], found: Candidate[]): Digest {
-  const byDomain = new Map<string, number>();
-  let acts = 0;
-  let withActs = 0;
-  for (const s of sessions) {
-    const st = stepsOf(s.compressedLog);
-    if (st.length > 0) withActs += 1;
-    acts += st.length;
-    for (const x of st) byDomain.set(x.domain, (byDomain.get(x.domain) ?? 0) + 1);
-  }
-
-  // 한 번만 나온 열. 문턱을 1 로 낮춰 다시 찾고, 이미 후보가 된 것은 뺀다.
-  const known = new Set(found.map((c) => c.signature));
-  // **짧게 잘라 찾는다.** 상한까지 길게 만들면 극대만 남기는 규칙 탓에
-  // 열 단계짜리 덩어리만 살아남는다 — 사람이 읽고 "아 저거" 할 크기가 아니고,
-  // 되풀이될 만한 것은 대개 짧다.
-  const all1 = findProcedures(sessions, 1, 4);
-  const cands = all1
-    .filter((c) => !known.has(c.signature) && !looksLikeOscillation(c))
-    // 같은 곳을 되풀이해 누른 것은 절차가 아니라 손버릇이다.
-    .filter((c) => new Set(c.steps.map((s) => s.key)).size >= 3)
-    .sort((a, b) => b.score - a.score);
-
-  // **겹치는 것을 합친다.** 한 번뿐인 열은 같은 자리의 슬라이딩 조각이
-  // 수십 개씩 나온다 — 실측에서 열 개가 전부 같은 구간의 다른 창이었다.
-  // 사람에게는 하나만 보여주면 된다.
-  const once: Candidate[] = [];
-  const taken: Set<string>[] = [];
-  for (const c of cands) {
-    if (once.length >= 5) break;
-    const keys = new Set(c.steps.map((s) => s.key));
-    const overlaps = taken.some((t) => {
-      let hit = 0;
-      for (const k of keys) if (t.has(k)) hit += 1;
-      return hit / keys.size > 0.4;
-    });
-    if (overlaps) continue;
-    taken.push(keys);
-    once.push(c);
-  }
-
-  return {
-    sessions: sessions.length,
-    withActs,
-    acts,
-    byDomain: [...byDomain.entries()]
-      .map(([domain, n]) => ({ domain, n }))
-      .sort((a, b) => b.n - a.n)
-      .slice(0, 8),
-    once,
-    oscillations: findProcedures(sessions, 1).filter(looksLikeOscillation).length,
-    // 무엇을 했나. 절차가 아직 안 잡혀도 관측이 도는 것은 여기서 보인다.
-    flows: sessions
-      .map((s) => ({ at: s.startedAt, steps: stepsOf(s.compressedLog) }))
-      .filter((x) => x.steps.length > 0)
-      .slice(0, 5)
-      .map((x) => ({ at: x.at, legs: flowOf(x.steps).slice(0, 10) })),
-  };
 }
 
 /**
