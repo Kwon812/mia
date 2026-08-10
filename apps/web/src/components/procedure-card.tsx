@@ -26,7 +26,7 @@ type RunState = {
   doneAt?: number;
   /** 읽어낸 값들. 절차가 끝나면 이게 결과다 — 네 군데를 열어보는 대신
    *  한 화면에 모이는 것이 이 자동화의 값어치 대부분이다. */
-  results?: { label: string; value: string }[];
+  results?: { label: string; value: string; wrong?: string }[];
 } | null;
 
 /** 어느 단계 뒤에 무엇을 확인하는가. 관측에서 안 나온다 — 클릭은 기록돼도
@@ -40,6 +40,22 @@ type Read = {
   anchor?: string;
   label: string;
   path?: string;
+  /** API 로 읽는 자리. 있으면 실행할 때 화면을 안 연다 — 셀렉터도 렌더링
+   *  타이밍도 상관없다. 집을 때 값이 응답 어디 있는지 찾아 여기 적어둔다. */
+  api?: { service: string; probe: string; path: string };
+  /** **엿들어 알아낸 요청.** 그 화면이 스스로 부른 API 라, 엔드포인트를
+   *  미리 알 필요도 키를 받을 필요도 없다 — 세션 쿠키로 그대로 다시 부른다. */
+  net?: { url: string; method: string; body?: string; path: string };
+};
+
+/** 그 화면이 아는 서비스인가. 확장이 알려준다. */
+type ApiInfo = {
+  known: boolean;
+  service?: string;
+  label?: string;
+  keyHint?: string;
+  keyUrl?: string;
+  hasKey?: boolean;
 };
 
 type Answer = {
@@ -122,6 +138,105 @@ export function ProcedureCard({
   const [picking, setPicking] = useState<number | null>(null);
   /** 진행 중인 집기를 접는 손잡이. 결과가 안 돌아와도 잠기지 않게 한다. */
   const [cancelPick, setCancelPick] = useState<() => void>(() => () => {});
+  /** 단계별로 그 화면이 아는 서비스인지. 키 입력란을 그릴지 정한다. */
+  const [apiInfo, setApiInfo] = useState<Record<number, ApiInfo>>({});
+  /** 절차를 만들 때 넣는 키. **로컬에만 간다** — 서버로 안 보낸다. */
+  const [keys, setKeys] = useState<Record<string, string>>({});
+  /** 집은 값이 API 에 있나. 집는 그 자리에서 갈린다. */
+  const [matching, setMatching] = useState<number | null>(null);
+  const [matchNote, setMatchNote] = useState<Record<number, string>>({});
+
+  // 이름 짓기를 펼치면 각 화면이 아는 서비스인지 물어본다.
+  useEffect(() => {
+    if (!naming) return;
+    const onMsg = (e: MessageEvent) => {
+      if (e.source !== window || e.data?.__na !== "api-info-ack") return;
+      setApiInfo((v) => ({ ...v, [e.data.slot]: e.data as ApiInfo }));
+    };
+    window.addEventListener("message", onMsg);
+    c.steps.forEach((s, i) =>
+      window.postMessage({ __na: "api-info", slot: i, domain: s.domain }, "*"),
+    );
+    return () => window.removeEventListener("message", onMsg);
+  }, [naming, c.steps]);
+
+  /**
+   * 집은 값이 API 응답 어디에 있는지 찾는다.
+   *
+   * 찾으면 그 자리는 화면을 안 보고 API 로 읽는다 — 셀렉터가 깨질 일도,
+   * 탭이 뜰 일도 없다. 못 찾으면 그 자리에서 말한다: 이 값은 화면에만
+   * 있다고. 돌려보고 나서 아는 게 아니다.
+   */
+  /**
+   * 엿들은 응답에서 집은 값을 찾는다.
+   *
+   * 확장이 그 화면의 API 호출을 이미 잡아뒀다. 집은 값이 그 안에 있으면
+   * 그 자리는 화면을 안 보고 그 요청을 다시 불러 읽는다 — 셀렉터도, 탭도,
+   * 렌더링 타이밍도 상관없어진다.
+   */
+  function askNet(slot: number) {
+    setMatching(slot);
+    const onMsg = (e: MessageEvent) => {
+      if (e.source !== window || e.data?.__na !== "net-match-ack" || e.data.slot !== slot) return;
+      window.removeEventListener("message", onMsg);
+      setMatching(null);
+      const hit = e.data.ok ? e.data.hits?.[0] : null;
+      if (!hit) {
+        setMatchNote((v) => ({
+          ...v,
+          [slot]: "이 값은 화면에만 있어 — 화면에서 읽을게",
+        }));
+        return;
+      }
+      setReads((v) =>
+        v.map((r) =>
+          r.after === slot
+            ? {
+                ...r,
+                net: { url: hit.url, method: hit.method, body: hit.body, path: hit.path },
+              }
+            : r,
+        ),
+      );
+      // 어디서 가져오는지 보여준다. 긴 URL 은 경로만 — 어느 API 인지만 알면 된다.
+      let where = hit.url;
+      try {
+        where = new URL(hit.url).pathname;
+      } catch {
+        /* 그대로 둔다 */
+      }
+      setMatchNote((v) => ({ ...v, [slot]: `API 로 가져와 — ${where} · ${hit.path}` }));
+    };
+    window.addEventListener("message", onMsg);
+    window.postMessage({ __na: "net-match", slot }, "*");
+  }
+
+  function tryApi(slot: number, domain: string, picked: string) {
+    const info = apiInfo[slot];
+    const key = info?.service ? keys[info.service] : "";
+    if (!info?.known) return;
+    setMatching(slot);
+    const onMsg = (e: MessageEvent) => {
+      if (e.source !== window || e.data?.__na !== "api-match-ack" || e.data.slot !== slot) return;
+      window.removeEventListener("message", onMsg);
+      setMatching(null);
+      if (!e.data.ok || !e.data.matches?.length) {
+        setMatchNote((v) => ({ ...v, [slot]: e.data.error ?? "응답에서 그 값을 못 찾았어" }));
+        return;
+      }
+      const m = e.data.matches[0];
+      setReads((v) =>
+        v.map((r) =>
+          r.after === slot
+            ? { ...r, api: { service: e.data.service, probe: m.probe, path: m.path } }
+            : r,
+        ),
+      );
+      setMatchNote((v) => ({ ...v, [slot]: `API 로 가져올 수 있어 — ${m.path}` }));
+    };
+    window.addEventListener("message", onMsg);
+    window.postMessage({ __na: "api-match", slot, domain, key, picked }, "*");
+  }
 
   // 확장이 어디까지 갔는지 물어본다. 절차가 도는 동안 화면이 조용하면
   // 멈춘 건지 도는 건지 알 수 없다.
@@ -202,6 +317,12 @@ export function ProcedureCard({
           label: e.data.sample || `${domain} 값`,
           path: e.data.path,
         },
+      ]);
+      // 집자마자 **엿들은 것에서 먼저 찾는다.** 그 화면이 스스로 부른 API 라
+      // 엔드포인트를 몰라도 되고 키도 안 받는다. 없으면 그때 등록된 서비스를
+      // 두드려보고, 그것도 없으면 화면에서 읽는다.
+      askNet(after);
+      void ([] as unknown[]).push(...[
       ]);
     };
 
@@ -502,9 +623,20 @@ export function ProcedureCard({
           {live?.results && live.results.length > 0 && (
             <div className="mt-2 flex flex-col gap-0.5 border-l border-[rgba(99,230,210,0.3)] pl-3">
               {live.results.map((r, i) => (
-                <div key={i} className="flex items-baseline gap-2 text-[12.5px]">
-                  <span className="readout shrink-0 text-lum-4">{r.label}</span>
-                  <span className="min-w-0 flex-1 truncate text-lum-0">{r.value}</span>
+                <div key={i} className="flex flex-col">
+                  <div className="flex items-baseline gap-2 text-[12.5px]">
+                    <span className="readout shrink-0 text-lum-4">{r.label}</span>
+                    <span
+                      className={`min-w-0 flex-1 truncate ${r.wrong ? "text-lum-3" : "text-lum-0"}`}
+                    >
+                      {r.value}
+                    </span>
+                  </div>
+                  {/* **왜 안 됐는지 적는다.** 로그인이 풀린 것과 자리가 바뀐
+                      것과 요청이 잦아 막힌 것은 다음에 할 일이 전부 다르다. */}
+                  {r.wrong && (
+                    <span className="readout pl-2 text-[11px] text-[#e0a0a0]">{r.wrong}</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -516,10 +648,41 @@ export function ProcedureCard({
               기록되지 않는다. 짚어주면 절차가 상태를 모아 오고, 안 짚으면
               이동만 자동화된다(네 군데를 열어주고 보는 건 여전히 사람이 한다). */}
           <div className="tick">여기서 뭘 확인해? (안 짚으면 이동만 한다)</div>
+          {/* 아는 서비스면 키를 여기서 받는다. 미리 설정 화면에서 받아두지
+              않는 이유 — 그러면 쓰지도 않을 키를 먼저 요구하게 된다.
+              **키는 이 브라우저를 안 떠난다.** 서버에는 어느 서비스의 어느
+              필드인지만 남는다. */}
+          {[...new Set(c.steps.map((s, i) => (apiInfo[i]?.known ? i : -1)).filter((i) => i >= 0))]
+            .map((i) => apiInfo[i])
+            .filter((info, idx, arr) => arr.findIndex((x) => x?.service === info?.service) === idx)
+            .map((info) => (
+              <div key={info!.service} className="flex flex-wrap items-center gap-2 text-[12px]">
+                <span className="readout shrink-0 text-lum-3">{info!.label} 키</span>
+                <input
+                  type="password"
+                  value={keys[info!.service!] ?? ""}
+                  onChange={(e) =>
+                    setKeys((v) => ({ ...v, [info!.service!]: e.target.value }))
+                  }
+                  placeholder={info!.hasKey ? "이미 넣어둔 키가 있어" : info!.keyHint}
+                  className="readout min-w-0 flex-1 rounded-sm border border-[rgba(160,185,220,0.16)] bg-transparent px-2 py-1 text-[12.5px] text-lum-0 outline-none placeholder:text-lum-4 focus:border-[rgba(160,185,220,0.4)]"
+                />
+                <a
+                  href={info!.keyUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="readout shrink-0 text-lum-4 transition-colors hover:text-lum-2"
+                >
+                  발급받기
+                </a>
+              </div>
+            ))}
           {c.steps.map((s, i) => {
             const got = reads.find((r) => r.after === i);
             return (
-              <div key={`pick-${i}`} className="flex items-baseline gap-2 text-[12px]">
+              // 한 단계가 두 줄이다 — 집은 자리와, 그것을 어디서 읽는지.
+              <div key={`pick-${i}`} className="flex flex-col">
+                <div className="flex items-baseline gap-2 text-[12px]">
                 <span className="readout w-4 shrink-0 text-right text-lum-4">{i + 1}</span>
                 <span className="readout w-32 shrink-0 truncate text-lum-4">{s.domain}</span>
                 {got ? (
@@ -529,8 +692,24 @@ export function ProcedureCard({
                         범벅이면 화면이 조금만 바뀌어도 깨진다는 뜻이다. */}
                     <span className="min-w-0 flex-1 truncate text-lum-1" title={got.sel}>
                       {got.label}
-                      <span className="ml-2 text-[11px] text-lum-4">{got.sel}</span>
+                      {/* API 로 읽는 자리는 화면을 안 본다. 그게 보여야
+                          이 절차가 탭을 열지 안 열지 미리 안다. */}
+                      {got.net || got.api ? (
+                        <span className="ml-2 text-[11px] text-[#63e6d2]">API</span>
+                      ) : (
+                        <span className="ml-2 text-[11px] text-lum-4">화면</span>
+                      )}
                     </span>
+                    {apiInfo[i]?.known && !got.api && !got.net && (
+                      <button
+                        type="button"
+                        disabled={matching !== null}
+                        onClick={() => tryApi(i, s.domain, got.label)}
+                        className="readout shrink-0 text-lum-3 transition-colors hover:text-lum-0 disabled:opacity-40"
+                      >
+                        {matching === i ? "찾는 중…" : "API 로"}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setReads((v) => v.filter((r) => r.after !== i))}
@@ -558,6 +737,20 @@ export function ProcedureCard({
                   >
                     집기
                   </button>
+                )}
+                </div>
+                {/* **집는 그 자리에서 갈린다.** API 로 가져올 수 있는지,
+                    화면에서만 보이는 값인지 — 돌려보고 나서 아는 게 아니다.
+                    API 로 가져오는 자리는 실행할 때 탭이 안 뜨고, 셀렉터가
+                    깨질 일도 없다. */}
+                {(matching === i || matchNote[i]) && (
+                  <div
+                    className={`readout truncate pl-6 text-[11px] ${
+                      matchNote[i]?.startsWith("API") ? "text-[#63e6d2]" : "text-lum-4"
+                    }`}
+                  >
+                    {matching === i ? "API 에 있나 보는 중…" : matchNote[i]}
+                  </div>
                 )}
               </div>
             );

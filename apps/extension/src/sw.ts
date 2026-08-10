@@ -22,7 +22,111 @@ import {
   stepFor,
   type RunState,
 } from './session/runner';
+import {
+  API_SERVICES,
+  findValue,
+  flatten,
+  readPath,
+  serviceFor,
+  urlFor,
+  type Match,
+} from './session/api-registry';
 import type { SessionDraft, SessionPayloadLike } from './session';
+
+// ── API 키 ─────────────────────────────────────────────────
+//
+// **로컬에만 둔다.** 서버로 안 보낸다 — 사이트 DB 에 남는 것은 "어느
+// 서비스의 어느 필드"뿐이고 키는 이 브라우저를 안 떠난다.
+//
+// 절차를 만들 때 넣는다. 미리 설정 화면에서 받아두지 않는 이유는, 그러면
+// 쓰지도 않을 키를 먼저 요구하게 되기 때문이다 — 필요한 자리에서 필요한
+// 것만 받는다.
+const KEYS_KEY = 'na_api_keys';
+/** 방금 집은 값이 어느 API 어느 필드였나. 집기와 사이트 응답 사이의 짧은 자리. */
+const NET_KEY = 'na_net_hit';
+
+/**
+ * 왜 못 가져왔는지 사람 말로 옮긴다.
+ *
+ * "실패했어" 는 아무 것도 안 알려준다. 로그인이 풀린 것과 API 가 없어진 것과
+ * 요청이 잦아서 막힌 것은 **다음에 할 일이 전부 다르다** — 하나는 그 사이트에
+ * 다시 들어가면 되고, 하나는 자리를 다시 집어야 하고, 하나는 그냥 기다리면 된다.
+ */
+function reasonOf(status: number, label: string): string {
+  if (status === 401 || status === 403)
+    return `로그인이 풀렸어 (${status}). ${label} 에 다시 들어갔다 오면 돼.`;
+  if (status === 404)
+    return `그 API 가 없어졌어 (404). 화면이 바뀐 것 같아 — 자리를 다시 집어줘.`;
+  if (status === 429) return `요청이 너무 잦대 (429). 잠깐 뒤에 다시 해봐.`;
+  if (status === 408 || status === 504) return `응답이 늦어 끊겼어 (${status}).`;
+  if (status >= 500) return `${label} 쪽 문제야 (${status}). 잠시 뒤에 다시 해봐.`;
+  if (status === 400 || status === 422)
+    return `요청을 못 알아들었대 (${status}). API 가 바뀐 것 같아.`;
+  return `${label} 이 ${status} 로 답했어.`;
+}
+
+/** 네트워크 자체가 안 됐을 때. 이건 상태 코드도 없다. */
+function netReasonOf(err: unknown): string {
+  const m = err instanceof Error ? err.message : String(err);
+  if (/failed to fetch|networkerror|load failed/i.test(m))
+    return '연결이 안 됐어. 인터넷이 끊겼거나 그 주소가 막혔어.';
+  if (/abort/i.test(m)) return '요청이 중간에 끊겼어.';
+  return `부르다 실패했어 — ${m}`;
+}
+
+async function getKey(serviceId: string): Promise<string | null> {
+  const got = await chrome.storage.local.get(KEYS_KEY);
+  const map = (got[KEYS_KEY] ?? {}) as Record<string, string>;
+  return map[serviceId] ?? null;
+}
+
+async function setKey(serviceId: string, key: string): Promise<void> {
+  const got = await chrome.storage.local.get(KEYS_KEY);
+  const map = (got[KEYS_KEY] ?? {}) as Record<string, string>;
+  if (key) map[serviceId] = key;
+  else delete map[serviceId];
+  await chrome.storage.local.set({ [KEYS_KEY]: map });
+}
+
+/**
+ * 그 서비스의 API 를 두드려 집은 값을 찾는다.
+ *
+ * 서비스 워커에서 부르는 것이 중요하다 — host_permissions 덕에 CORS 를
+ * 안 타므로, 사이트 페이지에서는 못 하는 호출이 여기서는 된다.
+ */
+async function probeApi(
+  serviceId: string,
+  key: string,
+  picked: string,
+): Promise<{ ok: boolean; matches?: Match[]; error?: string }> {
+  const svc = API_SERVICES[serviceId];
+  if (!svc) return { ok: false, error: '모르는 서비스야' };
+
+  let lastError = '';
+  const all: Match[] = [];
+  for (const probe of svc.probes) {
+    try {
+      const res = await fetch(urlFor(svc, probe, Date.now()), {
+        headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        // 401·403 은 키 문제라 다른 probe 를 더 두드릴 이유가 없다.
+        lastError =
+          res.status === 401 || res.status === 403
+            ? '키가 안 맞아. 권한을 확인해줘.'
+            : `${svc.label} 이 ${res.status} 로 답했어`;
+        if (res.status === 401 || res.status === 403) break;
+        continue;
+      }
+      const body = await res.json();
+      all.push(...findValue(flatten(body), picked, probe.path));
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : '호출이 실패했어';
+    }
+  }
+  if (all.length > 0) return { ok: true, matches: all.slice(0, 5) };
+  return { ok: false, error: lastError || '응답에서 그 값을 못 찾았어' };
+}
 
 // ── 집기 상태 ──────────────────────────────────────────
 //
@@ -998,6 +1102,161 @@ async function announce(run: RunState): Promise<void> {
       if (tabId > 0) await chrome.tabs.remove(tabId).catch(() => undefined);
       sendResponse({ ok: true });
     });
+    return true;
+  }
+
+  // 페이지가 부른 API 들이 도착했다. 집은 값이 그 안 어디에 있는지 찾아
+  // 저장해둔다 — 사이트가 이어서 물어본다.
+  //
+  // **엔드포인트를 미리 몰라도 된다.** 사람이 그 화면을 본 순간 페이지가
+  // 이미 자기 API 를 불렀고, 우리는 그 사본을 들고 있다.
+  if (message?.type === 'NET_CAUGHT') {
+    const caught = (Array.isArray(message.caught) ? message.caught : []) as {
+      url: string;
+      method: string;
+      body?: string;
+      json: unknown;
+    }[];
+    const picked = String(message.picked ?? '');
+    const hits: (Match & { url: string; method: string; body?: string })[] = [];
+    for (const c of caught) {
+      for (const m of findValue(flatten(c.json), picked, c.url)) {
+        hits.push({ ...m, url: c.url, method: c.method, body: c.body });
+      }
+    }
+    // 경로가 짧을수록 바깥쪽이라 안정적이다. 숫자 일치가 글자 일치보다 믿을 만하다.
+    hits.sort((a, b) => (a.how === b.how ? a.path.length - b.path.length : a.how === 'number' ? -1 : 1));
+    void chrome.storage.local.set({ [NET_KEY]: { at: Date.now(), hits: hits.slice(0, 5) } });
+    sendResponse({ ok: true, found: hits.length });
+    return true;
+  }
+
+  // 사이트가 "방금 집은 값, API 로 가져올 수 있어?" 하고 묻는다.
+  if (message?.type === 'NET_MATCH') {
+    void chrome.storage.local.get(NET_KEY).then((got) => {
+      const box = got[NET_KEY] as { at: number; hits: unknown[] } | undefined;
+      // 오래된 것은 다른 집기의 결과다. 그걸 주면 엉뚱한 API 를 매단다.
+      if (!box || Date.now() - box.at > 60_000 || box.hits.length === 0) {
+        return sendResponse({ ok: false });
+      }
+      sendResponse({ ok: true, hits: box.hits });
+    });
+    return true;
+  }
+
+  // 엿들어 알아낸 요청을 **그대로 다시 부른다.**
+  //
+  // 세션 쿠키를 그대로 쓴다(credentials: 'include'). 페이지가 그 쿠키로
+  // 불렀으니 우리도 같은 자격으로 부를 수 있다 — API 키를 따로 안 받아도
+  // 되는 이유가 이것이다.
+  if (message?.type === 'NET_READ') {
+    void (async () => {
+      try {
+        const res = await fetch(String(message.url ?? ''), {
+          method: String(message.method ?? 'GET'),
+          credentials: 'include',
+          headers: message.body ? { 'Content-Type': 'application/json' } : undefined,
+          body: message.body ? String(message.body) : undefined,
+        });
+        let host = '그 사이트';
+        try {
+          host = new URL(String(message.url ?? '')).host;
+        } catch {
+          /* 그대로 둔다 */
+        }
+        if (!res.ok) return sendResponse({ ok: false, error: reasonOf(res.status, host) });
+
+        const path = String(message.path ?? '');
+        const body = await res.json();
+        const v = readPath(body, path);
+        if (v === undefined || v === null) {
+          // 응답은 왔는데 그 자리가 없다. 모양이 바뀐 것이다 — 목록이 줄어
+          // 그 번째가 사라졌거나, 필드 이름이 달라졌거나.
+          const shrank = /\[\d+\]/.test(path) && Array.isArray((body as { data?: unknown })?.data);
+          return sendResponse({
+            ok: false,
+            error: shrank
+              ? `목록이 줄어서 그 자리가 없어졌어 (${path}). 다시 집어줘.`
+              : `응답 모양이 바뀌었어 — ${path} 가 없어. 다시 집어줘.`,
+          });
+        }
+        sendResponse({ ok: true, value: String(v) });
+      } catch (err) {
+        sendResponse({ ok: false, error: netReasonOf(err) });
+      }
+    })();
+    return true;
+  }
+
+  // 절차를 만들 때 넣은 키를 받아둔다. 로컬에만 남는다.
+  if (message?.type === 'SET_API_KEY') {
+    void setKey(String(message.service ?? ''), String(message.key ?? '')).then(() =>
+      sendResponse({ ok: true }),
+    );
+    return true;
+  }
+
+  // 이 화면이 아는 서비스인가, 키는 이미 있나. 사이트가 입력란을 그릴지
+  // 정하는 데 쓴다.
+  if (message?.type === 'API_INFO') {
+    const found = serviceFor(String(message.domain ?? ''));
+    if (!found) {
+      sendResponse({ known: false });
+      return true;
+    }
+    void getKey(found.id).then((k) =>
+      sendResponse({
+        known: true,
+        service: found.id,
+        label: found.svc.label,
+        keyHint: found.svc.keyHint,
+        keyUrl: found.svc.keyUrl,
+        hasKey: !!k,
+      }),
+    );
+    return true;
+  }
+
+  // **집은 값이 API 에 있나.** 여기서 판정이 끝난다 — 나중에 돌려보고
+  // 알게 되는 것이 아니라, 집는 그 자리에서 된다/안 된다가 갈린다.
+  if (message?.type === 'API_MATCH') {
+    const found = serviceFor(String(message.domain ?? ''));
+    if (!found) {
+      sendResponse({ ok: false, error: '이 사이트는 API 를 몰라' });
+      return true;
+    }
+    void (async () => {
+      const key = String(message.key ?? '') || (await getKey(found.id));
+      if (!key) return sendResponse({ ok: false, error: '키가 필요해' });
+      await setKey(found.id, key);
+      sendResponse({ service: found.id, ...(await probeApi(found.id, key, String(message.picked ?? ''))) });
+    })();
+    return true;
+  }
+
+  // 저장해둔 경로로 값을 읽는다. **탭을 안 연다** — 배경에서 호출 한 번이다.
+  if (message?.type === 'API_READ') {
+    void (async () => {
+      const serviceId = String(message.service ?? '');
+      const svc = API_SERVICES[serviceId];
+      const key = await getKey(serviceId);
+      if (!svc || !key) return sendResponse({ ok: false, error: '키가 없어' });
+      const probe = svc.probes.find((p) => p.path === message.probe) ?? svc.probes[0];
+      try {
+        const res = await fetch(urlFor(svc, probe, Date.now()), {
+          headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
+        });
+        if (!res.ok) return sendResponse({ ok: false, error: reasonOf(res.status, svc.label) });
+        const v = readPath(await res.json(), String(message.path ?? ''));
+        sendResponse(
+          v === undefined || v === null
+            ? { ok: false, error: `응답 모양이 바뀌었어 — ${message.path} 가 없어. 다시 집어줘.` }
+            : { ok: true, value: String(v) },
+        );
+      } catch (err) {
+        sendResponse({ ok: false, error: netReasonOf(err) });
+      }
+    })();
     return true;
   }
 

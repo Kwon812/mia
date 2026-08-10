@@ -1,0 +1,141 @@
+// ============================================================
+// 페이지가 부르는 API 를 엿듣는다. **페이지 컨텍스트에서 돈다** (world: MAIN).
+//
+// 왜 이게 필요한가. 화면에서 값을 긁는 것은 무르다 — 셀렉터가 깨지고, 배경
+// 탭은 렌더링이 억제되고, 값은 늦게 채워진다. API 로 읽으면 그 전부가
+// 사라지는데, 문제는 **어느 API 의 어느 필드인지 알 길이 없다**는 것이었다.
+//
+// 답은 엿듣기다. 사람이 그 화면을 보는 순간 페이지가 이미 자기 API 를
+// 호출한다. 그 요청과 응답을 잡아두면, 사람이 화면에서 "$1.88" 을 집었을 때
+// 잡아둔 응답에서 1.88 을 찾아 경로를 알아낼 수 있다.
+//
+//   → 엔드포인트를 미리 코드에 박아둘 필요가 없다.
+//   → 사람이 한 번 본 화면은 확장이 아는 화면이 된다.
+//   → 페이지가 세션 쿠키로 부르므로 API 키도 대개 필요 없다.
+//
+// 왜 격리된 세계(content.ts)가 아니라 여기인가. content script 는 페이지와
+// 다른 세계에서 돌아서 페이지의 window.fetch 를 못 건드린다. 가로채려면
+// 페이지 자신의 전역을 감싸야 하고, 그건 world: 'MAIN' 뿐이다.
+//
+// 무엇을 안 하는가: 요청을 막거나 바꾸지 않는다. 지나가는 것을 그대로 보고
+// 사본만 남긴다 — 관측이 사용을 방해하면 안 된다.
+// ============================================================
+
+(() => {
+  /** 들고 있을 응답 수. 값 하나 찾으려고 화면 전체의 호출을 훑는다. */
+  const MAX_KEEP = 40;
+  /** 이보다 큰 응답은 안 든다. 대시보드 하나가 메모리를 다 먹으면 안 된다. */
+  const MAX_BYTES = 512 * 1024;
+  /** 이보다 오래된 것은 버린다. 화면을 옮겼는데 옛 응답에서 값을 찾으면
+   *  실행할 때 엉뚱한 곳을 부르게 된다. */
+  const MAX_AGE_MS = 10 * 60 * 1000;
+
+  type Caught = {
+    url: string;
+    method: string;
+    /** POST 본문. GraphQL 처럼 경로가 하나뿐인 곳은 이게 있어야 재현된다. */
+    body?: string;
+    /** 파싱된 응답. 객체가 아니면 안 든다 — 값 찾기는 JSON 에서만 한다. */
+    json: unknown;
+    at: number;
+  };
+
+  const caught: Caught[] = [];
+
+  function keep(c: Caught): void {
+    const now = Date.now();
+    // 오래된 것부터 버린다.
+    for (let i = caught.length - 1; i >= 0; i--) {
+      if (now - caught[i].at > MAX_AGE_MS) caught.splice(i, 1);
+    }
+    // 같은 요청을 다시 불렀으면 새 것만 남긴다 — 값이 갱신됐을 테니.
+    const same = caught.findIndex((x) => x.url === c.url && x.method === c.method);
+    if (same >= 0) caught.splice(same, 1);
+    caught.unshift(c);
+    if (caught.length > MAX_KEEP) caught.length = MAX_KEEP;
+  }
+
+  /** JSON 으로 읽히는 것만 든다. HTML·이미지는 값 찾기에 쓸 데가 없다. */
+  function tryKeep(url: string, method: string, body: string | undefined, text: string): void {
+    if (!text || text.length > MAX_BYTES) return;
+    const head = text.slice(0, 200).trimStart();
+    if (!head.startsWith('{') && !head.startsWith('[')) return;
+    try {
+      const json = JSON.parse(text);
+      if (json && typeof json === 'object') keep({ url, method, body, json, at: Date.now() });
+    } catch {
+      // JSON 이 아니면 그만이다.
+    }
+  }
+
+  // ── fetch ────────────────────────────────────────────────
+  const origFetch = window.fetch;
+  window.fetch = async function (...args: Parameters<typeof fetch>) {
+    const res = await origFetch.apply(this, args);
+    try {
+      const req = args[0];
+      const url = typeof req === 'string' ? req : req instanceof URL ? req.href : req.url;
+      const init = args[1];
+      const method = (init?.method ?? (req instanceof Request ? req.method : 'GET')).toUpperCase();
+      const body = typeof init?.body === 'string' ? init.body.slice(0, 4000) : undefined;
+      // **복제해서 읽는다.** 원본 스트림을 읽으면 페이지가 못 읽는다 —
+      // 엿듣기가 페이지를 망가뜨리면 안 된다.
+      res
+        .clone()
+        .text()
+        .then((t) => tryKeep(new URL(url, location.href).href, method, body, t))
+        .catch(() => undefined);
+    } catch {
+      // 무슨 일이 있어도 원래 응답은 그대로 돌려준다.
+    }
+    return res;
+  };
+
+  // ── XMLHttpRequest ───────────────────────────────────────
+  // 요즘 앱은 대개 fetch 를 쓰지만, 오래된 대시보드는 아직 XHR 이다.
+  const OrigOpen = XMLHttpRequest.prototype.open;
+  const OrigSend = XMLHttpRequest.prototype.send;
+  type Tagged = XMLHttpRequest & { __naUrl?: string; __naMethod?: string; __naBody?: string };
+
+  XMLHttpRequest.prototype.open = function (this: Tagged, method: string, url: string, ...rest: unknown[]) {
+    this.__naMethod = String(method).toUpperCase();
+    try {
+      this.__naUrl = new URL(String(url), location.href).href;
+    } catch {
+      this.__naUrl = String(url);
+    }
+    // eslint-disable-next-line prefer-rest-params
+    return OrigOpen.apply(this, arguments as never);
+  } as typeof XMLHttpRequest.prototype.open;
+
+  XMLHttpRequest.prototype.send = function (this: Tagged, body?: Document | XMLHttpRequestBodyInit | null) {
+    if (typeof body === 'string') this.__naBody = body.slice(0, 4000);
+    this.addEventListener('load', () => {
+      try {
+        if (this.responseType === '' || this.responseType === 'text') {
+          tryKeep(this.__naUrl ?? '', this.__naMethod ?? 'GET', this.__naBody, this.responseText);
+        }
+      } catch {
+        // 무시 — 엿듣기 실패가 페이지에 영향을 주면 안 된다.
+      }
+    });
+    // eslint-disable-next-line prefer-rest-params
+    return OrigSend.apply(this, arguments as never);
+  } as typeof XMLHttpRequest.prototype.send;
+
+  // ── 격리된 세계와의 다리 ─────────────────────────────────
+  //
+  // 여기는 페이지 컨텍스트라 chrome.runtime 에 못 닿는다. content.ts 가
+  // 물으면 postMessage 로 답한다.
+  window.addEventListener('message', (e) => {
+    if (e.source !== window || e.data?.__naNet !== 'ask') return;
+    window.postMessage(
+      {
+        __naNet: 'ans',
+        id: e.data.id,
+        caught: caught.map((c) => ({ url: c.url, method: c.method, body: c.body, json: c.json })),
+      },
+      '*',
+    );
+  });
+})();

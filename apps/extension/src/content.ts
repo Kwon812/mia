@@ -333,6 +333,11 @@
     /** 값 옆의 변하지 않는 글자. 셀렉터가 다 깨졌을 때 마지막으로 기댈 곳. */
     anchor?: string;
     label: string;
+    /** API 로 읽는 자리. 있으면 화면을 안 본다 — 이쪽이 정확하고 안 깨진다. */
+    api?: { service: string; probe: string; path: string };
+    /** 엿들어 알아낸 요청. 세션 쿠키로 그대로 다시 부른다 — 키도 안 받고
+     *  엔드포인트를 미리 알 필요도 없다. */
+    net?: { url: string; method: string; body?: string; path: string };
     expect?:
       | { kind: 'contains'; text: string }
       | { kind: 'not-contains'; text: string }
@@ -359,6 +364,27 @@
   ): Promise<{ label: string; value: string; wrong?: string }[]> {
     const out: { label: string; value: string; wrong?: string }[] = [];
     for (const r of reads) {
+      // **API 로 읽는 자리는 화면을 안 본다.** 셀렉터도 렌더링 타이밍도
+      // 상관없다 — 서비스 워커가 배경에서 호출 한 번으로 가져온다.
+      if (r.api || r.net) {
+        const msg = r.net
+          ? { type: 'NET_READ', ...r.net }
+          : { type: 'API_READ', ...r.api };
+        const got = await new Promise<{ ok?: boolean; value?: string; error?: string }>((res) => {
+          try {
+            chrome.runtime.sendMessage(msg, (x) =>
+              res(chrome.runtime.lastError ? { ok: false, error: '확장에 닿지 못했어' } : x),
+            );
+          } catch {
+            res({ ok: false, error: '확장에 닿지 못했어' });
+          }
+        });
+        const v = got?.ok ? String(got.value) : `(${got?.error ?? '못 읽음'})`;
+        const wrong = got?.ok ? checkRead(r, v) : got?.error;
+        out.push(wrong ? { label: r.label, value: v, wrong } : { label: r.label, value: v });
+        continue;
+      }
+
       // 후보를 앞에서부터. 값이 늦게 채워지는 화면이 많아(대시보드는 대개
       // 그렇다) 첫 후보는 넉넉히 기다리고, 나머지는 이미 그려진 뒤라 짧게 본다.
       const cands = r.sels?.length ? r.sels : [r.sel];
@@ -383,8 +409,21 @@
           raw = textOf(el);
         }
       }
-      const value = raw.slice(0, 120) || '(못 읽음)';
-      const wrong = checkRead(r, value);
+      // 못 읽었으면 **왜**인지 남긴다. "(못 읽음)" 만으로는 다음에 뭘 해야
+      // 할지 알 수 없다 — 자리가 바뀐 것과 값이 아직 안 온 것은 다른 일이다.
+      if (!el) {
+        const tried = cands.length + (r.anchor ? 1 : 0);
+        out.push({
+          label: r.label,
+          value: '(못 읽음)',
+          wrong: r.anchor
+            ? `그 자리를 못 찾았어 (${tried}가지로 찾아봤어). 화면이 바뀐 것 같아 — 다시 집어줘.`
+            : `그 자리를 못 찾았어 (${tried}가지). 값만 든 칸이라 이름으로도 못 찾아 — 감싸는 칸을 집어봐.`,
+        });
+        continue;
+      }
+      const value = raw.slice(0, 120) || '(빈 칸)';
+      const wrong = raw ? checkRead(r, value) : '자리는 찾았는데 값이 비어 있어. 아직 안 불러온 것 같아.';
       out.push(wrong ? { label: r.label, value, wrong } : { label: r.label, value });
     }
     return out;
@@ -410,12 +449,18 @@
         if (!el) await new Promise((r) => setTimeout(r, 150));
       }
     }
-    if (!el) return `"${step.label ?? step.sel ?? '요소'}" 를 못 찾았어`;
+    if (!el) {
+      // 무엇을 몇 가지로 찾아봤는지 말한다. 그래야 자리를 다시 집을지
+      // 단계를 뺄지 고를 수 있다.
+      const what = step.label ?? step.sel ?? '그 자리';
+      const tried = cands.length + (step.label ? 1 : 0);
+      return `"${what}" 를 못 찾았어 (${tried}가지로 찾아봤어). 화면이 바뀌었거나 애초에 없는 자리야.`;
+    }
 
     if (step.isInput) {
       // 값은 녹화에 없다. 사람이 실행 전에 채운 것만 넣는다 — 지난달 값이
       // 박혀 있는 것보다 매번 묻는 쪽이 맞다.
-      if (value == null) return '넣을 값이 없어';
+      if (value == null) return `"${step.label ?? '입력 칸'}" 에 넣을 값을 안 받았어. 돌리기 전에 채워줘.`;
       const input = el as HTMLInputElement;
       const proto = Object.getPrototypeOf(input);
       const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
@@ -489,6 +534,30 @@
       // 새 페이지의 content script 가 이어받는다.
       await new Promise((r) => setTimeout(r, 400));
     }
+  }
+
+  /**
+   * 페이지 컨텍스트가 엿들은 API 응답들을 받아온다.
+   *
+   * net-content.js 는 페이지 세계에서 돌아 chrome.runtime 에 못 닿는다.
+   * 그래서 postMessage 로 묻고 받는다 — 여기가 그 사이의 다리다.
+   */
+  function askNet(): Promise<unknown[]> {
+    return new Promise((resolve) => {
+      const id = `${Date.now()}-${Math.random()}`;
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', onAns);
+        resolve([]); // 엿듣기가 없는 페이지도 있다. 없으면 없는 대로 간다.
+      }, 500);
+      const onAns = (e: MessageEvent) => {
+        if (e.source !== window || e.data?.__naNet !== 'ans' || e.data.id !== id) return;
+        clearTimeout(timer);
+        window.removeEventListener('message', onAns);
+        resolve(Array.isArray(e.data.caught) ? e.data.caught : []);
+      };
+      window.addEventListener('message', onAns);
+      window.postMessage({ __naNet: 'ask', id }, '*');
+    });
   }
 
   // ── 요소 집기 ──────────────────────────────────────────
@@ -718,6 +787,18 @@
       const sels = pickSelectors(el);
       const sel = sels[0] ?? '';
       const anchor = anchorTextOf(el);
+      const picked = text.slice(0, 60);
+
+      // 이 화면이 부른 API 들을 받아온다. net-content.js 가 페이지 컨텍스트에서
+      // 엿듣고 있다 — 그걸 서비스 워커에 넘겨 집은 값이 어느 응답 어느 필드인지
+      // 찾게 한다. 찾으면 그 자리는 화면을 안 보고 API 로 읽는다.
+      void askNet().then((netCaught) => {
+        try {
+          chrome.runtime.sendMessage({ type: 'NET_CAUGHT', caught: netCaught, picked });
+        } catch {
+          /* 확장 컨텍스트 무효 */
+        }
+      });
 
       tip.textContent = '';
       tip.style.whiteSpace = 'normal';
@@ -896,6 +977,26 @@
       else if (kind === 'pick-poll')
         relay({ type: 'PICK_POLL' }, 'pick-ack', { after: e.data.after });
       else if (kind === 'run-status') relay({ type: 'RUN_STATUS' }, 'run-status-ack');
+      // 이 화면이 아는 서비스인가 — 사이트가 키 입력란을 그릴지 정한다.
+      // 엿들어 찾은 것이 있나 — 사이트가 집은 직후에 묻는다.
+      else if (kind === 'net-match')
+        relay({ type: 'NET_MATCH' }, 'net-match-ack', { slot: e.data.slot });
+      else if (kind === 'api-info')
+        relay({ type: 'API_INFO', domain: e.data.domain }, 'api-info-ack', {
+          slot: e.data.slot,
+        });
+      // 집은 값이 API 에 있나. **여기서 판정이 끝난다.**
+      else if (kind === 'api-match')
+        relay(
+          {
+            type: 'API_MATCH',
+            domain: e.data.domain,
+            key: e.data.key,
+            picked: e.data.picked,
+          },
+          'api-match-ack',
+          { slot: e.data.slot },
+        );
     });
   }
 
