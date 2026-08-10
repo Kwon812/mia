@@ -1,18 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  bandwidthTargets,
   briefBody,
   dayStartUtc,
-  groupByRegion,
-  formatBytes,
   formatUsd,
   monthStartUtc,
   normalize,
   parseAnthropicCosts,
   parseOpenAiCosts,
-  parseRenderMetric,
   parseRenderServices,
+  planBreakdown,
   usageErrorFor,
 } from '../usage';
 
@@ -39,11 +36,6 @@ describe('표기', () => {
     expect(formatUsd(0)).toBe('$0');
     expect(formatUsd(12.3456)).toBe('$12.35');
     expect(formatUsd(1234.5)).toBe('$1,235');
-  });
-
-  it('바이트를 사람 단위로', () => {
-    expect(formatBytes(512)).toBe('512 B');
-    expect(formatBytes(1024 * 1024 * 1536)).toBe('1.5 GB');
   });
 
   it('막대는 최댓값 기준으로 정규화하고, 다 0 이면 안 그린다', () => {
@@ -197,83 +189,69 @@ describe('Anthropic Cost Report 응답', () => {
 });
 
 describe('Render 응답', () => {
-  it('메트릭 시리즈를 전부 더한다 — 서비스마다 하나씩 온다', () => {
-    const got = parseRenderMetric([
-      { unit: 'bytes', values: [{ timestamp: 't', value: 100 }, { timestamp: 't2', value: 50 }] },
-      { unit: 'bytes', values: [{ timestamp: 't', value: 25 }] },
-    ]);
-    expect(got).toBe(175);
-  });
-
-  it('메트릭이 비거나 모양이 어긋나면 0', () => {
-    expect(parseRenderMetric([])).toBe(0);
-    expect(parseRenderMetric({ nope: 1 })).toBe(0);
-    expect(parseRenderMetric([{ values: [{ value: 'x' }] }])).toBe(0);
-  });
-
   it('서비스 목록은 {service} 로 한 겹 싸여 온다', () => {
     const got = parseRenderServices([
-      { service: { id: 'srv-a', type: 'web_service', suspended: 'not_suspended', serviceDetails: { region: 'oregon' } }, cursor: 'c1' },
-      { service: { id: 'srv-b', type: 'web_service', suspended: 'suspended', serviceDetails: { region: 'oregon' } }, cursor: 'c2' },
+      { service: { id: 'srv-a', type: 'web_service', suspended: 'not_suspended', serviceDetails: { plan: 'starter' } }, cursor: 'c1' },
+      { service: { id: 'srv-b', type: 'web_service', suspended: 'suspended', serviceDetails: { plan: 'standard' } }, cursor: 'c2' },
     ]);
     expect(got).toEqual([
-      { id: 'srv-a', suspended: false, region: 'oregon', type: 'web_service' },
-      { id: 'srv-b', suspended: true, region: 'oregon', type: 'web_service' },
+      { id: 'srv-a', suspended: false, type: 'web_service', plan: 'starter' },
+      { id: 'srv-b', suspended: true, type: 'web_service', plan: 'standard' },
     ]);
   });
 
-  it('리전은 serviceDetails 안에 있기도 하고 위에 붙기도 한다', () => {
+  it('플랜은 serviceDetails 안에 있기도 하고 위에 붙기도 한다', () => {
     const got = parseRenderServices([
-      { service: { id: 'a', serviceDetails: { region: 'singapore' } } },
-      { service: { id: 'b', region: 'frankfurt' } },
-      // 정적 사이트처럼 리전이 없는 것도 있다
-      { service: { id: 'c' } },
+      { service: { id: 'a', serviceDetails: { plan: 'pro' } } },
+      { service: { id: 'b', plan: 'starter' } },
+      // 정적 사이트처럼 플랜이 없는 것도 있다
+      { service: { id: 'c', type: 'static_site' } },
     ]);
-    expect(got.map((s) => s.region)).toEqual(['singapore', 'frankfurt', '']);
+    expect(got.map((s) => s.plan)).toEqual(['pro', 'starter', '']);
   });
 
   it('싸여 있지 않은 모양도 읽는다', () => {
-    expect(parseRenderServices([{ id: 'srv-c' }])).toEqual([{ id: 'srv-c', suspended: false, region: '', type: '' }]);
+    expect(parseRenderServices([{ id: 'srv-c' }])).toEqual([
+      { id: 'srv-c', suspended: false, type: '', plan: '' },
+    ]);
     expect(parseRenderServices(null)).toEqual([]);
   });
 
-  // ── 회귀 ──
-  //
-  // 리전을 섞어 한 번에 물으면 Render 가 400 을 낸다:
-  //   "querying resources from multiple regions is not supported"
-  // 실계정(서비스 6개, 리전 2개)에서 대역폭이 통째로 안 나온 원인이었다.
-  it('리전별로 갈라 묶는다 — 섞어 물으면 400 이다', () => {
-    const g = groupByRegion([
-      { id: 'a', suspended: false, region: 'oregon', type: 'web_service' },
-      { id: 'b', suspended: false, region: 'singapore', type: 'web_service' },
-      { id: 'c', suspended: false, region: 'oregon', type: 'web_service' },
+  it('무엇이 돈을 먹고 있는지 세어 적는다', () => {
+    const got = planBreakdown([
+      { id: 'a', suspended: false, type: 'web_service', plan: 'starter' },
+      { id: 'b', suspended: false, type: 'web_service', plan: 'standard' },
+      { id: 'c', suspended: false, type: 'web_service', plan: 'starter' },
+      { id: 'd', suspended: false, type: 'web_service', plan: 'starter' },
+      { id: 'e', suspended: false, type: 'web_service', plan: 'standard' },
     ]);
-    expect(g.size).toBe(2);
-    expect(g.get('oregon')).toEqual(['a', 'c']);
-    expect(g.get('singapore')).toEqual(['b']);
+    expect(got).toBe('starter 3 · standard 2');
   });
 
-  // ── 회귀 ──
-  //
-  // 크론 잡을 같이 물었더니 `not found: crn-…` 로 **그 리전 전체가 404** 였다.
-  // 하나라도 지원 안 되는 게 섞이면 부분 응답이 아니라 전부 실패다.
-  it('대역폭이 없는 리소스는 빼고 묻는다 — 섞이면 요청 전체가 404 다', () => {
-    const got = bandwidthTargets([
-      { id: 'srv-web1', suspended: false, region: 'oregon', type: 'web_service' },
-      { id: 'crn-d9ou0qbm8hqs739t2kpg', suspended: false, region: 'oregon', type: 'cron_job' },
-      { id: 'dpg-pg1', suspended: false, region: 'oregon', type: 'postgres' },
-      { id: 'red-r1', suspended: false, region: 'singapore', type: 'redis' },
-      { id: 'srv-web2', suspended: false, region: 'singapore', type: 'static_site' },
+  it('플랜이 없으면 종류로 부른다 — 빈 문자열이 화면에 새면 안 된다', () => {
+    const got = planBreakdown([
+      { id: 'a', suspended: false, type: 'static_site', plan: '' },
+      { id: 'b', suspended: false, type: 'cron_job', plan: '' },
+      { id: 'c', suspended: false, type: '', plan: '' },
     ]);
-    expect(got.map((s) => s.id)).toEqual(['srv-web1', 'srv-web2']);
+    expect(got).toBe('기타 1 · 정적 1 · 크론 1');
   });
 
-  it('리전이 하나뿐이면 요청도 하나다', () => {
-    const g = groupByRegion([
-      { id: 'a', suspended: false, region: 'oregon', type: 'web_service' },
-      { id: 'b', suspended: false, region: 'oregon', type: 'web_service' },
+  it('개수가 같으면 이름순이다 — 열 때마다 순서가 흔들리면 안 된다', () => {
+    const a = planBreakdown([
+      { id: '1', suspended: false, type: 'web_service', plan: 'standard' },
+      { id: '2', suspended: false, type: 'web_service', plan: 'pro' },
     ]);
-    expect([...g.keys()]).toEqual(['oregon']);
+    const b = planBreakdown([
+      { id: '1', suspended: false, type: 'web_service', plan: 'pro' },
+      { id: '2', suspended: false, type: 'web_service', plan: 'standard' },
+    ]);
+    expect(a).toBe(b);
+    expect(a).toBe('pro 1 · standard 1');
+  });
+
+  it('아무것도 없으면 빈 문자열 — 팝업이 그 줄을 안 그린다', () => {
+    expect(planBreakdown([])).toBe('');
   });
 });
 

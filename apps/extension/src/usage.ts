@@ -42,7 +42,7 @@
 //   Anthropic   조직 Admin key (sk-ant-admin01…). 일반 키는 401 이다.
 //               GET /v1/organizations/cost_report — 개인 계정엔 이 API 가 없다
 //   Render      일반 API key (rnd_…). 비용 API 가 아예 없어서 —
-//               서비스 수와 대역폭으로 대신한다.
+//               무엇이 돌고 있나(서비스·플랜)로 대신하고 금액은 안 적는다.
 //
 // 셋 다 "요금"을 같은 방식으로 주지 않는다. 그래서 억지로 한 줄에 맞추지
 // 않고, 각자 줄 수 있는 것을 그대로 보여준다. 없는 것은 없다고 적는다.
@@ -156,19 +156,6 @@ export function formatUsd(usd: number): string {
   return `$${Math.round(usd).toLocaleString('en-US')}`;
 }
 
-/** 바이트 → "1.2 GB" */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${Math.round(bytes)} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let v = bytes / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
-}
-
 /** 막대용 정규화. 최댓값이 0 이면(아무것도 안 썼으면) 안 그린다. */
 export function normalize(values: number[], take = 14): number[] {
   const tail = values.slice(-take);
@@ -271,54 +258,50 @@ export function parseAnthropicCosts(json: unknown): CostDay[] {
   return out.sort((a, b) => a.at - b.at);
 }
 
-/**
- * Render 메트릭. 시리즈 배열이고 각 시리즈에 시점별 값이 들어 있다.
- *
- *   [ { labels: [...], unit: 'bytes', values: [ { timestamp, value } ] } ]
- *
- * 서비스마다 시리즈가 하나씩 오므로 전부 더한다.
- */
-export function parseRenderMetric(json: unknown): number {
-  if (!Array.isArray(json)) return 0;
-  let sum = 0;
-  for (const series of json) {
-    const s = asRecord(series);
-    for (const point of Array.isArray(s?.values) ? s.values : []) {
-      const v = asRecord(point)?.value;
-      if (typeof v === 'number' && Number.isFinite(v)) sum += v;
-    }
-  }
-  return sum;
-}
-
 export interface RenderService {
   id: string;
   suspended: boolean;
-  /** 어느 리전인가. 메트릭을 **리전별로 나눠 불러야** 해서 필요하다 */
-  region: string;
-  /** `web_service` `cron_job` 같은 것. 대역폭이 있는 종류를 가려내는 데 쓴다 */
+  /** `web_service` `static_site` `cron_job` 같은 것 */
   type: string;
+  /** `starter` `standard` … 청구서를 실제로 움직이는 값. 없으면 빈 문자열 */
+  plan: string;
 }
 
+/** 화면에 적을 이름. 플랜이 없는 것들은 종류로 대신 부른다. */
+const RENDER_TYPE_LABEL: Record<string, string> = {
+  static_site: '정적',
+  cron_job: '크론',
+  background_worker: '워커',
+  private_service: '내부',
+  web_service: '웹',
+};
+
 /**
- * 대역폭을 물어도 되는 것만 남긴다.
+ * 무엇이 돈을 먹고 있나 — `"starter 3 · standard 2 · 정적 1"`.
  *
- * **하나라도 지원 안 되는 게 섞이면 요청 전체가 404 다.** 크론 잡을 같이
- * 물었다가 `not found: crn-…` 로 그 리전 대역폭이 통째로 날아갔다 —
- * 부분 응답이 아니라 전부 실패다.
+ * **금액을 적지 않는다.** 플랜별 단가를 코드에 박으면 그 표가 낡는 순간
+ * 조용히 틀린 금액을 자신 있게 보여주게 된다. Render 는 요금 API 가 없으니
+ * 금액은 사람이 구독료 칸에 적고, 여기서는 그 금액이 **왜 그만큼인지**만
+ * 보여준다.
  *
- * 서비스 ID 접두사로 가른다. 돌아가는 서비스는 `srv-`, 크론 잡은 `crn-`,
- * Postgres 는 `dpg-`, Redis 는 `red-` 다. 접두사가 타입 문자열보다 안전한
- * 이유는, 타입 이름이 늘어나도 ID 규칙은 그대로이기 때문이다.
+ * 많은 것부터 적는다. 개수가 같으면 이름순이라 열 때마다 순서가 안 흔들린다.
  */
-export function bandwidthTargets(services: RenderService[]): RenderService[] {
-  return services.filter((s) => s.id.startsWith('srv-'));
+export function planBreakdown(services: RenderService[]): string {
+  const counts = new Map<string, number>();
+  for (const s of services) {
+    const key = s.plan || RENDER_TYPE_LABEL[s.type] || s.type || '기타';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts]
+    .sort((a, b) => (b[1] === a[1] ? a[0].localeCompare(b[0]) : b[1] - a[1]))
+    .map(([k, n]) => `${k} ${n}`)
+    .join(' · ');
 }
 
 /**
  * Render 서비스 목록. `[{ service: {...}, cursor }]` 꼴이다.
  *
- * 리전은 타입에 따라 `serviceDetails.region` 에 있기도 하고 위에 바로
+ * 플랜은 타입에 따라 `serviceDetails.plan` 에 있기도 하고 위에 바로
  * 붙기도 한다. 정적 사이트처럼 아예 없는 것도 있어서 그때는 빈 문자열이다.
  */
 export function parseRenderServices(json: unknown): RenderService[] {
@@ -328,34 +311,16 @@ export function parseRenderServices(json: unknown): RenderService[] {
     const svc = asRecord(asRecord(row)?.service) ?? asRecord(row);
     const id = svc?.id;
     if (typeof id !== 'string') continue;
-    const detailRegion = asRecord(svc?.serviceDetails)?.region;
-    const region =
-      typeof detailRegion === 'string' ? detailRegion : typeof svc?.region === 'string' ? svc.region : '';
+    const detailPlan = asRecord(svc?.serviceDetails)?.plan;
+    const plan = typeof detailPlan === 'string' ? detailPlan : typeof svc?.plan === 'string' ? svc.plan : '';
     out.push({
       id,
       suspended: svc?.suspended === 'suspended' || svc?.suspended === true,
-      region,
       type: typeof svc?.type === 'string' ? svc.type : '',
+      plan,
     });
   }
   return out;
-}
-
-/**
- * 리전별로 묶는다.
- *
- * **한 요청에 한 리전만 된다.** 여러 리전을 한 번에 물으면 Render 가
- * `querying resources from multiple regions is not supported` 로 400 을
- * 낸다 — 서비스를 두 리전에 걸쳐 두고 있으면 대역폭이 통째로 안 나온다.
- */
-export function groupByRegion(services: RenderService[]): Map<string, string[]> {
-  const g = new Map<string, string[]>();
-  for (const s of services) {
-    const list = g.get(s.region);
-    if (list) list.push(s.id);
-    else g.set(s.region, [s.id]);
-  }
-  return g;
 }
 
 // ── 오류 문장 ───────────────────────────────────────────────
@@ -517,64 +482,36 @@ async function fetchAnthropic(
 /**
  * Render — 비용 API 가 **없다.**
  *
- * 없는 것을 있는 척하지 않는다. 대신 청구서를 움직이는 것들을 보여준다:
- * 돌고 있는 서비스 수와 이달 대역폭. 요금 자체는 대시보드에서 본다.
+ * 없는 것을 있는 척하지 않는다. 금액 자리는 비우고, 대신 **무엇이 돌고
+ * 있는지**를 보여준다 — 청구서를 움직이는 것은 인스턴스 플랜 × 개수다.
+ *
+ * 대역폭도 한때 여기 있었는데 걷어냈다. 리전을 섞으면 400, 크론 잡이
+ * 끼면 404, 넘겨도 값이 총량이 아니라 평균 속도라 단위가 또 문제였다.
+ * 그렇게까지 해서 얻는 것이 "이달 몇 GB"인데, Render 요금에서 대역폭은
+ * 무료 100GB 초과분만 과금이라 대개 $0 인 항목이다. 품이 값을 못 했다.
+ *
+ * 요청도 하나로 줄었다 — 목록 한 번이면 끝난다.
  */
 async function fetchRender(
   key: string,
-  now: number,
+  _now: number,
   subUsd: number | null,
 ): Promise<Partial<UsageEntry>> {
-  const auth = { Authorization: `Bearer ${key}` };
-  const svcRes = await getJson('https://api.render.com/v1/services?limit=100', auth);
-  if (!svcRes.ok) return { error: usageErrorFor('render', svcRes.status, svcRes.body) };
+  const res = await getJson('https://api.render.com/v1/services?limit=100', {
+    Authorization: `Bearer ${key}`,
+  });
+  if (!res.ok) return { error: usageErrorFor('render', res.status, res.body) };
 
-  const services = parseRenderServices(svcRes.json);
+  const services = parseRenderServices(res.json);
   const live = services.filter((s) => !s.suspended);
   const lines: UsageLine[] = [
-    { k: '서비스', v: `${live.length}개 실행 중${services.length > live.length ? ` · ${services.length - live.length}개 중지` : ''}` },
+    {
+      k: '서비스',
+      v: `${live.length}개 실행 중${services.length > live.length ? ` · ${services.length - live.length}개 중지` : ''}`,
+    },
   ];
-
-  // 대역폭은 서비스를 지정해야 나오고, **리전별로 나눠 물어야 한다**
-  // (groupByRegion 주석 참고). 리전 수만큼 요청이 늘지만 대개 한둘이고,
-  // 하루 해상도면 한 달이 31 점이라 응답도 가볍다.
-  const targets = bandwidthTargets(live);
-  const skipped = live.length - targets.length;
-
-  if (targets.length > 0) {
-    const groups = [...groupByRegion(targets.slice(0, 40))];
-    const results = await Promise.all(
-      groups.map(async ([region, ids]) => {
-        const url = new URL('https://api.render.com/v1/metrics/bandwidth');
-        url.searchParams.set('startTime', new Date(monthStartUtc(now)).toISOString());
-        url.searchParams.set('endTime', new Date(now).toISOString());
-        url.searchParams.set('resolutionSeconds', '86400');
-        for (const id of ids) url.searchParams.append('resource', id);
-        const bw = await getJson(url.toString(), auth);
-        return bw.ok
-          ? { bytes: parseRenderMetric(bw.json), failed: null }
-          : { bytes: 0, failed: `${region || '리전없음'} ${bw.status}${bw.body ? ` ${bw.body}` : ''}` };
-      }),
-    );
-
-    const bytes = results.reduce((a, r) => a + r.bytes, 0);
-    const failed = results.map((r) => r.failed).filter((v): v is string => v !== null);
-
-    // 한 리전이 실패해도 나머지는 살린다. 다만 **부분 합계를 전체인 척
-    // 적지 않는다** — 모르는 채로 작아 보이는 숫자가 제일 나쁘다.
-    // 제외한 것이 있으면 밝힌다. 조용히 빼면 "이게 전부"로 읽힌다.
-    const note = skipped > 0 ? ` (크론·DB ${skipped}개 제외)` : '';
-    if (failed.length === 0) {
-      lines.push({ k: '이달 대역폭', v: `${formatBytes(bytes)}${note}` });
-    } else if (failed.length < results.length) {
-      lines.push({ k: '이달 대역폭', v: `${formatBytes(bytes)} (일부 누락 — ${failed.join(', ')})` });
-    } else {
-      lines.push({ k: '이달 대역폭', v: `못 읽음 — ${failed.join(', ')}` });
-    }
-  } else if (skipped > 0) {
-    // 크론 잡만 있는 계정이 여기다. "0 GB" 로 적으면 안 쓴 것처럼 보인다.
-    lines.push({ k: '이달 대역폭', v: '대역폭이 있는 서비스가 없어' });
-  }
+  const plans = planBreakdown(live);
+  if (plans) lines.push({ k: '구성', v: plans });
 
   // 요금 API 가 없으니 큰 글씨에 적을 것도 없다 — 구독료를 적어뒀다면 그것만은
   // 확실히 나가는 돈이라 거기 올린다.
