@@ -154,10 +154,33 @@
     if (id && !/\d{4,}/.test(id)) return `#${id}`;
     for (const a of ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label']) {
       const v = el.getAttribute(a);
-      if (v) return `[${a}="${v.slice(0, MAX_LABEL)}"]`;
+      // 긴 aria-label 은 이름이 아니라 **설명문**이다. 화면 상태가 담겨서
+      // ("갈래 8개(그중 6개가 남았다)…") 다음번엔 다른 값이 되고, 그러면
+      // 같은 동작이 매번 다른 것으로 보인다.
+      if (v && (a !== 'aria-label' || v.length <= 40)) return `[${a}="${v.slice(0, MAX_LABEL)}"]`;
     }
     const role = el.getAttribute('role');
     return role ? `[role="${role}"]` : undefined;
+  }
+
+  /**
+   * 절차의 단계가 될 수 없는 클릭인가.
+   *
+   * 실측에서 조작 101개 중 절반이 잡음이었다. 지도 캔버스를 누른 것이
+   * 그 위에 붙은 설명문을 통째로 라벨로 가져왔고("별 지도 — 갈래 8개(그중
+   * 6개가 남았다), 경험 26개…"), 그 안에 개수가 들어 있어서 갈래가 하나
+   * 늘면 다른 열쇠가 됐다 — 같은 동작인데 매번 달라 보인다.
+   *
+   * 두 가지로 거른다. **큰 것**은 컨테이너지 버튼이 아니고, **긴 글자**는
+   * 이름이 아니라 설명이다. 둘 다 다시 눌러줄 수 있는 대상이 아니다.
+   */
+  function tooVague(el: Element, label?: string): boolean {
+    if (label && label.length > 45) return true;
+    const r = el.getBoundingClientRect();
+    const area = r.width * r.height;
+    const screen = Math.max(1, window.innerWidth * window.innerHeight);
+    // 화면의 4분의 1을 넘게 차지하면 그건 판이지 버튼이 아니다.
+    return area / screen > 0.25;
   }
 
   /**
@@ -202,6 +225,9 @@
       const el = raw?.closest?.('button, a, [role], input, select, summary, label') ?? raw;
       if (!el || !(el instanceof Element)) return;
       const label = labelOf(el);
+      // 판이나 설명문은 안 남긴다. 절차의 단계가 될 수 없고, 남기면 열쇠가
+      // 매번 달라져 진짜 반복까지 못 찾게 만든다.
+      if (tooVague(el, label)) return;
       const act: Action = { t: el.tagName.toLowerCase() };
       if (label) act.label = label;
       const sel = stableSelector(el);
