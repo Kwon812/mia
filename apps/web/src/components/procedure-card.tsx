@@ -273,6 +273,10 @@ export function ProcedureCard({
         // **왜 못 찾았는지 갈라서 말한다.** 이 화면이 API 를 아예 안 부르는
         // 것과, 부르긴 하는데 그 값이 응답에 없는 것은 다음 수가 다르다.
         const seen: string[] = e.data.seen ?? [];
+        // **가까운 값들.** "그 값이 없어" 만으로는 다음에 뭘 할지 모르는데,
+        // 응답에 1.8823 이 있는 걸 보면 자릿수 문제인지 애초에 다른 데서
+        // 오는 값인지가 바로 눈에 들어온다.
+        const near: string[] = e.data.near ?? [];
         const picked = String(e.data.picked ?? reads.find((r) => r.after === slot)?.label ?? "");
         const why =
           e.data.why === "nothing-caught"
@@ -282,8 +286,10 @@ export function ProcedureCard({
                 // 자리가 수십 개다. 그걸 저장하면 값이 생겼을 때 엉뚱한 데를
                 // 읽는다. 그 사정을 그대로 말해준다.
                 /(^|\s)0(\s|$)|^\D*0\D*$/.test(picked)
-                ? `값이 0 이라 API 에서 못 맞춰 — 0 은 응답에 널려 있어서 엉뚱한 자리를 잡을 수 있어. 값이 생겼을 때 다시 집으면 돼. 지금은 화면에서 읽을게.`
-                : `API 를 ${seen.length}개 봤는데 그 값이 없어 (${seen.slice(0, 3).join(", ")}). 화면에서 읽을게.`
+                ? "값이 0 이라 API 에서 못 맞춰 — 0 은 응답에 널려 있어서 엉뚱한 자리를 잡을 수 있어. 값이 생겼을 때 다시 집으면 돼. 지금은 화면에서 읽을게."
+                : `API ${seen.length}곳을 봤는데 그 값이 없어 (${seen.slice(0, 2).join(", ")}).` +
+                  (near.length > 0 ? ` 가까운 값: ${near.slice(0, 3).join(", ")}` : "") +
+                  " 화면에서 읽을게."
               : "값을 찾을 자리가 없었어 — 다시 집어봐.";
         setMatchNote((v) => ({ ...v, [slot]: why }));
         // 엿듣기가 실패했으면 물어본다. 이 화면이 SSR 로 값을 주는 경우가
