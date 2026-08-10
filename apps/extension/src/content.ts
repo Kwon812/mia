@@ -366,12 +366,46 @@
     for (const r of reads) {
       // **API 로 읽는 자리는 화면을 안 본다.** 셀렉터도 렌더링 타이밍도
       // 상관없다 — 서비스 워커가 배경에서 호출 한 번으로 가져온다.
-      if (r.api || r.net) {
-        // 인증이 만료됐을 때 안내에 쓸 사이트. API 호스트가 아니라 사람이
-        // 들어가는 곳이어야 한다.
-        const msg = r.net
-          ? { type: 'NET_READ', ...r.net, site: host }
-          : { type: 'API_READ', ...r.api };
+      // **여기서 바로 부른다.** 지금 이 스크립트는 그 단계의 사이트 안에서
+      // 돌고 있다 — 값을 읽으려고 서비스 워커를 거쳐 다시 탭을 찾을 이유가
+      // 없고, 여기서 부르면 자격이 저절로 맞는다. 페이지가 자기 API 를
+      // 부르는 것과 같은 일이다.
+      if (r.net) {
+        const got = await refetch(r.net.url, r.net.method, r.net.body);
+        if (!got.ok) {
+          const why =
+            got.status === 401 || got.status === 403
+              ? `인증이 만료됐어 (${got.status}). ${host} 를 한 번 열면 갱신돼.`
+              : got.status === 404
+                ? `그 API 가 없어졌어 (404). 자리를 다시 집어줘.`
+                : got.status === 0
+                  ? `못 불렀어 — ${got.error ?? '연결 실패'}`
+                  : `${got.status} 로 답했어`;
+          out.push({ label: r.label, value: '(못 읽음)', wrong: why });
+          continue;
+        }
+        let v: unknown;
+        try {
+          v = readPathLocal(JSON.parse(got.text ?? '{}'), r.net.path);
+        } catch {
+          v = undefined;
+        }
+        if (v === undefined || v === null) {
+          out.push({
+            label: r.label,
+            value: '(못 읽음)',
+            wrong: `응답 모양이 바뀌었어 — ${r.net.path} 가 없어. 다시 집어줘.`,
+          });
+          continue;
+        }
+        const value = String(v);
+        const wrong = checkRead(r, value);
+        out.push(wrong ? { label: r.label, value, wrong } : { label: r.label, value });
+        continue;
+      }
+
+      if (r.api) {
+        const msg = { type: 'API_READ', ...r.api };
         const got = await new Promise<{ ok?: boolean; value?: string; error?: string }>((res) => {
           try {
             chrome.runtime.sendMessage(msg, (x) =>
@@ -569,6 +603,58 @@
    * Origin·Referer·쿠키 조합이 어긋나 401 이나 400 이 난다. 여기서 부르면
    * 그 전부가 맞는다.
    */
+  /**
+   * 저장된 경로로 값을 꺼낸다. `data[0].amount.value` 꼴이고,
+   * `a[*].b` 는 그 자리들의 합, `a[*].b#count` 는 개수다.
+   *
+   * session/api-registry.ts 의 readPath 와 같은 규칙이어야 한다 — 이 파일은
+   * import 를 못 쓰는 classic script 라 자급자족한다.
+   */
+  function readPathLocal(obj: unknown, path: string): unknown {
+    const flat = (v: unknown, prefix = '', out: Record<string, unknown> = {}) => {
+      if (v === null || typeof v !== 'object') {
+        if (prefix) out[prefix] = v;
+        return out;
+      }
+      if (Array.isArray(v)) {
+        v.slice(0, 40).forEach((x, i) => flat(x, `${prefix}[${i}]`, out));
+        return out;
+      }
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+        flat(x, prefix ? `${prefix}.${k}` : k, out);
+      }
+      return out;
+    };
+
+    if (path.includes('[*]')) {
+      const wantCount = path.endsWith('#count');
+      const p = wantCount ? path.slice(0, -6) : path;
+      let sum = 0;
+      let count = 0;
+      for (const [k, v] of Object.entries(flat(obj))) {
+        if (k.replace(/\[\d+\]/g, '[*]') !== p) continue;
+        count += 1;
+        if (typeof v === 'number') sum += v;
+      }
+      return wantCount ? count : sum;
+    }
+
+    let cur: unknown = obj;
+    for (const seg of path.split('.')) {
+      const m = seg.match(/^([^[]*)((\[\d+\])*)$/);
+      if (!m) return undefined;
+      if (m[1]) {
+        if (cur === null || typeof cur !== 'object') return undefined;
+        cur = (cur as Record<string, unknown>)[m[1]];
+      }
+      for (const idx of m[2].match(/\d+/g) ?? []) {
+        if (!Array.isArray(cur)) return undefined;
+        cur = cur[Number(idx)];
+      }
+    }
+    return cur;
+  }
+
   function refetch(
     url: string,
     method?: string,

@@ -89,21 +89,26 @@ async function rememberHeaders(url: string, headers?: Record<string, string>): P
  */
 async function fetchViaPage(
   url: string,
+  /**
+   * **사람이 보는 사이트.** 읽을 URL 의 호스트가 아니다.
+   *
+   * 값은 api.openai.com 에서 오지만 그 요청을 보내는 것은
+   * platform.openai.com 페이지다. API 서버 주소로 탭을 열면 HTML 이 아니라
+   * content script 가 안 붙고, 붙어도 오리진이 달라 쿠키가 안 간다.
+   * 실측에서 401 이 계속 난 이유가 이것이었다.
+   */
+  site: string,
   method?: string,
   body?: string,
   headers?: Record<string, string>,
 ): Promise<{ ok: boolean; status: number; text?: string; error?: string } | null> {
-  let host = '';
-  try {
-    host = new URL(url).host;
-  } catch {
-    return null;
-  }
+  const host = site.split(':')[0];
+  if (!host) return null;
 
   const tabs = await chrome.tabs.query({});
   const hit = tabs.find((t) => {
     try {
-      return t.url ? new URL(t.url).host === host : false;
+      return t.url ? new URL(t.url).host.split(':')[0] === host : false;
     } catch {
       return false;
     }
@@ -112,7 +117,8 @@ async function fetchViaPage(
   let tabId = hit?.id;
   let opened = false;
   if (tabId == null) {
-    const tab = await chrome.tabs.create({ url: `https://${host}/`, active: false });
+    const scheme = host.startsWith('localhost') || host.startsWith('127.') ? 'http' : 'https';
+    const tab = await chrome.tabs.create({ url: `${scheme}://${site}/`, active: false });
     tabId = tab.id;
     opened = true;
     // content script 가 자리 잡을 틈을 준다. 이보다 이르면 리스너가 없다.
@@ -1305,7 +1311,10 @@ async function announce(run: RunState): Promise<void> {
 
         // **그 페이지가 부르게 한다.** 확장이 재구성한 요청은 페이지와
         // 똑같아지지 않는다. 페이지에서 부르면 자격이 저절로 맞는다.
-        const viaPage = await fetchViaPage(url, method, body, saved);
+        // 사람이 보는 사이트에서 부른다. message.site 는 그 단계의 도메인이고,
+        // 없으면 URL 의 호스트로 떨어진다(대개 실패하지만 아예 안 하는 것보단 낫다).
+        const site = String(message.site ?? '') || headerKeyOf(url).split('/')[0];
+        const viaPage = await fetchViaPage(url, site, method, body, saved);
         const res = viaPage
           ? ({
               ok: viaPage.ok,
@@ -1326,7 +1335,6 @@ async function announce(run: RunState): Promise<void> {
             });
         // 안내에는 **사람이 들어가는 사이트**를 적는다. API 호스트를 적으면
         // (api.openai.com 처럼) 거기 들어가 봐야 아무것도 없다.
-        const site = String(message.site ?? '') || headerKeyOf(url).split('/')[0];
         if (!res.ok) {
           const why =
             res.status === 401 || res.status === 403
