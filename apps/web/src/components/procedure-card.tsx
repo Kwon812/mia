@@ -158,13 +158,15 @@ export function ProcedureCard({
   const [cancelPick, setCancelPick] = useState<() => void>(() => () => {});
   /** 단계별로 그 화면이 아는 서비스인지. 키 입력란을 그릴지 정한다. */
   const [apiInfo, setApiInfo] = useState<Record<number, ApiInfo>>({});
-  /** 절차를 만들 때 넣는 키. **로컬에만 간다** — 서버로 안 보낸다. */
+  /** 절차를 만들 때 넣는 키. **로컬에만 간다** — 서버로 안 보낸다.
+   *  도메인으로 잡는다. 예전에는 서비스 id 와 섞여 있어서, 넣은 키를 다른
+   *  자리에서 못 찾았다. */
   const [keys, setKeys] = useState<Record<string, string>>({});
+  /** 키가 있어야 되는 자리. 401 이 와야 뜬다 — 미리 요구하지 않는다. */
+  const [needKey, setNeedKey] = useState<Record<number, { domain: string; keyUrl?: string; hint?: string }>>({});
   /** 집은 값이 API 에 있나. 집는 그 자리에서 갈린다. */
   const [matching, setMatching] = useState<number | null>(null);
   const [matchNote, setMatchNote] = useState<Record<number, string>>({});
-  /** 물어봐서 알아낸 API 후보. 검증 전이라 아직 안 쓴다. */
-  const [guess, setGuess] = useState<Record<number, GuessResult & { known: true }>>({});
 
   /**
    * 모르는 사이트의 API 를 물어보고 **두드려본다.**
@@ -187,7 +189,6 @@ export function ProcedureCard({
         }));
         return;
       }
-      setGuess((v) => ({ ...v, [slot]: g }));
       setMatchNote((v) => ({ ...v, [slot]: `${g.label} API 를 두드려보는 중…` }));
 
       const onMsg = (e: MessageEvent) => {
@@ -195,13 +196,21 @@ export function ProcedureCard({
         window.removeEventListener("message", onMsg);
         setMatching(null);
         if (!e.data.ok) {
-          // 두드려서 틀린 것이 드러났다. 키가 없어서일 수도 있으니 그것도 말한다.
-          setMatchNote((v) => ({
-            ...v,
-            [slot]: `${e.data.error}${g.auth !== "none" ? " — 키를 넣고 다시 해볼 수 있어" : ""}`,
-          }));
+          setMatchNote((v) => ({ ...v, [slot]: e.data.error }));
+          // 인증이 막은 것이면 그때 키를 받는다. 대시보드가 쓰는 문과 공개
+          // API 의 문이 다를 때가 있고, 그건 두드려봐야 안다.
+          if (/401|403|로그인/.test(String(e.data.error)) && g.auth !== "none") {
+            setNeedKey((v) => ({
+              ...v,
+              [slot]: { domain, keyUrl: g.keyUrl, hint: g.keyHint },
+            }));
+          }
           return;
         }
+        setNeedKey((v) => {
+          const { [slot]: _gone, ...rest } = v;
+          return rest;
+        });
         setReads((v) =>
           v.map((r) =>
             r.after === slot
@@ -303,7 +312,7 @@ export function ProcedureCard({
 
   function tryApi(slot: number, domain: string, picked: string) {
     const info = apiInfo[slot];
-    const key = info?.service ? keys[info.service] : "";
+    const key = keys[domain] ?? "";
     if (!info?.known) return;
     setMatching(slot);
     const onMsg = (e: MessageEvent) => {
@@ -738,35 +747,12 @@ export function ProcedureCard({
               기록되지 않는다. 짚어주면 절차가 상태를 모아 오고, 안 짚으면
               이동만 자동화된다(네 군데를 열어주고 보는 건 여전히 사람이 한다). */}
           <div className="tick">여기서 뭘 확인해? (안 짚으면 이동만 한다)</div>
-          {/* 아는 서비스면 키를 여기서 받는다. 미리 설정 화면에서 받아두지
-              않는 이유 — 그러면 쓰지도 않을 키를 먼저 요구하게 된다.
-              **키는 이 브라우저를 안 떠난다.** 서버에는 어느 서비스의 어느
-              필드인지만 남는다. */}
-          {[...new Set(c.steps.map((s, i) => (apiInfo[i]?.known ? i : -1)).filter((i) => i >= 0))]
-            .map((i) => apiInfo[i])
-            .filter((info, idx, arr) => arr.findIndex((x) => x?.service === info?.service) === idx)
-            .map((info) => (
-              <div key={info!.service} className="flex flex-wrap items-center gap-2 text-[12px]">
-                <span className="readout shrink-0 text-lum-3">{info!.label} 키</span>
-                <input
-                  type="password"
-                  value={keys[info!.service!] ?? ""}
-                  onChange={(e) =>
-                    setKeys((v) => ({ ...v, [info!.service!]: e.target.value }))
-                  }
-                  placeholder={info!.hasKey ? "이미 넣어둔 키가 있어" : info!.keyHint}
-                  className="readout min-w-0 flex-1 rounded-sm border border-[rgba(160,185,220,0.16)] bg-transparent px-2 py-1 text-[12.5px] text-lum-0 outline-none placeholder:text-lum-4 focus:border-[rgba(160,185,220,0.4)]"
-                />
-                <a
-                  href={info!.keyUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="readout shrink-0 text-lum-4 transition-colors hover:text-lum-2"
-                >
-                  발급받기
-                </a>
-              </div>
-            ))}
+          {/* 키 입력란은 여기 없다.
+              **키는 대개 필요 없다.** 엿들은 요청은 세션 쿠키로 그대로 다시
+              부르고, 물어본 API 도 쿠키가 통하는 곳이 많다. 필요한 것은
+              대시보드가 쓰는 문과 공개 API 의 문이 다를 때뿐이다.
+              그건 두드려봐야 알고, 401 이 왔을 때 그 자리에서 받는다 —
+              미리 그리면 쓰지도 않을 키를 먼저 요구하는 셈이다. */}
           {c.steps.map((s, i) => {
             const got = reads.find((r) => r.after === i);
             return (
@@ -790,11 +776,17 @@ export function ProcedureCard({
                         <span className="ml-2 text-[11px] text-lum-4">화면</span>
                       )}
                     </span>
-                    {apiInfo[i]?.known && !got.api && !got.net && (
+                    {/* 화면에서 읽기로 정해진 자리도 다시 시도할 수 있다.
+                        아는 서비스면 바로 두드리고(호출 0회), 모르면 물어본다. */}
+                    {!got.api && !got.net && (
                       <button
                         type="button"
-                        disabled={matching !== null}
-                        onClick={() => tryApi(i, s.domain, got.label)}
+                        disabled={matching !== null || pending}
+                        onClick={() =>
+                          apiInfo[i]?.known
+                            ? tryApi(i, s.domain, got.label)
+                            : askGuess(i, s.domain, got.label)
+                        }
                         className="readout shrink-0 text-lum-3 transition-colors hover:text-lum-0 disabled:opacity-40"
                       >
                         {matching === i ? "찾는 중…" : "API 로"}
@@ -833,6 +825,40 @@ export function ProcedureCard({
                     화면에서만 보이는 값인지 — 돌려보고 나서 아는 게 아니다.
                     API 로 가져오는 자리는 실행할 때 탭이 안 뜨고, 셀렉터가
                     깨질 일도 없다. */}
+                {/* 키는 **필요해진 자리에만** 뜬다. 두드려봤더니 인증이
+                    막았을 때뿐이다 — 미리 그리면 쓰지도 않을 키를 먼저
+                    요구하게 된다. 이 값은 이 브라우저를 안 떠난다. */}
+                {needKey[i] && (
+                  <div className="flex flex-wrap items-center gap-2 pl-6 text-[12px]">
+                    <input
+                      type="password"
+                      value={keys[needKey[i].domain] ?? ""}
+                      onChange={(e) =>
+                        setKeys((v) => ({ ...v, [needKey[i].domain]: e.target.value }))
+                      }
+                      placeholder={needKey[i].hint ?? "API 키"}
+                      className="readout min-w-0 flex-1 rounded-sm border border-[rgba(160,185,220,0.16)] bg-transparent px-2 py-1 text-[12px] text-lum-0 outline-none placeholder:text-lum-4 focus:border-[rgba(160,185,220,0.4)]"
+                    />
+                    <button
+                      type="button"
+                      disabled={!keys[needKey[i].domain] || matching !== null}
+                      onClick={() => askGuess(i, needKey[i].domain, got?.label ?? "")}
+                      className="readout shrink-0 text-lum-1 transition-colors hover:text-lum-0 disabled:opacity-40"
+                    >
+                      다시 해보기
+                    </button>
+                    {needKey[i].keyUrl && (
+                      <a
+                        href={needKey[i].keyUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="readout shrink-0 text-lum-4 transition-colors hover:text-lum-2"
+                      >
+                        발급받기
+                      </a>
+                    )}
+                  </div>
+                )}
                 {(matching === i || matchNote[i]) && (
                   <div
                     className={`readout truncate pl-6 text-[11px] ${
