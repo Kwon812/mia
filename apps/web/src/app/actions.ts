@@ -443,15 +443,16 @@ export async function approveProcedure(
 ): Promise<ProcedureResult> {
   if (!name.trim()) return { ok: false, error: "이름을 지어줘." };
 
-  // 집은 자리의 경로를 그 단계에 실어준다. 읽기는 스스로 이동하지 않고
-  // 단계가 데려다 놓은 화면에서 읽으므로, 화면을 아는 쪽은 단계여야 한다.
-  // 도메인만 들고 가면 /usage 에서 집은 값을 루트에서 찾게 된다.
+  // **경로를 단계에 싣지 않는다.**
+  //
+  // 집을 때 있던 화면의 경로를 그 단계에 실었었다. 그런데 그건 **읽는
+  // 위치지 클릭하는 위치가 아니다** — 「Usage」를 누르는 단계인데 이미
+  // /usage 에 데려다 놓으면 앞뒤가 안 맞는다. 실제로 홈에서 집었는데
+  // 돌리면 /usage 로 가는 일이 벌어졌다.
+  //
+  // 화면에서 읽는 자리만 그 경로가 필요하고, 그건 읽기 자신이 들고 간다.
+  // API 로 읽는 자리는 아예 필요 없다 — 그 사이트 아무 페이지에서나 부른다.
   const withPath = (steps ?? []) as Record<string, unknown>[];
-  for (const rd of reads) {
-    if (rd.path && withPath[rd.after]) {
-      withPath[rd.after] = { ...withPath[rd.after], path: rd.path };
-    }
-  }
 
   const r = await answerProcedure(signature, "approved", {
     name,

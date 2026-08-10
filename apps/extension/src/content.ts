@@ -333,6 +333,9 @@
     /** 값 옆의 변하지 않는 글자. 셀렉터가 다 깨졌을 때 마지막으로 기댈 곳. */
     anchor?: string;
     label: string;
+    /** 집을 때 있던 화면. **화면에서 읽는 자리만 쓴다** — API 로 읽으면
+     *  아무 페이지에서나 부르므로 이동할 이유가 없다. */
+    path?: string;
     /** API 로 읽는 자리. 있으면 화면을 안 본다 — 이쪽이 정확하고 안 깨진다. */
     api?: { service: string; probe: string; path: string };
     /** 엿들어 알아낸 요청. 세션 쿠키로 그대로 다시 부른다 — 키도 안 받고
@@ -419,6 +422,17 @@
         const wrong = got?.ok ? checkRead(r, v) : got?.error;
         out.push(wrong ? { label: r.label, value: v, wrong } : { label: r.label, value: v });
         continue;
+      }
+
+      // **화면에서 읽는 자리는 그 화면에 있어야 한다.**
+      //
+      // 집을 때의 경로가 지금과 다르면 값이 거기 없다. 단계를 옮기지 않고
+      // 읽기 자신이 옮긴다 — 그 경로는 읽는 위치지 클릭하는 위치가 아니다.
+      if (r.path && location.pathname + location.search !== r.path) {
+        history.pushState({}, '', r.path);
+        // SPA 는 pushState 만으로는 안 그린다. popstate 를 던져 라우터를 깨운다.
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        await new Promise((res) => setTimeout(res, 1200));
       }
 
       // 후보를 앞에서부터. 값이 늦게 채워지는 화면이 많아(대시보드는 대개

@@ -57,6 +57,15 @@
      * 로그인은 멀쩡한데.
      */
     headers?: Record<string, string>;
+    /**
+     * 자격을 어떻게 실었나 (include·omit·same-origin).
+     *
+     * 이걸 안 맞추면 크로스 오리진에서 브라우저가 아예 막는다. Authorization
+     * 헤더로 인증하는 API 는 서버가 Access-Control-Allow-Origin: * 를 주는
+     * 것이 보통이고, 그때 credentials: include 는 정책 위반이다 — 실측에서
+     * "Failed to fetch" 가 그렇게 났다. 원래 어떻게 불렀는지를 그대로 쓴다.
+     */
+    creds?: RequestCredentials;
     /** 파싱된 응답. 객체가 아니면 안 든다 — 값 찾기는 JSON 에서만 한다. */
     json: unknown;
     at: number;
@@ -138,6 +147,7 @@
     body: string | undefined,
     text: string,
     headers?: Record<string, string>,
+    creds?: RequestCredentials,
   ): void {
     if (!text || text.length > MAX_BYTES) return;
     const head = text.slice(0, 200).trimStart();
@@ -145,7 +155,7 @@
     try {
       const json = JSON.parse(text);
       if (json && typeof json === 'object') {
-        keep({ url, method, body, json, headers, at: Date.now() });
+        keep({ url, method, body, json, headers, creds, at: Date.now() });
       }
     } catch {
       // JSON 이 아니면 그만이다.
@@ -165,10 +175,12 @@
       // **복제해서 읽는다.** 원본 스트림을 읽으면 페이지가 못 읽는다 —
       // 엿듣기가 페이지를 망가뜨리면 안 된다.
       const headers = pickHeaders(init?.headers, req instanceof Request ? req : undefined);
+      const creds =
+        init?.credentials ?? (req instanceof Request ? req.credentials : undefined);
       res
         .clone()
         .text()
-        .then((t) => tryKeep(new URL(url, location.href).href, method, body, t, headers))
+        .then((t) => tryKeep(new URL(url, location.href).href, method, body, t, headers, creds))
         .catch(() => undefined);
     } catch {
       // 무슨 일이 있어도 원래 응답은 그대로 돌려준다.
@@ -261,27 +273,41 @@
         body?: string;
         headers?: Record<string, string>;
       };
+
+      // **원래 어떻게 불렀는지를 그대로 쓴다.**
+      //
+      // 자격과 헤더를 우리가 정하면 어긋난다 — Authorization 으로 인증하는
+      // API 에 credentials: include 를 붙이면 브라우저가 아예 막고
+      // ("Failed to fetch"), 쿠키로 인증하는 곳에 헤더만 붙이면 401 이다.
+      // 같은 경로를 엿들은 적이 있으면 그때 본 그대로 부른다.
+      const past = caught.find((c) => pathOf(c.url) === pathOf(url));
+      const useHeaders = headers ?? past?.headers ?? {};
+      const useCreds = past?.creds ?? 'include';
+
       // 원본 fetch 를 쓴다. 감싼 쪽을 부르면 이 호출까지 엿듣게 되어,
       // 재현한 응답이 다시 후보로 쌓인다.
-      origFetch(url, {
-        method: method ?? 'GET',
-        credentials: 'include',
-        headers: { Accept: 'application/json', ...(headers ?? {}) },
-        body: body ?? undefined,
-      })
+      const once = (creds: RequestCredentials) =>
+        origFetch(url, {
+          method: method ?? 'GET',
+          credentials: creds,
+          headers: { Accept: 'application/json', ...useHeaders },
+          body: body ?? undefined,
+        });
+
+      const answer = (o: { ok: boolean; status: number; text?: string; error?: string }) =>
+        window.postMessage({ __naNet: 'refetch-ans', id, ...o }, '*');
+
+      once(useCreds)
+        .catch(() =>
+          // 자격 방식이 안 맞아 막혔을 수 있다. 반대쪽으로 한 번 더 해본다 —
+          // 엿들은 기록이 없을 때 우리가 고른 값이 틀렸을 경우다.
+          once(useCreds === 'include' ? 'omit' : 'include'),
+        )
         .then(async (r) => {
           const text = await r.text();
-          window.postMessage(
-            { __naNet: 'refetch-ans', id, ok: r.ok, status: r.status, text: text.slice(0, MAX_BYTES) },
-            '*',
-          );
+          answer({ ok: r.ok, status: r.status, text: text.slice(0, MAX_BYTES) });
         })
-        .catch((err) => {
-          window.postMessage(
-            { __naNet: 'refetch-ans', id, ok: false, status: 0, error: String(err?.message ?? err) },
-            '*',
-          );
-        });
+        .catch((err) => answer({ ok: false, status: 0, error: String(err?.message ?? err) }));
       return;
     }
     if (e.source !== window || e.data?.__naNet !== 'ask') return;
