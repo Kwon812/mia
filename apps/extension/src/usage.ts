@@ -291,17 +291,49 @@ export function parseRenderMetric(json: unknown): number {
   return sum;
 }
 
-/** Render 서비스 목록. `[{ service: {...}, cursor }]` 꼴이다. */
-export function parseRenderServices(json: unknown): { id: string; suspended: boolean }[] {
+export interface RenderService {
+  id: string;
+  suspended: boolean;
+  /** 어느 리전인가. 메트릭을 **리전별로 나눠 불러야** 해서 필요하다 */
+  region: string;
+}
+
+/**
+ * Render 서비스 목록. `[{ service: {...}, cursor }]` 꼴이다.
+ *
+ * 리전은 타입에 따라 `serviceDetails.region` 에 있기도 하고 위에 바로
+ * 붙기도 한다. 정적 사이트처럼 아예 없는 것도 있어서 그때는 빈 문자열이다.
+ */
+export function parseRenderServices(json: unknown): RenderService[] {
   if (!Array.isArray(json)) return [];
-  const out: { id: string; suspended: boolean }[] = [];
+  const out: RenderService[] = [];
   for (const row of json) {
     const svc = asRecord(asRecord(row)?.service) ?? asRecord(row);
     const id = svc?.id;
     if (typeof id !== 'string') continue;
-    out.push({ id, suspended: svc?.suspended === 'suspended' || svc?.suspended === true });
+    const detailRegion = asRecord(svc?.serviceDetails)?.region;
+    const region =
+      typeof detailRegion === 'string' ? detailRegion : typeof svc?.region === 'string' ? svc.region : '';
+    out.push({ id, suspended: svc?.suspended === 'suspended' || svc?.suspended === true, region });
   }
   return out;
+}
+
+/**
+ * 리전별로 묶는다.
+ *
+ * **한 요청에 한 리전만 된다.** 여러 리전을 한 번에 물으면 Render 가
+ * `querying resources from multiple regions is not supported` 로 400 을
+ * 낸다 — 서비스를 두 리전에 걸쳐 두고 있으면 대역폭이 통째로 안 나온다.
+ */
+export function groupByRegion(services: RenderService[]): Map<string, string[]> {
+  const g = new Map<string, string[]>();
+  for (const s of services) {
+    const list = g.get(s.region);
+    if (list) list.push(s.id);
+    else g.set(s.region, [s.id]);
+  }
+  return g;
 }
 
 // ── 오류 문장 ───────────────────────────────────────────────
@@ -313,8 +345,11 @@ export function parseRenderServices(json: unknown): { id: string; suspended: boo
  * 또 같은 걸 본다. 여기서 갈리는 것은 대개 **키 종류**다 — 일반 키로는
  * 조직 사용량을 못 본다. 그래서 그 문장을 직접 적는다.
  */
-export function usageErrorFor(id: UsageProviderId, status: number): string {
+export function usageErrorFor(id: UsageProviderId, status: number, body = ''): string {
   const meta = USAGE_PROVIDERS[id];
+  // 400 은 "요청이 잘못됐다"만으로는 손쓸 데가 없다. 그쪽이 적어 보낸 이유를
+  // 그대로 보여주는 편이 어떤 번역보다 낫다.
+  const why = body ? ` — ${body}` : '';
   if (status === 401 || status === 403) {
     if (id === 'render') return `키가 안 먹혀 (${status}). ${meta.keyHint}`;
     return `일반 키로는 사용량을 못 봐 (${status}). ${meta.keyHint}`;
@@ -322,8 +357,8 @@ export function usageErrorFor(id: UsageProviderId, status: number): string {
   if (status === 404) return 'API 경로가 바뀌었어 (404).';
   if (status === 429) return '요청이 너무 잦대 (429). 잠깐 뒤에 다시.';
   if (status >= 500) return `${meta.label} 쪽 문제야 (${status}).`;
-  if (status === 400 || status === 422) return `요청을 못 알아들었대 (${status}).`;
-  return `${meta.label} 이 ${status} 로 답했어.`;
+  if (status === 400 || status === 422) return `요청을 못 알아들었대 (${status})${why}`;
+  return `${meta.label} 이 ${status} 로 답했어${why}`;
 }
 
 export function usageNetErrorFor(err: unknown): string {
@@ -338,15 +373,46 @@ export function usageNetErrorFor(err: unknown): string {
 /** 팝업이 열려 있는 동안 사람을 세워두지 않는다. 10초면 충분히 기다린 것이다. */
 const TIMEOUT_MS = 10_000;
 
+/**
+ * 실패했을 때 **본문도 같이 들고 온다.**
+ *
+ * 상태 코드만으로는 400 앞에서 손을 못 쓴다 — "요청이 잘못됐다"는 것만
+ * 알고 어디가 잘못됐는지는 모르는데, 정작 그 답은 응답 본문에 적혀 있다.
+ * 실제로 Render 대역폭이 400 을 뱉었을 때 여기서 막혀 한참을 돌아갔다.
+ */
+export function briefBody(text: string): string {
+  const t = text.trim();
+  if (!t) return '';
+  try {
+    const j = JSON.parse(t) as Record<string, unknown>;
+    // 서비스마다 담는 자리가 다르다. 흔한 것들을 훑고, 없으면 통째로 줄인다.
+    const err = j.error;
+    const msg =
+      (typeof err === 'string' && err) ||
+      (typeof (err as Record<string, unknown>)?.message === 'string' &&
+        ((err as Record<string, unknown>).message as string)) ||
+      (typeof j.message === 'string' && j.message) ||
+      '';
+    if (msg) return msg.slice(0, 160);
+  } catch {
+    /* JSON 이 아니면 원문을 줄여 쓴다 */
+  }
+  return t.replace(/\s+/g, ' ').slice(0, 160);
+}
+
 async function getJson(
   url: string,
   headers: Record<string, string>,
-): Promise<{ ok: true; json: unknown } | { ok: false; status: number }> {
+): Promise<{ ok: true; json: unknown } | { ok: false; status: number; body: string }> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, { headers: { Accept: 'application/json', ...headers }, signal: ctl.signal });
-    if (!res.ok) return { ok: false, status: res.status };
+    if (!res.ok) {
+      // 본문 읽기가 실패해도 상태 코드는 지킨다.
+      const body = await res.text().catch(() => '');
+      return { ok: false, status: res.status, body: briefBody(body) };
+    }
     return { ok: true, json: await res.json() };
   } finally {
     clearTimeout(timer);
@@ -402,7 +468,7 @@ async function fetchOpenAi(
     `https://api.openai.com/v1/organization/costs` +
     `?start_time=${Math.floor(monthStartUtc(now) / 1000)}&bucket_width=1d&limit=31`;
   const res = await getJson(url, { Authorization: `Bearer ${key}` });
-  if (!res.ok) return { error: usageErrorFor('openai', res.status) };
+  if (!res.ok) return { error: usageErrorFor('openai', res.status, res.body) };
   return { ...costEntry(parseOpenAiCosts(res.json), now, subUsd), error: null };
 }
 
@@ -422,7 +488,7 @@ async function fetchAnthropic(
     `?starting_at=${encodeURIComponent(new Date(monthStartUtc(now)).toISOString())}` +
     `&bucket_width=1d&limit=31`;
   const res = await getJson(url, { 'x-api-key': key, 'anthropic-version': '2023-06-01' });
-  if (!res.ok) return { error: usageErrorFor('anthropic', res.status) };
+  if (!res.ok) return { error: usageErrorFor('anthropic', res.status, res.body) };
   return { ...costEntry(parseAnthropicCosts(res.json), now, subUsd), error: null };
 }
 
@@ -439,7 +505,7 @@ async function fetchRender(
 ): Promise<Partial<UsageEntry>> {
   const auth = { Authorization: `Bearer ${key}` };
   const svcRes = await getJson('https://api.render.com/v1/services?limit=100', auth);
-  if (!svcRes.ok) return { error: usageErrorFor('render', svcRes.status) };
+  if (!svcRes.ok) return { error: usageErrorFor('render', svcRes.status, svcRes.body) };
 
   const services = parseRenderServices(svcRes.json);
   const live = services.filter((s) => !s.suspended);
@@ -447,19 +513,37 @@ async function fetchRender(
     { k: '서비스', v: `${live.length}개 실행 중${services.length > live.length ? ` · ${services.length - live.length}개 중지` : ''}` },
   ];
 
-  // 대역폭은 서비스를 지정해야 나온다. 요청 하나에 다 실어 보낸다.
+  // 대역폭은 서비스를 지정해야 나오고, **리전별로 나눠 물어야 한다**
+  // (groupByRegion 주석 참고). 리전 수만큼 요청이 늘지만 대개 한둘이고,
   // 하루 해상도면 한 달이 31 점이라 응답도 가볍다.
   if (live.length > 0) {
-    const url = new URL('https://api.render.com/v1/metrics/bandwidth');
-    url.searchParams.set('startTime', new Date(monthStartUtc(now)).toISOString());
-    url.searchParams.set('endTime', new Date(now).toISOString());
-    url.searchParams.set('resolutionSeconds', '86400');
-    for (const s of live.slice(0, 20)) url.searchParams.append('resource', s.id);
+    const groups = [...groupByRegion(live.slice(0, 40))];
+    const results = await Promise.all(
+      groups.map(async ([region, ids]) => {
+        const url = new URL('https://api.render.com/v1/metrics/bandwidth');
+        url.searchParams.set('startTime', new Date(monthStartUtc(now)).toISOString());
+        url.searchParams.set('endTime', new Date(now).toISOString());
+        url.searchParams.set('resolutionSeconds', '86400');
+        for (const id of ids) url.searchParams.append('resource', id);
+        const bw = await getJson(url.toString(), auth);
+        return bw.ok
+          ? { bytes: parseRenderMetric(bw.json), failed: null }
+          : { bytes: 0, failed: `${region || '리전없음'} ${bw.status}${bw.body ? ` ${bw.body}` : ''}` };
+      }),
+    );
 
-    const bw = await getJson(url.toString(), auth);
-    // 대역폭을 못 읽었다고 서비스 수까지 버리지 않는다 — 부분이라도 보여준다.
-    if (bw.ok) lines.push({ k: '이달 대역폭', v: formatBytes(parseRenderMetric(bw.json)) });
-    else lines.push({ k: '이달 대역폭', v: `못 읽음 (${bw.status})` });
+    const bytes = results.reduce((a, r) => a + r.bytes, 0);
+    const failed = results.map((r) => r.failed).filter((v): v is string => v !== null);
+
+    // 한 리전이 실패해도 나머지는 살린다. 다만 **부분 합계를 전체인 척
+    // 적지 않는다** — 모르는 채로 작아 보이는 숫자가 제일 나쁘다.
+    if (failed.length === 0) {
+      lines.push({ k: '이달 대역폭', v: formatBytes(bytes) });
+    } else if (failed.length < results.length) {
+      lines.push({ k: '이달 대역폭', v: `${formatBytes(bytes)} (일부 누락 — ${failed.join(', ')})` });
+    } else {
+      lines.push({ k: '이달 대역폭', v: `못 읽음 — ${failed.join(', ')}` });
+    }
   }
 
   // 요금 API 가 없으니 큰 글씨에 적을 것도 없다 — 구독료를 적어뒀다면 그것만은

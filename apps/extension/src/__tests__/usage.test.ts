@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  briefBody,
   dayStartUtc,
+  groupByRegion,
   formatBytes,
   formatUsd,
   monthStartUtc,
@@ -210,18 +212,75 @@ describe('Render 응답', () => {
 
   it('서비스 목록은 {service} 로 한 겹 싸여 온다', () => {
     const got = parseRenderServices([
-      { service: { id: 'srv-a', suspended: 'not_suspended' }, cursor: 'c1' },
-      { service: { id: 'srv-b', suspended: 'suspended' }, cursor: 'c2' },
+      { service: { id: 'srv-a', suspended: 'not_suspended', serviceDetails: { region: 'oregon' } }, cursor: 'c1' },
+      { service: { id: 'srv-b', suspended: 'suspended', serviceDetails: { region: 'oregon' } }, cursor: 'c2' },
     ]);
     expect(got).toEqual([
-      { id: 'srv-a', suspended: false },
-      { id: 'srv-b', suspended: true },
+      { id: 'srv-a', suspended: false, region: 'oregon' },
+      { id: 'srv-b', suspended: true, region: 'oregon' },
     ]);
   });
 
+  it('리전은 serviceDetails 안에 있기도 하고 위에 붙기도 한다', () => {
+    const got = parseRenderServices([
+      { service: { id: 'a', serviceDetails: { region: 'singapore' } } },
+      { service: { id: 'b', region: 'frankfurt' } },
+      // 정적 사이트처럼 리전이 없는 것도 있다
+      { service: { id: 'c' } },
+    ]);
+    expect(got.map((s) => s.region)).toEqual(['singapore', 'frankfurt', '']);
+  });
+
   it('싸여 있지 않은 모양도 읽는다', () => {
-    expect(parseRenderServices([{ id: 'srv-c' }])).toEqual([{ id: 'srv-c', suspended: false }]);
+    expect(parseRenderServices([{ id: 'srv-c' }])).toEqual([{ id: 'srv-c', suspended: false, region: '' }]);
     expect(parseRenderServices(null)).toEqual([]);
+  });
+
+  // ── 회귀 ──
+  //
+  // 리전을 섞어 한 번에 물으면 Render 가 400 을 낸다:
+  //   "querying resources from multiple regions is not supported"
+  // 실계정(서비스 6개, 리전 2개)에서 대역폭이 통째로 안 나온 원인이었다.
+  it('리전별로 갈라 묶는다 — 섞어 물으면 400 이다', () => {
+    const g = groupByRegion([
+      { id: 'a', suspended: false, region: 'oregon' },
+      { id: 'b', suspended: false, region: 'singapore' },
+      { id: 'c', suspended: false, region: 'oregon' },
+    ]);
+    expect(g.size).toBe(2);
+    expect(g.get('oregon')).toEqual(['a', 'c']);
+    expect(g.get('singapore')).toEqual(['b']);
+  });
+
+  it('리전이 하나뿐이면 요청도 하나다', () => {
+    const g = groupByRegion([
+      { id: 'a', suspended: false, region: 'oregon' },
+      { id: 'b', suspended: false, region: 'oregon' },
+    ]);
+    expect([...g.keys()]).toEqual(['oregon']);
+  });
+});
+
+describe('오류 본문 요약', () => {
+  it('Render 처럼 {message} 로 오면 그것만 뽑는다', () => {
+    expect(briefBody('{"message":"querying resources from multiple regions is not supported"}')).toBe(
+      'querying resources from multiple regions is not supported',
+    );
+  });
+
+  it('OpenAI 처럼 {error:{message}} 로 와도 뽑는다', () => {
+    expect(briefBody('{"error":{"message":"Missing bearer","type":"invalid_request_error"}}')).toBe(
+      'Missing bearer',
+    );
+  });
+
+  it('JSON 이 아니면 원문을 줄여서 쓴다', () => {
+    expect(briefBody('  <html>\n  Bad   Gateway\n</html> ')).toBe('<html> Bad Gateway </html>');
+    expect(briefBody('   ')).toBe('');
+  });
+
+  it('아무리 길어도 화면을 안 밀어낸다', () => {
+    expect(briefBody('x'.repeat(500)).length).toBe(160);
   });
 });
 
