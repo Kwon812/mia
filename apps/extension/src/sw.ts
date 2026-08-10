@@ -112,24 +112,40 @@ async function goTo(domain: string, path?: string): Promise<void> {
     }
   }
 
-  // **앞으로 끌어오지 않는다.**
+  // **앞으로 가져온다.** 한 번 배경 탭으로 돌려봤다가 되돌린 결정이다.
   //
-  // 예전에는 active: true 였다. 절차 한 번에 탭이 네 번 튀어나와서, 보고
-  // 있던 화면을 빼앗긴다 — 자동화가 손을 덜어주는 대신 주의를 가져가면
-  // 남는 게 없다. 사람은 결과만 보면 되고 그건 사이트가 보여준다.
+  // 배경 탭에서는 크롬이 렌더링을 억제한다. content script 는 돌지만 화면을
+  // 안 그려서, 데이터가 와도 DOM 에 안 앉고 innerText 는 반쪽만 준다.
+  // 실측으로 그랬다 — 집을 때 "Total tokens 0" 이던 자리가 실행 때
+  // "Total tokens" 로 나오고, 다른 자리는 아예 "(못 읽음)" 이었다.
   //
-  // 배경 탭에서도 content script 는 그대로 돈다. 크롬이 타이머를 1초
-  // 단위로 늦추긴 하는데, 절차는 몇 초짜리라 그 정도는 견딘다.
-  //
-  // 창을 아예 안 띄우는 길은 없다. DOM 을 읽어야 하고, 크롬은 그리지 않는
-  // 페이지의 DOM 을 주지 않는다.
+  // 값을 읽는 것이 이 자동화의 값어치 대부분이라, 주의를 몇 초 빌리는 쪽이
+  // 낫다. 대신 절차가 끝나면 보고 있던 탭으로 돌려준다(restoreTab).
   if (hit?.id != null) {
+    await chrome.tabs.update(hit.id, { active: true });
     // 이미 그 페이지에 있으면 content script 가 다시 물을 계기가 없다.
     // 직접 깨운다 — 없으면 절차가 그 자리에서 멈춘 채로 남는다.
     await chrome.tabs.sendMessage(hit.id, { type: 'RUN_PUMP' }).catch(() => undefined);
     return;
   }
-  await chrome.tabs.create({ url, active: false });
+  await chrome.tabs.create({ url, active: true });
+}
+
+/** 절차 전에 보고 있던 탭. 끝나면 그리로 돌려준다 — 빌린 주의는 갚는다. */
+const HOME_KEY = 'na_run_home';
+
+async function rememberHomeTab(tabId?: number): Promise<void> {
+  if (tabId != null) await chrome.storage.local.set({ [HOME_KEY]: tabId });
+}
+
+async function restoreHomeTab(): Promise<void> {
+  const got = await chrome.storage.local.get(HOME_KEY);
+  const id = got[HOME_KEY] as number | undefined;
+  await chrome.storage.local.remove(HOME_KEY);
+  if (id == null) return;
+  // 그 사이 닫혔을 수 있다. 없으면 그냥 둔다 — 아무 탭이나 골라 띄우면
+  // 그게 더 이상하다.
+  await chrome.tabs.update(id, { active: true }).catch(() => undefined);
 }
 import type { SessionSnapshot, SnapshotDraft, SnapshotPreview } from './snapshot';
 
@@ -803,6 +819,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     void setRun({ ...run, index: 0, startedAt: Date.now(), results: [] })
+      // 사이트를 보고 있던 그 탭으로 돌아온다. 결과가 거기 뜨기 때문이다.
+      .then(() => rememberHomeTab(sender.tab?.id))
       .then(() => goTo(run.steps[0]?.domain ?? '', run.steps[0]?.path))
       .then(() => sendResponse({ ok: true }));
     return true;
@@ -839,7 +857,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!next && !run.doneAt && !run.error) {
         await goTo(run.steps[run.index]?.domain ?? '', run.steps[run.index]?.path);
       }
-      if (run.doneAt || run.error) await announce(run);
+      if (run.doneAt || run.error) {
+        await announce(run);
+        await restoreHomeTab();
+      }
       sendResponse({
         more: !!next,
         done: !!run.doneAt,

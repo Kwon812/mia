@@ -366,8 +366,24 @@
       for (let i = 1; !el && i < cands.length; i++) el = document.querySelector(cands[i]);
       // 다 깨졌으면 이름으로 찾는다. 값은 변해도 그 옆 글자는 웬만해선 남는다.
       if (!el && r.anchor) el = findByLabel(r.anchor);
-      const raw = el ? ((el as HTMLElement).innerText ?? el.textContent ?? '') : '';
-      const value = raw.trim().replace(/\s+/g, ' ').slice(0, 120) || '(못 읽음)';
+
+      // 값이 채워질 때까지 기다린다. 대시보드는 껍데기를 먼저 그리고 숫자를
+      // 나중에 채운다 — 그 사이에 읽으면 이름만 잡힌다("Total tokens 0" 이
+      // "Total tokens" 로 나왔다).
+      //
+      // 집을 때의 이름(anchor)과 지금 읽은 것이 같으면 아직 값이 안 온
+      // 것이다. 이름이 없는 자리(값만 든 칸)는 비교할 게 없으니 그냥 읽는다.
+      const textOf = (x: Element | null) =>
+        x ? ((x as HTMLElement).innerText || x.textContent || '').trim().replace(/\s+/g, ' ') : '';
+      let raw = textOf(el);
+      if (el && r.anchor && raw === r.anchor) {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 4000 && raw === r.anchor) {
+          await new Promise((res) => setTimeout(res, 250));
+          raw = textOf(el);
+        }
+      }
+      const value = raw.slice(0, 120) || '(못 읽음)';
       const wrong = checkRead(r, value);
       out.push(wrong ? { label: r.label, value, wrong } : { label: r.label, value });
     }
