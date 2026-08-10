@@ -374,6 +374,39 @@
       // 없고, 여기서 부르면 자격이 저절로 맞는다. 페이지가 자기 API 를
       // 부르는 것과 같은 일이다.
       if (r.net) {
+        // **먼저 엿들은 것에서 찾는다.** 페이지가 이 화면을 그리면서 이미
+        // 그 API 를 불렀다면 그 응답이 손에 있다 — 자격도 신선도도 맞는다.
+        const seen = await readCaught(r.net.url);
+        if (seen.ok) {
+          const v = readPathLocal(seen.json, r.net.path);
+          if (v !== undefined && v !== null) {
+            const value = String(v);
+            const wrong = checkRead(r, value);
+            out.push(wrong ? { label: r.label, value, wrong } : { label: r.label, value });
+            continue;
+          }
+        }
+
+        // 아직 안 불렀으면 그 화면으로 옮겨 **페이지가 부르게 한다.**
+        // 우리가 부르는 것보다 이쪽이 확실하다.
+        if (!seen.ok && r.path && location.pathname + location.search !== r.path) {
+          history.pushState({}, '', r.path);
+          window.dispatchEvent(new PopStateEvent('popstate'));
+          for (let i = 0; i < 12; i++) {
+            await new Promise((res) => setTimeout(res, 400));
+            const again = await readCaught(r.net.url, 30000);
+            if (!again.ok) continue;
+            const v = readPathLocal(again.json, r.net.path);
+            if (v === undefined || v === null) break;
+            const value = String(v);
+            const wrong = checkRead(r, value);
+            out.push(wrong ? { label: r.label, value, wrong } : { label: r.label, value });
+            break;
+          }
+          if (out.length && out[out.length - 1].label === r.label) continue;
+        }
+
+        // 마지막 수단으로 직접 부른다. 자격이 안 맞아 실패할 수 있다.
         const got = await refetch(r.net.url, r.net.method, r.net.body);
         if (!got.ok) {
           const why =
@@ -667,6 +700,31 @@
       }
     }
     return cur;
+  }
+
+  /**
+   * 엿들은 것에서 값을 꺼낸다. **다시 부르지 않는다.**
+   *
+   * 페이지가 이 화면을 그리면서 이미 그 API 를 불렀다. 그 응답이 여기
+   * 있는데 굳이 다시 부를 이유가 없고, 다시 부르면 자격이 안 맞는다 —
+   * 크로스 오리진에서 브라우저가 Authorization 을 떼어낸다.
+   */
+  function readCaught(url: string, maxAgeMs = 120000): Promise<{ ok: boolean; json?: unknown }> {
+    return new Promise((resolve) => {
+      const id = `${Date.now()}-${Math.random()}`;
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', onAns);
+        resolve({ ok: false });
+      }, 800);
+      const onAns = (e: MessageEvent) => {
+        if (e.source !== window || e.data?.__naNet !== 'read-ans' || e.data.id !== id) return;
+        clearTimeout(timer);
+        window.removeEventListener('message', onAns);
+        resolve(e.data);
+      };
+      window.addEventListener('message', onAns);
+      window.postMessage({ __naNet: 'read', id, url, maxAgeMs }, '*');
+    });
   }
 
   function refetch(

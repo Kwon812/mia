@@ -257,6 +257,35 @@
       console.log(`[NA] 엿들은 것 ${caught.length}개 · 경로 ${Object.keys(by).length}종`, by);
       return;
     }
+    /**
+     * **엿들은 것에서 바로 읽는다. 다시 부르지 않는다.**
+     *
+     * 재현은 벽에 부딪혔다. 헤더를 그대로 실어 보냈는데 서버가
+     * "Missing bearer authentication" 이라고 답했다 — 크로스 오리진에서
+     * 브라우저가 Authorization 을 떼어낸 것이다. 우리가 어떻게 해도 페이지가
+     * 부르는 것과 같아지지 않는다.
+     *
+     * 그런데 다시 부를 이유가 없다. **페이지를 그 화면에 두면 페이지가
+     * 스스로 부른다.** 실행할 때 어차피 그 사이트에 가 있으므로, 로드되면서
+     * 부른 응답이 이미 여기 있다. 자격 문제가 통째로 사라진다.
+     *
+     * 신선한 것만 준다. 오래된 응답을 주면 어제 값을 오늘 값으로 보게 된다.
+     */
+    if (e.source === window && e.data?.__naNet === 'read') {
+      const { id, url, maxAgeMs } = e.data as { id: string; url: string; maxAgeMs?: number };
+      const want = pathOf(url);
+      const fresh = caught.find(
+        (c) => pathOf(c.url) === want && Date.now() - c.at <= (maxAgeMs ?? 120000),
+      );
+      window.postMessage(
+        fresh
+          ? { __naNet: 'read-ans', id, ok: true, json: fresh.json, age: Date.now() - fresh.at }
+          : { __naNet: 'read-ans', id, ok: false },
+        '*',
+      );
+      return;
+    }
+
     // **그 페이지가 스스로 부른다.**
     //
     // 확장이 요청을 재구성하면 아무리 헤더를 옮겨도 페이지와 똑같아지지
