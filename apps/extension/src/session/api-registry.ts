@@ -114,9 +114,31 @@ export function flatten(v: unknown, prefix = '', out: Record<string, unknown> = 
 }
 
 /** 화면에서 집은 글자에서 숫자를 뽑는다. "$1.88 / $3.00" → 1.88 */
-function numberIn(text: string): number | null {
+export function numberIn(text: string): number | null {
   const m = text.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
   return m ? Number(m[0]) : null;
+}
+
+/**
+ * 못 찾았을 때 **가까운 값들**을 보여준다.
+ *
+ * "그 값이 없어" 만으로는 다음에 뭘 할지 모른다. 응답에 1.8823 이 있는데
+ * 화면이 1.88 로 적은 것이라면 사람은 보자마자 안다 — 자릿수 문제인지,
+ * 애초에 다른 데서 오는 값인지가 눈에 들어온다.
+ */
+export function nearbyNumbers(flat: Record<string, unknown>, want: number, n = 5): string[] {
+  const rows: { path: string; v: number; d: number }[] = [];
+  for (const [path, v] of Object.entries(flat)) {
+    if (typeof v !== 'number' || v === 0) continue;
+    // 자릿수가 비슷한 것만. 1.88 을 찾는데 1200000 을 보여줘야 소용없다.
+    const ratio = Math.abs(v) / Math.abs(want || 1);
+    if (ratio > 2000 || ratio < 0.0005) continue;
+    rows.push({ path, v, d: Math.abs(v - want) });
+  }
+  return rows
+    .sort((a, b) => a.d - b.d)
+    .slice(0, n)
+    .map((r) => `${r.path}=${r.v}`);
 }
 
 export interface Match {
@@ -125,7 +147,33 @@ export interface Match {
   /** 어느 probe 에서 나왔나 */
   probe: string;
   /** 얼마나 확실한가 — 여럿이면 위에서부터 고른다 */
-  how: 'number' | 'text' | 'sum' | 'count';
+  how: 'number' | 'text' | 'sum' | 'count' | 'scaled' | 'rounded';
+}
+
+/**
+ * 화면의 숫자와 응답의 숫자가 같은 것인가.
+ *
+ * 그대로 비교하면 안 된다. 화면은 사람이 읽으라고 다듬은 값이고 응답은
+ * 기계가 쓰는 값이라, 같은 것이 다르게 적힌다.
+ *
+ *   $1.88  ↔  188        돈은 대개 최소 단위(센트)로 저장된다
+ *   $1.88  ↔  1.8823     화면이 두 자리로 반올림했다
+ *   1.2K   ↔  1200       화면이 줄여 적었다 (이건 numberIn 이 못 읽어 못 맞춘다)
+ *
+ * 배수를 인정하면 우연히 맞을 여지도 함께 커진다. 그래서 어떻게 맞았는지를
+ * 남겨 순위를 낮춘다 — 그대로 맞은 것이 언제나 먼저다.
+ */
+export function sameNumber(want: number, v: number): Match['how'] | null {
+  if (want === 0) return null; // 0 은 응답에 널려 있어 우연히 맞는다
+  if (Math.abs(v - want) < 1e-9) return 'number';
+  // 화면이 두 자리로 반올림했나. 1.8823 → 1.88
+  if (Math.abs(Math.round(v * 100) / 100 - want) < 1e-9) return 'rounded';
+  // 최소 단위로 저장됐나. 1.88 ↔ 188, 1880 (센트·밀)
+  for (const k of [100, 1000, 1e6]) {
+    if (Math.abs(v - want * k) < 1e-6) return 'scaled';
+    if (Math.abs(v * k - want) < 1e-6) return 'scaled';
+  }
+  return null;
 }
 
 /**
@@ -173,7 +221,8 @@ export function findValue(flat: Record<string, unknown>, picked: string, probe: 
   // 0 인 값은 화면에서 읽는 편이 낫다.
   if (wantNum !== null && wantNum !== 0) {
     for (const [star, { sum, count }] of Object.entries(groupSums(flat))) {
-      if (Math.abs(sum - wantNum) < 1e-6) out.push({ path: star, value: sum, probe, how: 'sum' });
+      const how = sameNumber(wantNum, sum);
+      if (how) out.push({ path: star, value: sum, probe, how: how === 'number' ? 'sum' : how });
       else if (count === wantNum) out.push({ path: `${star}#count`, value: count, probe, how: 'count' });
     }
   }
@@ -182,10 +231,8 @@ export function findValue(flat: Record<string, unknown>, picked: string, probe: 
     if (v === null || v === undefined) continue;
 
     if (wantNum !== null && typeof v === 'number') {
-      // 0 은 같은 이유로 제외한다 — 응답에 0 은 널려 있어서 우연히 맞는다.
-      if (wantNum !== 0 && Math.abs(v - wantNum) < 1e-6) {
-        out.push({ path, value: v, probe, how: 'number' });
-      }
+      const how = sameNumber(wantNum, v);
+      if (how) out.push({ path, value: v, probe, how });
       continue;
     }
     if (typeof v === 'string' && v.length > 0 && v.length < 80) {
@@ -198,7 +245,8 @@ export function findValue(flat: Record<string, unknown>, picked: string, probe: 
   }
   // 그대로 박힌 숫자가 가장 믿을 만하고, 그다음이 합계다. 경로가 짧을수록
   // 바깥쪽이라 안정적이다.
-  const rank = { number: 0, sum: 1, count: 2, text: 3 } as const;
+  // 그대로 맞은 것이 먼저다. 배수·반올림은 우연히 맞을 여지가 더 크다.
+  const rank = { number: 0, rounded: 1, sum: 2, scaled: 3, count: 4, text: 5 } as const;
   return out.sort((x, y) =>
     rank[x.how] === rank[y.how] ? x.path.length - y.path.length : rank[x.how] - rank[y.how],
   );

@@ -26,6 +26,8 @@ import {
   API_SERVICES,
   findValue,
   flatten,
+  nearbyNumbers,
+  numberIn,
   readPath,
   serviceFor,
   urlFor,
@@ -1119,10 +1121,17 @@ async function announce(run: RunState): Promise<void> {
     }[];
     const picked = String(message.picked ?? '');
     const hits: (Match & { url: string; method: string; body?: string })[] = [];
+    // 못 찾았을 때 보여줄 가까운 값들. "그 값이 없어" 만으로는 다음에 뭘 할지
+    // 모르는데, 응답에 1.8823 이 있는 걸 보면 자릿수 문제인지 다른 데서 오는
+    // 값인지가 바로 눈에 들어온다.
+    const near: string[] = [];
+    const wantNum = numberIn(picked);
     for (const c of caught) {
-      for (const m of findValue(flatten(c.json), picked, c.url)) {
+      const flat = flatten(c.json);
+      for (const m of findValue(flat, picked, c.url)) {
         hits.push({ ...m, url: c.url, method: c.method, body: c.body });
       }
+      if (wantNum !== null && near.length < 8) near.push(...nearbyNumbers(flat, wantNum, 2));
     }
     // 경로가 짧을수록 바깥쪽이라 안정적이다. 숫자 일치가 글자 일치보다 믿을 만하다.
     hits.sort((a, b) => (a.how === b.how ? a.path.length - b.path.length : a.how === 'number' ? -1 : 1));
@@ -1135,14 +1144,20 @@ async function announce(run: RunState): Promise<void> {
         at: Date.now(),
         hits: hits.slice(0, 5),
         picked,
-        // 어디를 봤는지. 경로만 남긴다 — 어느 API 인지만 알면 된다.
-        seen: caught.slice(0, 12).map((c) => {
-          try {
-            return new URL(c.url).pathname;
-          } catch {
-            return c.url.slice(0, 60);
-          }
-        }),
+        near: near.slice(0, 6),
+        // 어디를 봤는지. **같은 경로는 한 번만** — 기간만 바꿔 여러 번 부르는
+        // API 가 많아서, 그대로 세면 열두 개를 본 것처럼 보이는데 실은 하나다.
+        seen: [
+          ...new Set(
+            caught.map((c) => {
+              try {
+                return new URL(c.url).pathname;
+              } catch {
+                return c.url.slice(0, 60);
+              }
+            }),
+          ),
+        ].slice(0, 8),
       },
     });
     sendResponse({ ok: true, found: hits.length, seen: caught.length });
@@ -1153,7 +1168,7 @@ async function announce(run: RunState): Promise<void> {
   if (message?.type === 'NET_MATCH') {
     void chrome.storage.local.get(NET_KEY).then((got) => {
       const box = got[NET_KEY] as
-        | { at: number; hits: unknown[]; picked?: string; seen?: string[] }
+        | { at: number; hits: unknown[]; picked?: string; seen?: string[]; near?: string[] }
         | undefined;
       // 오래된 것은 다른 집기의 결과다. 그걸 주면 엉뚱한 API 를 매단다.
       if (!box || Date.now() - box.at > 60_000) {
@@ -1166,6 +1181,7 @@ async function announce(run: RunState): Promise<void> {
           ok: false,
           why: (box.seen?.length ?? 0) === 0 ? 'nothing-caught' : 'not-in-response',
           seen: box.seen ?? [],
+          near: box.near ?? [],
           picked: box.picked ?? '',
         });
       }
