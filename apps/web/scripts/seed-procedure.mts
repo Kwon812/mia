@@ -43,7 +43,16 @@ if (!u) { console.log('사용자가 없다'); await sql.end(); process.exit(1); 
 // 실제 사이트에서 그게 통하는지 보는 것이 이 시험의 목적이기도 하다.
 const act = (label: string, dt: number) => ({ t: 'a', label, dt });
 
-/** GPT 콘솔에서 사용량을 보고 Render 배포를 확인하는 흐름. */
+/**
+ * GPT 콘솔에서 사용량과 로그를 보고 Render 배포를 확인하는 흐름.
+ *
+ * **라벨은 실제로 있는 것만 쓴다.** 한 번 'Cost' 라는 없는 탭을 지어냈다가,
+ * 절차가 매번 그 자리에서 멈췄다 — 다시 집어도 소용없었다. 그 화면에 애초에
+ * 없는 것이라서다. 여기 있는 Usage·Logs 는 OpenAI 콘솔 내비에 실제로 있고,
+ * na-nightly-batch 는 render.yaml 에 있는 크론 이름이다.
+ *
+ * 세 단계인 이유: 추출기가 MIN_LEN=3 이라 두 개짜리는 후보가 안 된다.
+ */
 const segments = () => [
   {
     domain: 'platform.openai.com',
@@ -52,13 +61,7 @@ const segments = () => [
     end: '2026-08-07T09:04:00+09:00',
     sec: 240,
     title: 'Usage — OpenAI API',
-    // 단계는 **관측에서 온다** — 사람이 실제로 누른 것이다. 여기서는 그
-    // 관측을 위조하는 것이라, 있는지도 모르는 조작을 상상해서 채우면 안 된다.
-    // 실제로 그랬다가 없는 'Cost' 탭을 클릭하려다 절차가 그 자리에서 멈췄고,
-    // 정작 사람이 집어둔 값들이 완주를 못 했다.
-    //
-    // 페이지를 여는 것 하나면 후보가 성립한다. 확인할 값은 사람이 집는다.
-    acts: [act('Usage', 3)],
+    acts: [act('Usage', 3), act('Logs', 4)],
   },
   {
     domain: 'dashboard.render.com',
@@ -92,8 +95,8 @@ for (const [i, id] of IDS.entries()) {
 }
 
 console.log(`세션 ${IDS.length}개를 심었다 — /procedures 에서 후보로 뜬다`);
-console.log('  1. platform.openai.com · Usage');
-console.log('  2. platform.openai.com · Cost');
-console.log('  3. dashboard.render.com · na-nightly-batch');
+segments().forEach((seg) =>
+  (seg.acts as { label: string }[]).forEach((a) => console.log(`  ${seg.domain} · ${a.label}`)),
+);
 console.log('\n지우려면 --remove');
 await sql.end();
