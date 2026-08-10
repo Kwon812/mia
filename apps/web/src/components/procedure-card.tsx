@@ -273,18 +273,29 @@ export function ProcedureCard({
         // **왜 못 찾았는지 갈라서 말한다.** 이 화면이 API 를 아예 안 부르는
         // 것과, 부르긴 하는데 그 값이 응답에 없는 것은 다음 수가 다르다.
         const seen: string[] = e.data.seen ?? [];
+        const picked = String(e.data.picked ?? reads.find((r) => r.after === slot)?.label ?? "");
         const why =
           e.data.why === "nothing-caught"
             ? "이 화면은 API 를 안 불러 (엿들은 게 0개). 화면에서 읽을게 — 확장을 새로고침했다면 그 탭도 한 번 새로고침해줘."
             : e.data.why === "not-in-response"
-              ? `API 를 ${seen.length}개 봤는데 그 값이 없어 (${seen.slice(0, 3).join(", ")}). 화면에서 읽을게.`
+              ? // 0 은 일부러 안 맞춘다 — 응답에 0 은 널려 있어서 우연히 맞는
+                // 자리가 수십 개다. 그걸 저장하면 값이 생겼을 때 엉뚱한 데를
+                // 읽는다. 그 사정을 그대로 말해준다.
+                /(^|\s)0(\s|$)|^\D*0\D*$/.test(picked)
+                ? `값이 0 이라 API 에서 못 맞춰 — 0 은 응답에 널려 있어서 엉뚱한 자리를 잡을 수 있어. 값이 생겼을 때 다시 집으면 돼. 지금은 화면에서 읽을게.`
+                : `API 를 ${seen.length}개 봤는데 그 값이 없어 (${seen.slice(0, 3).join(", ")}). 화면에서 읽을게.`
               : "값을 찾을 자리가 없었어 — 다시 집어봐.";
         setMatchNote((v) => ({ ...v, [slot]: why }));
         // 엿듣기가 실패했으면 물어본다. 이 화면이 SSR 로 값을 주는 경우가
         // 그렇고, 그때도 그 서비스에 공개 API 가 있을 수 있다.
-        const picked = reads.find((r) => r.after === slot)?.label ?? "";
+        //
+        // 다만 **엿듣기가 되는데 값만 못 찾은 것이면 안 묻는다.** 그 화면의
+        // API 는 이미 손에 있고, 거기 없는 값은 다른 API 에도 없다 —
+        // 물어봐야 호출만 한 번 더 태운다.
         const domain = c.steps[slot]?.domain ?? "";
-        if (onGuessApi && picked && domain) askGuess(slot, domain, picked);
+        if (onGuessApi && picked && domain && e.data.why === "nothing-caught") {
+          askGuess(slot, domain, picked);
+        }
         return;
       }
       setReads((v) =>

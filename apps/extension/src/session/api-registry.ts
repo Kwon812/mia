@@ -125,7 +125,30 @@ export interface Match {
   /** 어느 probe 에서 나왔나 */
   probe: string;
   /** 얼마나 확실한가 — 여럿이면 위에서부터 고른다 */
-  how: 'number' | 'text';
+  how: 'number' | 'text' | 'sum' | 'count';
+}
+
+/**
+ * 같은 자리의 값들을 묶어 합과 개수를 낸다.
+ *
+ * **화면의 값은 API 필드와 1:1 이 아니다.** 대시보드가 보여주는 숫자는 대개
+ * 여러 항목을 더한 것이다 — "Total tokens 0" 은 응답 어딘가에 0 이 박혀
+ * 있는 게 아니라, 항목들을 더했더니 0 이거나 애초에 항목이 없는 것이다.
+ * 실측에서 API 를 12개 잡고도 값을 못 찾은 이유가 이것이었다.
+ *
+ * `data[0].x`, `data[1].x` 를 `data[*].x` 로 묶어 합과 개수를 만든다.
+ * 개수도 세는 이유는 "N건" 꼴이 대시보드에 흔하기 때문이다.
+ */
+export function groupSums(flat: Record<string, unknown>): Record<string, { sum: number; count: number }> {
+  const g: Record<string, { sum: number; count: number }> = {};
+  for (const [path, v] of Object.entries(flat)) {
+    const star = path.replace(/\[\d+\]/g, '[*]');
+    if (star === path) continue; // 배열 안이 아니면 묶을 게 없다
+    if (!g[star]) g[star] = { sum: 0, count: 0 };
+    g[star].count += 1;
+    if (typeof v === 'number') g[star].sum += v;
+  }
+  return g;
 }
 
 /**
@@ -142,12 +165,27 @@ export function findValue(flat: Record<string, unknown>, picked: string, probe: 
   const want = picked.trim();
   const wantNum = numberIn(want);
 
+  // 합계와 개수도 본다. 대시보드 숫자는 대개 이쪽이다.
+  //
+  // **0 은 안 맞춘다.** 빈 배열의 합도 0 이고 안 쓴 항목도 0 이라, 우연히
+  // 맞는 자리가 응답마다 수십 개씩 나온다. 그중 아무거나 골라 저장하면
+  // 다음에 값이 생겼을 때 엉뚱한 자리를 읽는다 — 틀렸는지도 모른 채.
+  // 0 인 값은 화면에서 읽는 편이 낫다.
+  if (wantNum !== null && wantNum !== 0) {
+    for (const [star, { sum, count }] of Object.entries(groupSums(flat))) {
+      if (Math.abs(sum - wantNum) < 1e-6) out.push({ path: star, value: sum, probe, how: 'sum' });
+      else if (count === wantNum) out.push({ path: `${star}#count`, value: count, probe, how: 'count' });
+    }
+  }
+
   for (const [path, v] of Object.entries(flat)) {
     if (v === null || v === undefined) continue;
 
     if (wantNum !== null && typeof v === 'number') {
-      // 소수점 표기가 다를 수 있다(1.88 vs 1.8800). 아주 작은 차이는 같게 본다.
-      if (Math.abs(v - wantNum) < 1e-6) out.push({ path, value: v, probe, how: 'number' });
+      // 0 은 같은 이유로 제외한다 — 응답에 0 은 널려 있어서 우연히 맞는다.
+      if (wantNum !== 0 && Math.abs(v - wantNum) < 1e-6) {
+        out.push({ path, value: v, probe, how: 'number' });
+      }
       continue;
     }
     if (typeof v === 'string' && v.length > 0 && v.length < 80) {
@@ -158,14 +196,32 @@ export function findValue(flat: Record<string, unknown>, picked: string, probe: 
       }
     }
   }
-  // 숫자 일치가 더 믿을 만하다. 경로가 짧을수록 바깥쪽이라 안정적이다.
-  return out.sort(
-    (x, y) => (x.how === y.how ? x.path.length - y.path.length : x.how === 'number' ? -1 : 1),
+  // 그대로 박힌 숫자가 가장 믿을 만하고, 그다음이 합계다. 경로가 짧을수록
+  // 바깥쪽이라 안정적이다.
+  const rank = { number: 0, sum: 1, count: 2, text: 3 } as const;
+  return out.sort((x, y) =>
+    rank[x.how] === rank[y.how] ? x.path.length - y.path.length : rank[x.how] - rank[y.how],
   );
 }
 
 /** 저장된 경로로 값을 꺼낸다. `data[0].amount.value` 꼴. */
 export function readPath(obj: unknown, path: string): unknown {
+  // `a[*].b` 는 그 자리의 값을 전부 더한다. `a[*].b#count` 는 개수를 센다.
+  // 화면이 보여주는 숫자가 합계일 때 쓰는 길이다.
+  if (path.includes('[*]')) {
+    const wantCount = path.endsWith('#count');
+    const p = wantCount ? path.slice(0, -6) : path;
+    const flat = flatten(obj);
+    let sum = 0;
+    let count = 0;
+    for (const [k, v] of Object.entries(flat)) {
+      if (k.replace(/\[\d+\]/g, '[*]') !== p) continue;
+      count += 1;
+      if (typeof v === 'number') sum += v;
+    }
+    return wantCount ? count : sum;
+  }
+
   let cur: unknown = obj;
   for (const seg of path.split('.')) {
     const m = seg.match(/^([^[]*)((\[\d+\])*)$/);
