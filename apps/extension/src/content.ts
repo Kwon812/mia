@@ -546,9 +546,24 @@
       parts.unshift(segOf(cur));
       cur = cur.parentElement;
     }
-    push(['body', ...parts].join(' > '));
+    const full = ['body', ...parts].join(' > ');
+    push(full);
 
-    return out.length > 0 ? out : own ? [own] : [];
+    // **빈 손으로 돌아가지 않는다.**
+    //
+    // 검증(되찾아서 같은 요소인가)을 다 통과 못 하는 화면이 있다. 실시간으로
+    // 갱신되는 대시보드가 그렇다 — 호버와 클릭 사이에 다시 그려지면 집은
+    // 노드가 이미 문서에서 떨어져 나가서, 어떤 셀렉터로도 그것을 못 찾는다.
+    //
+    // 그때 빈 배열을 내주면 셀렉터가 '' 이 되고, 화면에는 아무 표시도 없이
+    // 확인을 눌러도 반영이 안 된다 — 무엇이 잘못됐는지도 안 보인다.
+    // 검증을 못 넘겨도 만든 것은 준다. 틀릴 수 있지만 없는 것보다 낫고,
+    // 틀렸다는 것은 돌려보면 드러난다.
+    if (out.length === 0) {
+      if (own) out.push(own);
+      if (full && full !== 'body') out.push(full);
+    }
+    return out;
   }
 
   /**
@@ -702,13 +717,20 @@
       const how = document.createElement('span');
       // 가장 굵은 후보만 보여주되 몇 개를 들고 가는지 알린다 — 하나뿐이면
       // 그것이 깨지는 순간 끝이라는 뜻이다.
-      how.textContent =
-        (sel.length > 40 ? `${sel.slice(0, 40)}…` : sel) +
-        (sels.length > 1 ? ` +${sels.length - 1}` : '');
+      how.textContent = sel
+        ? (sel.length > 40 ? `${sel.slice(0, 40)}…` : sel) +
+          (sels.length > 1 ? ` +${sels.length - 1}` : '')
+        : '자리를 못 짚었어 — 감싸는 칸을 집어봐';
+      if (!sel) how.style.color = '#e0a0a0';
       how.style.cssText = 'color:#8b98ab;font-size:11px';
 
       const yes = document.createElement('button');
       yes.textContent = '확인';
+      // 짚지 못한 것을 확인하면 사이트에서 조용히 버려진다. 여기서 막는다.
+      if (!sel) {
+        yes.disabled = true;
+        yes.style.opacity = '0.4';
+      }
       yes.style.cssText =
         'border:1px solid rgba(99,230,210,.5);background:none;color:#63e6d2;' +
         'padding:3px 10px;border-radius:3px;cursor:pointer;font:inherit';
@@ -762,7 +784,12 @@
       // 집은 것을 돌려줄 자리가 없다.
       e.preventDefault();
       e.stopPropagation();
-      const el = hovered ?? document.elementFromPoint(e.clientX, e.clientY);
+      // 호버 때 잡아둔 것이 아직 문서에 있는지 본다. 실시간으로 갱신되는
+      // 화면은 그 사이에 다시 그려져서 들고 있던 노드가 떨어져 나간다 —
+      // 그러면 어떤 셀렉터로도 그것을 못 찾아 빈 손으로 끝난다.
+      // 지금 그 자리에 있는 것을 다시 잡는다.
+      const live = hovered && document.contains(hovered) ? hovered : null;
+      const el = live ?? document.elementFromPoint(e.clientX, e.clientY);
       if (!el) return;
       confirm(el);
     };

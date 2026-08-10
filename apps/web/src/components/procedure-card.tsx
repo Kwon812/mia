@@ -179,8 +179,15 @@ export function ProcedureCard({
 
       if (e.data.__na !== "pick-ack" || !e.data.done) return;
       cleanup();
-      if (!e.data.ok || !e.data.sel) {
+      if (!e.data.ok) {
         setError("집기를 그만뒀어");
+        return;
+      }
+      // 셀렉터를 못 만든 채로 확인이 온 경우. 예전에는 이걸 '그만뒀어' 로
+      // 뭉뚱그려서, 사람은 분명히 확인을 눌렀는데 아무 일도 안 일어난 것으로
+      // 보였다. 왜 안 됐는지는 말해줘야 다음 수를 고를 수 있다.
+      if (!e.data.sel) {
+        setError("그 자리를 짚지 못했어. 감싸는 칸이나 옆의 이름표를 집어봐.");
         return;
       }
       setReads((v) => [
