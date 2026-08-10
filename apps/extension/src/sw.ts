@@ -87,6 +87,28 @@ async function rememberHeaders(url: string, headers?: Record<string, string>): P
  * 탭이 있으면 그걸 쓰고, 없으면 **배경으로 하나 연다.** 배경 탭도 fetch 는
  * 정상이라(렌더링만 억제된다) 화면을 안 뺏는다. 우리가 연 탭은 다 쓰고 닫는다.
  */
+/**
+ * 그 탭의 content script 가 말을 받을 준비가 됐나.
+ *
+ * **시간을 세는 대신 물어본다.** 예전에는 2.5초를 세고 말을 걸었는데, 무거운
+ * 대시보드는 그 안에 못 붙는다 — 그러면 조용히 실패하고 사람은 "그 탭을
+ * 새로고침해봐" 만 본다. 페이지 무게는 그때그때 다르고, 고정된 대기는
+ * 빠를 땐 헛되이 기다리고 느릴 땐 못 기다린다.
+ */
+async function waitForContent(tabId: number, timeoutMs = 12000): Promise<boolean> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const r = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+      if (r?.ok) return true;
+    } catch {
+      // 아직 안 붙었다. 조금 뒤에 다시 묻는다.
+    }
+    await new Promise((res) => setTimeout(res, 300));
+  }
+  return false;
+}
+
 async function fetchViaPage(
   url: string,
   /**
@@ -121,10 +143,9 @@ async function fetchViaPage(
     const tab = await chrome.tabs.create({ url: `${scheme}://${site}/`, active: false });
     tabId = tab.id;
     opened = true;
-    // content script 가 자리 잡을 틈을 준다. 이보다 이르면 리스너가 없다.
-    await new Promise((r) => setTimeout(r, 2500));
   }
   if (tabId == null) return null;
+  if (!(await waitForContent(tabId))) return null;
 
   try {
     return await chrome.tabs.sendMessage(tabId, {
@@ -1122,20 +1143,27 @@ async function announce(run: RunState): Promise<void> {
       sendResponse({ ok: false });
       return true;
     }
-    void chrome.tabs
-      .create({ url, active: true })
-      .then((tab) =>
-        chrome.storage.local.set({
-          [PICK_KEY]: {
-            tabId: tab.id ?? -1,
-            fromTabId: sender.tab?.id,
-            at: Date.now(),
-          } satisfies PickState,
-        }),
-      )
+    void (async () => {
+      const tab = await chrome.tabs.create({ url, active: true });
+      await chrome.storage.local.set({
+        [PICK_KEY]: {
+          tabId: tab.id ?? -1,
+          fromTabId: sender.tab?.id,
+          at: Date.now(),
+        } satisfies PickState,
+      });
       // 붙들지 않고 바로 답한다. 사이트는 그 뒤로 결과를 가지러 온다 —
       // 붙들고 있으면 워커가 잠드는 순간 그 응답이 영영 안 간다.
-      .then(() => sendResponse({ ok: true }));
+      sendResponse({ ok: true });
+
+      // **붙을 때까지 기다렸다 띠를 띄운다.** 새로 연 탭은 content script 가
+      // 늦게 붙어서, 고정된 시간을 세고 말을 걸면 무거운 사이트에서 놓친다.
+      // content script 가 스스로 묻는 길(PICK_ASK)도 있지만 그쪽이 더 이를
+      // 수 있어 둘 다 건다 — 띠는 두 번 뜨지 않는다.
+      if (tab.id != null && (await waitForContent(tab.id))) {
+        void chrome.tabs.sendMessage(tab.id, { type: 'START_PICK' }).catch(() => undefined);
+      }
+    })();
     return true;
   }
 

@@ -1113,7 +1113,13 @@
   }
 
   try {
-    chrome.runtime.onMessage.addListener((msg) => {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      // 살아 있나 — 서비스 워커가 말을 걸기 전에 확인한다. 시간을 세는
+      // 대신 물어보는 쪽이라, 페이지가 무겁든 가볍든 놓치지 않는다.
+      if (msg?.type === 'PING') {
+        sendResponse({ ok: true });
+        return;
+      }
       if (msg?.type === 'START_PICK') showPickBar();
       // 집기 결과를 확장이 직접 밀어준다. 사이트가 가지러 오는 길과 둘 다 둔다 —
       // 한쪽이 어긋나도 잠기지 않게.
