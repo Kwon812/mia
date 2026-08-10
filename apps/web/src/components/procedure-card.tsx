@@ -182,10 +182,16 @@ export function ProcedureCard({
       setMatching(null);
       const hit = e.data.ok ? e.data.hits?.[0] : null;
       if (!hit) {
-        setMatchNote((v) => ({
-          ...v,
-          [slot]: "이 값은 화면에만 있어 — 화면에서 읽을게",
-        }));
+        // **왜 못 찾았는지 갈라서 말한다.** 이 화면이 API 를 아예 안 부르는
+        // 것과, 부르긴 하는데 그 값이 응답에 없는 것은 다음 수가 다르다.
+        const seen: string[] = e.data.seen ?? [];
+        const why =
+          e.data.why === "nothing-caught"
+            ? "이 화면은 API 를 안 불러 (엿들은 게 0개). 화면에서 읽을게 — 확장을 새로고침했다면 그 탭도 한 번 새로고침해줘."
+            : e.data.why === "not-in-response"
+              ? `API 를 ${seen.length}개 봤는데 그 값이 없어 (${seen.slice(0, 3).join(", ")}). 화면에서 읽을게.`
+              : "값을 찾을 자리가 없었어 — 다시 집어봐.";
+        setMatchNote((v) => ({ ...v, [slot]: why }));
         return;
       }
       setReads((v) =>

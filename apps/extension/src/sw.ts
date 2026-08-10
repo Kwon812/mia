@@ -1126,18 +1126,48 @@ async function announce(run: RunState): Promise<void> {
     }
     // 경로가 짧을수록 바깥쪽이라 안정적이다. 숫자 일치가 글자 일치보다 믿을 만하다.
     hits.sort((a, b) => (a.how === b.how ? a.path.length - b.path.length : a.how === 'number' ? -1 : 1));
-    void chrome.storage.local.set({ [NET_KEY]: { at: Date.now(), hits: hits.slice(0, 5) } });
-    sendResponse({ ok: true, found: hits.length });
+    // 잡은 것도 같이 남긴다. **왜 못 찾았는지가 갈린다** — 이 화면이 API 를
+    // 아예 안 부르는 것과, 부르긴 하는데 그 값이 응답에 없는 것은 다음에 할
+    // 일이 다르다. 앞은 화면에서 읽는 수밖에 없고, 뒤는 다른 자리를 집으면
+    // 될 수도 있다.
+    void chrome.storage.local.set({
+      [NET_KEY]: {
+        at: Date.now(),
+        hits: hits.slice(0, 5),
+        picked,
+        // 어디를 봤는지. 경로만 남긴다 — 어느 API 인지만 알면 된다.
+        seen: caught.slice(0, 12).map((c) => {
+          try {
+            return new URL(c.url).pathname;
+          } catch {
+            return c.url.slice(0, 60);
+          }
+        }),
+      },
+    });
+    sendResponse({ ok: true, found: hits.length, seen: caught.length });
     return true;
   }
 
   // 사이트가 "방금 집은 값, API 로 가져올 수 있어?" 하고 묻는다.
   if (message?.type === 'NET_MATCH') {
     void chrome.storage.local.get(NET_KEY).then((got) => {
-      const box = got[NET_KEY] as { at: number; hits: unknown[] } | undefined;
+      const box = got[NET_KEY] as
+        | { at: number; hits: unknown[]; picked?: string; seen?: string[] }
+        | undefined;
       // 오래된 것은 다른 집기의 결과다. 그걸 주면 엉뚱한 API 를 매단다.
-      if (!box || Date.now() - box.at > 60_000 || box.hits.length === 0) {
-        return sendResponse({ ok: false });
+      if (!box || Date.now() - box.at > 60_000) {
+        return sendResponse({ ok: false, why: 'stale' });
+      }
+      if (box.hits.length === 0) {
+        // 무엇을 몇 개 봤는지 알려준다. 0 이면 엿듣기가 안 붙었거나 이 화면이
+        // API 를 안 부르는 것이고, 여럿인데 못 찾았으면 그 값이 응답에 없다.
+        return sendResponse({
+          ok: false,
+          why: (box.seen?.length ?? 0) === 0 ? 'nothing-caught' : 'not-in-response',
+          seen: box.seen ?? [],
+          picked: box.picked ?? '',
+        });
       }
       sendResponse({ ok: true, hits: box.hits });
     });
