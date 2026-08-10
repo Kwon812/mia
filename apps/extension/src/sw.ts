@@ -1218,6 +1218,61 @@ async function announce(run: RunState): Promise<void> {
     return true;
   }
 
+  // 사이트가 물어온 API 후보를 **실제로 두드려본다.**
+  //
+  // 그 후보는 모델이 답한 것이라 지어냈을 수 있다. 그래서 저장하기 전에
+  // 호출해서 집은 값이 그 응답에 있는지 본다 — 있으면 맞은 것이고, 없으면
+  // 틀린 것이다. 환각이 여기서 걸러진다.
+  if (message?.type === 'TRY_GUESS') {
+    void (async () => {
+      const g = message.guess as {
+        base: string;
+        probes: string[];
+        auth: string;
+        authHeader?: string;
+      };
+      const key = String(message.key ?? '');
+      const picked = String(message.picked ?? '');
+      if (!g?.base || !Array.isArray(g.probes)) return sendResponse({ ok: false, error: '후보가 없어' });
+
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      if (key && g.auth === 'bearer') headers.Authorization = `Bearer ${key}`;
+      else if (key && g.auth === 'header' && g.authHeader) headers[g.authHeader] = key;
+
+      const tried: string[] = [];
+      let lastError = '';
+      for (const path of g.probes.slice(0, 3)) {
+        const url = g.base + (path.startsWith('/') ? path : `/${path}`);
+        tried.push(path);
+        try {
+          // 키가 없으면 세션 쿠키로도 될 수 있다. 두 번 볼 것 없이 한 번에 건다.
+          const res = await fetch(url, { headers, credentials: key ? 'omit' : 'include' });
+          if (!res.ok) {
+            lastError = reasonOf(res.status, g.base);
+            continue;
+          }
+          const body = await res.json();
+          const hits = findValue(flatten(body), picked, url);
+          if (hits.length > 0) {
+            return sendResponse({
+              ok: true,
+              url,
+              method: 'GET',
+              path: hits[0].path,
+              // 키를 썼으면 남겨둔다. 다음 실행에도 필요하다.
+              usedKey: !!key,
+            });
+          }
+          lastError = `응답은 왔는데 그 값이 없어 (${path})`;
+        } catch (err) {
+          lastError = netReasonOf(err);
+        }
+      }
+      sendResponse({ ok: false, error: `${lastError} — ${tried.join(', ')} 를 봤어` });
+    })();
+    return true;
+  }
+
   // 절차를 만들 때 넣은 키를 받아둔다. 로컬에만 남는다.
   if (message?.type === 'SET_API_KEY') {
     void setKey(String(message.service ?? ''), String(message.key ?? '')).then(() =>

@@ -26,6 +26,7 @@ import {
   repointProcedureStep,
   dropProcedureStep,
   repointProcedureRead,
+  guessApiForDomain,
 } from "@/app/actions";
 
 /** 훑을 세션 수. 절차는 몇 주에 걸쳐 반복되므로 최근 것만 봐서는 안 잡힌다. */
@@ -139,6 +140,7 @@ export default async function ProceduresPage() {
                   onRepoint={repointProcedureStep}
                   onDropStep={dropProcedureStep}
                   onRepointRead={repointProcedureRead}
+                  onGuessApi={guessApiForDomain}
                 />
               ))}
             </div>

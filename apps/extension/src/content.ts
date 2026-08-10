@@ -981,6 +981,13 @@
       // 엿들어 찾은 것이 있나 — 사이트가 집은 직후에 묻는다.
       else if (kind === 'net-match')
         relay({ type: 'NET_MATCH' }, 'net-match-ack', { slot: e.data.slot });
+      // 물어온 API 후보를 실제로 두드려본다 — 저장 전에 검증한다.
+      else if (kind === 'try-guess')
+        relay(
+          { type: 'TRY_GUESS', guess: e.data.guess, key: e.data.key, picked: e.data.picked },
+          'try-guess-ack',
+          { slot: e.data.slot },
+        );
       else if (kind === 'api-info')
         relay({ type: 'API_INFO', domain: e.data.domain }, 'api-info-ack', {
           slot: e.data.slot,

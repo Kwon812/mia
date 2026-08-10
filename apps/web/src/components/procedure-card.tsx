@@ -70,6 +70,20 @@ type Answer = {
 } | null;
 type Result = { ok: true } | { ok: false; error: string };
 
+/** 모르는 사이트의 API 를 물어본 답. 그대로 믿지 않고 두드려본 뒤에 쓴다. */
+type GuessResult =
+  | { known: false }
+  | {
+      known: true;
+      label: string;
+      base: string;
+      probes: string[];
+      auth: "bearer" | "header" | "none";
+      authHeader?: string;
+      keyUrl?: string;
+      keyHint?: string;
+    };
+
 function dur(sec: number): string {
   if (sec < 60) return `${Math.round(sec)}초`;
   const m = Math.floor(sec / 60);
@@ -87,6 +101,7 @@ export function ProcedureCard({
   onRepoint,
   onDropStep,
   onRepointRead,
+  onGuessApi,
 }: {
   candidate: Candidate;
   /** 이미 답한 것이면 그 답. 아니면 null. */
@@ -123,6 +138,9 @@ export function ProcedureCard({
     label: string,
     extra: { path?: string; sels?: string[]; anchor?: string },
   ) => Promise<Result>;
+  /** 모르는 사이트의 API 를 물어본다. 엿듣기가 실패했을 때만 부른다 —
+   *  답은 그대로 믿지 않고 확장이 호출해서 검증한 뒤에 쓴다. */
+  onGuessApi?: (domain: string) => Promise<GuessResult>;
 }) {
   const c = candidate;
   const [naming, setNaming] = useState(false);
@@ -145,6 +163,67 @@ export function ProcedureCard({
   /** 집은 값이 API 에 있나. 집는 그 자리에서 갈린다. */
   const [matching, setMatching] = useState<number | null>(null);
   const [matchNote, setMatchNote] = useState<Record<number, string>>({});
+  /** 물어봐서 알아낸 API 후보. 검증 전이라 아직 안 쓴다. */
+  const [guess, setGuess] = useState<Record<number, GuessResult & { known: true }>>({});
+
+  /**
+   * 모르는 사이트의 API 를 물어보고 **두드려본다.**
+   *
+   * 모델이 지어낼 수 있다. 그래서 답을 그대로 저장하지 않는다 — 확장이
+   * 실제로 호출해서 집은 값이 그 응답에 있는지 확인한 뒤에만 쓴다.
+   * 환각은 그 자리에서 드러난다.
+   */
+  function askGuess(slot: number, domain: string, picked: string) {
+    if (!onGuessApi) return;
+    setMatching(slot);
+    setMatchNote((v) => ({ ...v, [slot]: "이 사이트 API 를 알아보는 중…" }));
+    startTransition(async () => {
+      const g = await onGuessApi(domain);
+      if (!g.known) {
+        setMatching(null);
+        setMatchNote((v) => ({
+          ...v,
+          [slot]: "이 사이트의 공개 API 는 모른대. 화면에서 읽을게.",
+        }));
+        return;
+      }
+      setGuess((v) => ({ ...v, [slot]: g }));
+      setMatchNote((v) => ({ ...v, [slot]: `${g.label} API 를 두드려보는 중…` }));
+
+      const onMsg = (e: MessageEvent) => {
+        if (e.source !== window || e.data?.__na !== "try-guess-ack" || e.data.slot !== slot) return;
+        window.removeEventListener("message", onMsg);
+        setMatching(null);
+        if (!e.data.ok) {
+          // 두드려서 틀린 것이 드러났다. 키가 없어서일 수도 있으니 그것도 말한다.
+          setMatchNote((v) => ({
+            ...v,
+            [slot]: `${e.data.error}${g.auth !== "none" ? " — 키를 넣고 다시 해볼 수 있어" : ""}`,
+          }));
+          return;
+        }
+        setReads((v) =>
+          v.map((r) =>
+            r.after === slot
+              ? { ...r, net: { url: e.data.url, method: "GET", path: e.data.path } }
+              : r,
+          ),
+        );
+        let where = e.data.url;
+        try {
+          where = new URL(e.data.url).pathname;
+        } catch {
+          /* 그대로 둔다 */
+        }
+        setMatchNote((v) => ({ ...v, [slot]: `API 로 가져와 — ${where} · ${e.data.path}` }));
+      };
+      window.addEventListener("message", onMsg);
+      window.postMessage(
+        { __na: "try-guess", slot, guess: g, key: keys[domain] ?? "", picked },
+        "*",
+      );
+    });
+  }
 
   // 이름 짓기를 펼치면 각 화면이 아는 서비스인지 물어본다.
   useEffect(() => {
@@ -192,6 +271,11 @@ export function ProcedureCard({
               ? `API 를 ${seen.length}개 봤는데 그 값이 없어 (${seen.slice(0, 3).join(", ")}). 화면에서 읽을게.`
               : "값을 찾을 자리가 없었어 — 다시 집어봐.";
         setMatchNote((v) => ({ ...v, [slot]: why }));
+        // 엿듣기가 실패했으면 물어본다. 이 화면이 SSR 로 값을 주는 경우가
+        // 그렇고, 그때도 그 서비스에 공개 API 가 있을 수 있다.
+        const picked = reads.find((r) => r.after === slot)?.label ?? "";
+        const domain = c.steps[slot]?.domain ?? "";
+        if (onGuessApi && picked && domain) askGuess(slot, domain, picked);
         return;
       }
       setReads((v) =>

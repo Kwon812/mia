@@ -11,6 +11,7 @@ import { recheckMemoryAfterCorrection } from "@/lib/memory-recheck";
 import { FIELD_OPTIONS, isChipField } from "@/lib/labels";
 import { mergeThreads, moveExperience, renameThread } from "@/lib/thread-correction";
 import { writeSkillDoc } from "@/lib/skill-md";
+import { guessApi } from "@/lib/api-guess";
 
 const MIN_NAME_LENGTH = 1;
 const MAX_NAME_LENGTH = 12;
@@ -643,4 +644,19 @@ export async function repointProcedureRead(
 
   revalidatePath("/procedures");
   return { ok: true };
+}
+
+/**
+ * 모르는 사이트의 API 를 물어본다.
+ *
+ * 엿듣기가 실패하고 등록된 서비스도 아닐 때만 부른다 — 새 사이트마다 한 번씩,
+ * 절차를 만드는 자리에서만 돈다.
+ *
+ * **답을 그대로 믿지 않는다.** 확장이 실제로 호출해서 집은 값이 그 응답에
+ * 있는지 확인한 뒤에만 저장한다. 모델이 지어냈으면 그 자리에서 드러난다.
+ */
+export async function guessApiForDomain(domain: string) {
+  const user = await getCurrentUser();
+  if (!user) return { known: false as const };
+  return guessApi(domain);
 }
