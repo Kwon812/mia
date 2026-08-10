@@ -23,7 +23,19 @@
 
 (() => {
   /** 들고 있을 응답 수. 값 하나 찾으려고 화면 전체의 호출을 훑는다. */
-  const MAX_KEEP = 40;
+  const MAX_KEEP = 60;
+  /**
+   * **한 경로가 몇 개까지 차지할 수 있나.**
+   *
+   * 쿼리만 바꿔 같은 API 를 수십 번 부르는 대시보드가 많다 — OpenAI 는
+   * usage 를 기간별로 나눠 부른다. 그걸 그대로 담으면 그 하나가 상한을 다
+   * 먹고 다른 API 가 밀려난다. 실측에서 열두 개를 잡았는데 대부분 같은
+   * 경로였고, 정작 값이 있던 credit_grants 는 밀려날 뻔했다.
+   *
+   * 하나만 남기지 않는 이유: 기간별 호출은 서로 다른 데이터를 준다.
+   * 화면이 그걸 합쳐 보여주면 여러 개가 다 있어야 합이 맞는다.
+   */
+  const MAX_PER_PATH = 6;
   /** 이보다 큰 응답은 안 든다. 대시보드 하나가 메모리를 다 먹으면 안 된다. */
   const MAX_BYTES = 512 * 1024;
   /** 이보다 오래된 것은 버린다. 화면을 옮겼는데 옛 응답에서 값을 찾으면
@@ -52,6 +64,16 @@
 
   const caught: Caught[] = [];
 
+  /** 쿼리를 뗀 경로. 같은 API 인지 가르는 열쇠다. */
+  function pathOf(url: string): string {
+    try {
+      const u = new URL(url);
+      return `${u.host}${u.pathname}`;
+    } catch {
+      return url.split('?')[0].slice(0, 120);
+    }
+  }
+
   function keep(c: Caught): void {
     const now = Date.now();
     // 오래된 것부터 버린다.
@@ -62,6 +84,17 @@
     const same = caught.findIndex((x) => x.url === c.url && x.method === c.method);
     if (same >= 0) caught.splice(same, 1);
     caught.unshift(c);
+
+    // **경로별로 상한을 둔다.** 한 API 가 자리를 다 먹으면 다른 API 가
+    // 밀려나고, 그러면 정작 값이 있는 곳을 못 본다.
+    const p = pathOf(c.url);
+    let n = 0;
+    for (let i = 0; i < caught.length; i++) {
+      if (pathOf(caught[i].url) !== p) continue;
+      n += 1;
+      if (n > MAX_PER_PATH) caught.splice(i--, 1);
+    }
+
     if (caught.length > MAX_KEEP) caught.length = MAX_KEEP;
   }
 
@@ -202,6 +235,16 @@
   // 여기는 페이지 컨텍스트라 chrome.runtime 에 못 닿는다. content.ts 가
   // 물으면 postMessage 로 답한다.
   window.addEventListener('message', (e) => {
+    // 디버그: 지금 무엇을 잡고 있는지 본다. 콘솔에서
+    //   window.postMessage({__naNet:'peek'}, '*')
+    // 하면 잡은 경로들이 찍힌다 — 엿듣기가 붙었는지, 무엇을 보고 있는지를
+    // 사람이 직접 확인할 수 있어야 한다.
+    if (e.source === window && e.data?.__naNet === 'peek') {
+      const by: Record<string, number> = {};
+      for (const c of caught) by[pathOf(c.url)] = (by[pathOf(c.url)] ?? 0) + 1;
+      console.log(`[NA] 엿들은 것 ${caught.length}개 · 경로 ${Object.keys(by).length}종`, by);
+      return;
+    }
     if (e.source !== window || e.data?.__naNet !== 'ask') return;
     window.postMessage(
       {
