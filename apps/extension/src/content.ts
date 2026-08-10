@@ -321,6 +321,10 @@
   type RunRead = {
     after: number;
     sel: string;
+    /** 셀렉터 후보들. 앞에서부터 시도한다 — 하나만 두면 깨지는 순간 끝이다. */
+    sels?: string[];
+    /** 값 옆의 변하지 않는 글자. 셀렉터가 다 깨졌을 때 마지막으로 기댈 곳. */
+    anchor?: string;
     label: string;
     expect?:
       | { kind: 'contains'; text: string }
@@ -348,8 +352,13 @@
   ): Promise<{ label: string; value: string; wrong?: string }[]> {
     const out: { label: string; value: string; wrong?: string }[] = [];
     for (const r of reads) {
-      // 값이 늦게 채워지는 화면이 많다(대시보드는 대개 그렇다). 잠깐 기다린다.
-      const el = await waitFor(r.sel, 6000);
+      // 후보를 앞에서부터. 값이 늦게 채워지는 화면이 많아(대시보드는 대개
+      // 그렇다) 첫 후보는 넉넉히 기다리고, 나머지는 이미 그려진 뒤라 짧게 본다.
+      const cands = r.sels?.length ? r.sels : [r.sel];
+      let el: Element | null = await waitFor(cands[0], 6000);
+      for (let i = 1; !el && i < cands.length; i++) el = document.querySelector(cands[i]);
+      // 다 깨졌으면 이름으로 찾는다. 값은 변해도 그 옆 글자는 웬만해선 남는다.
+      if (!el && r.anchor) el = findByLabel(r.anchor);
       const raw = el ? ((el as HTMLElement).innerText ?? el.textContent ?? '') : '';
       const value = raw.trim().replace(/\s+/g, ' ').slice(0, 120) || '(못 읽음)';
       const wrong = checkRead(r, value);
@@ -476,48 +485,79 @@
   }
 
   /**
-   * 집은 자리를 짚는 셀렉터를 만든다.
+   * 경로 한 칸. **순번을 항상 붙인다.**
    *
-   * 예전에는 위로 네 칸만 올라가며 nth-child 를 쌓았다. 그러면
-   * `div:nth-child(1) > div:nth-child(1) > span:nth-child(2)` 같은 것이
-   * 나오는데, 앵커가 없어서 **문서 어디에나 맞는다** — 화면이 조금 바뀌면
-   * 깨지는 정도가 아니라 엉뚱한 값을 읽어 온다. 실측으로 그런 것만 나왔다.
+   * 형제가 지금 하나뿐이어도 다음에 늘어나면 태그만으로는 엉뚱한 것을 잡는다.
+   * 실측으로 그랬다 — "Total tokens 0" 을 집었는데 실행 때 "Total tokens" 만
+   * 읽혔다. 마지막 칸이 그냥 `div` 여서 첫 자식으로 떨어진 것이다.
    *
-   * 그래서 두 가지를 지킨다.
-   *   ① 안정된 조상(id·data-*)까지 올라가 거기 매단다. 없으면 body 까지.
-   *   ② 만든 것을 **되짚어 확인한다** — 그 셀렉터로 찾은 것이 집은 그것이
-   *      아니면 더 정확한 쪽으로 다시 만든다. 확인 없이 내주면 화면에는
-   *      그럴듯한 값이 보이는데 실제로는 남의 자리를 읽는다.
+   * nth-child 가 아니라 nth-of-type 인 이유: 형제에 다른 태그가 끼면
+   * nth-child 는 밀리지만 이건 안 밀린다.
    */
-  function pickSelector(el: Element): string {
-    const own = ownName(el);
-    if (own && document.querySelectorAll(own).length === 1) return own;
+  function segOf(el: Element): string {
+    const tag = el.tagName.toLowerCase();
+    const p = el.parentElement;
+    if (!p) return tag;
+    const sibs = Array.from(p.children).filter((c) => c.tagName === el.tagName);
+    return `${tag}:nth-of-type(${sibs.indexOf(el) + 1})`;
+  }
 
-    // 안정된 조상에 매단다. 형제 중 몇 번째인지는 같은 태그끼리 센다 —
-    // nth-child 는 형제에 다른 태그가 끼면 밀리지만 nth-of-type 은 안 밀린다.
+  /**
+   * 집은 자리를 짚는 **후보들**. 앞에서부터 시도한다.
+   *
+   * 하나만 저장하면 그것이 깨지는 순간 끝이다. 실측에서 한 자리는
+   * `body > span > div > …` 열한 칸이 나왔는데, 그 사이 어디 하나만 바뀌어도
+   * 못 찾는다. 굵은 것부터 가는 것까지 여러 개를 들고 간다 — 안정된 이름,
+   * 안정된 조상마다 매단 경로, 마지막으로 body 기준 전체 경로.
+   *
+   * 만든 것은 **되짚어 확인한다.** 그 셀렉터로 찾은 것이 집은 그것이 아니면
+   * 버린다. 확인 없이 내주면 화면에는 그럴듯한 값이 보이는데 실제로는
+   * 남의 자리를 읽는다.
+   */
+  function pickSelectors(el: Element): string[] {
+    const out: string[] = [];
+    const push = (sel: string) => {
+      if (sel && !out.includes(sel) && document.querySelector(sel) === el) out.push(sel);
+    };
+
+    const own = ownName(el);
+    if (own) push(own);
+
+    // 조상을 훑으며 안정된 앵커마다 하나씩. 가까운 앵커일수록 굵다 —
+    // 사이에 낀 칸이 적을수록 깨질 자리도 적다.
     const parts: string[] = [];
     let cur: Element | null = el;
-    while (cur && cur !== document.body && parts.length < 12) {
+    while (cur && cur !== document.body && parts.length < 14) {
       const anchor = ownName(cur);
       if (anchor && document.querySelectorAll(anchor).length === 1) {
-        parts.unshift(anchor);
-        const sel = parts.join(' > ');
-        if (document.querySelector(sel) === el) return sel;
-        break;
+        push([anchor, ...parts].join(' > '));
       }
-      const tag = cur.tagName.toLowerCase();
-      const p: Element | null = cur.parentElement;
-      if (!p) break;
-      const sibs = Array.from(p.children).filter((c) => c.tagName === cur!.tagName);
-      parts.unshift(sibs.length > 1 ? `${tag}:nth-of-type(${sibs.indexOf(cur) + 1})` : tag);
-      cur = p;
+      parts.unshift(segOf(cur));
+      cur = cur.parentElement;
     }
+    push(['body', ...parts].join(' > '));
 
-    // body 에 매단다. 여기까지 오면 길지만, 적어도 문서 안에서 유일하다.
-    const full = ['body', ...parts].join(' > ');
-    if (document.querySelector(full) === el) return full;
-    // 그래도 안 맞으면(웹컴포넌트 등) 가진 이름이라도 내준다.
-    return own ?? full;
+    return out.length > 0 ? out : own ? [own] : [];
+  }
+
+  /**
+   * 값 옆의 **변하지 않는 글자**. 셀렉터가 다 깨졌을 때 마지막으로 기댈 곳이다.
+   *
+   * 값은 변한다 — $0.00 이 $1.88 이 되고 0 이 1234 가 된다. 텍스트를 그대로
+   * 저장하면 다음에 안 맞는다. 숫자와 통화 기호를 걷어내고 남는 것이 이름이다:
+   * "Total tokens 0" → "Total tokens".
+   *
+   * 남는 게 없으면(값만 든 칸) 빈 문자열이고, 그때는 셀렉터가 유일한 길이다.
+   */
+  function anchorTextOf(el: Element): string {
+    const raw = ((el as HTMLElement).innerText ?? el.textContent ?? '')
+      .trim()
+      .replace(/\s+/g, ' ');
+    return raw
+      .replace(/[$₩€£]?\s*-?[\d,]+(\.\d+)?%?/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 40);
   }
 
   /**
@@ -633,7 +673,9 @@
       const text = ((el as HTMLElement).innerText ?? el.textContent ?? '')
         .trim()
         .replace(/\s+/g, ' ');
-      const sel = pickSelector(el);
+      const sels = pickSelectors(el);
+      const sel = sels[0] ?? '';
+      const anchor = anchorTextOf(el);
 
       tip.textContent = '';
       tip.style.whiteSpace = 'normal';
@@ -647,7 +689,11 @@
       // 셀렉터도 보여준다. nth-child 범벅이면 화면이 조금만 바뀌어도 깨진다는
       // 뜻이라, 확인하기 전에 알아야 한다.
       const how = document.createElement('span');
-      how.textContent = sel.length > 44 ? `${sel.slice(0, 44)}…` : sel;
+      // 가장 굵은 후보만 보여주되 몇 개를 들고 가는지 알린다 — 하나뿐이면
+      // 그것이 깨지는 순간 끝이라는 뜻이다.
+      how.textContent =
+        (sel.length > 40 ? `${sel.slice(0, 40)}…` : sel) +
+        (sels.length > 1 ? ` +${sels.length - 1}` : '');
       how.style.cssText = 'color:#8b98ab;font-size:11px';
 
       const yes = document.createElement('button');
@@ -663,6 +709,8 @@
             type: 'PICK_RESULT',
             ok: true,
             sel,
+            sels,
+            anchor,
             sample: text.slice(0, 60),
             host,
             // **경로도 보낸다.** 도메인만으로는 못 돌아온다 — /usage 에서

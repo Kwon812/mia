@@ -44,7 +44,16 @@ type PickState = {
   /** 집기를 시작한 시각. 오래 묵으면 없는 셈 친다. */
   at: number;
   /** 사람이 집은 결과. 아직이면 없다. */
-  result?: { ok: boolean; sel?: string; sample?: string; path?: string };
+  result?: {
+    ok: boolean;
+    sel?: string;
+    /** 셀렉터 후보들. 하나만 두면 그것이 깨지는 순간 끝이다. */
+    sels?: string[];
+    /** 값 옆의 변하지 않는 글자 — 마지막으로 기댈 곳. */
+    anchor?: string;
+    sample?: string;
+    path?: string;
+  };
 };
 
 async function getPick(): Promise<PickState | null> {
@@ -939,6 +948,8 @@ async function announce(run: RunState): Promise<void> {
           result: {
             ok: message.ok === true,
             sel: message.sel ?? undefined,
+            sels: message.sels ?? undefined,
+            anchor: message.anchor ?? undefined,
             sample: message.sample ?? undefined,
             path: message.path ?? undefined,
           },
@@ -953,6 +964,8 @@ async function announce(run: RunState): Promise<void> {
             type: 'PICK_DONE',
             ok: message.ok === true,
             sel: message.sel ?? null,
+            sels: message.sels ?? null,
+            anchor: message.anchor ?? null,
             sample: message.sample ?? null,
             path: message.path ?? null,
           })

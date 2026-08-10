@@ -366,7 +366,14 @@ async function answerProcedure(
     name?: string;
     steps?: unknown;
     mutates?: boolean;
-    reads?: { after: number; sel: string; label: string; path?: string }[];
+    reads?: {
+      after: number;
+      sel: string;
+      sels?: string[];
+      anchor?: string;
+      label: string;
+      path?: string;
+    }[];
   },
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
@@ -424,7 +431,14 @@ export async function approveProcedure(
   /** 어느 단계 뒤에 무엇을 확인하는가. 관측에서 안 나오는 값이라 사람이
    *  승인할 때 짚어준 것이다 — 클릭은 기록돼도 본 것은 기록되지 않는다.
    *  이게 있으면 절차가 상태를 모아 오고, 없으면 이동만 자동화된다. */
-  reads: { after: number; sel: string; label: string; path?: string }[] = [],
+  reads: {
+    after: number;
+    sel: string;
+    sels?: string[];
+    anchor?: string;
+    label: string;
+    path?: string;
+  }[] = [],
 ): Promise<ProcedureResult> {
   if (!name.trim()) return { ok: false, error: "이름을 지어줘." };
 
@@ -584,9 +598,10 @@ export async function repointProcedureRead(
   readIndex: number,
   sel: string,
   label: string,
-  /** 집은 자리의 경로. **그 앞 단계에 실어준다** — 읽기는 이동하지 않고
-   *  단계가 데려다 놓은 화면에서 읽는다. 그러니 화면을 아는 쪽은 단계다. */
-  path?: string,
+  /** 집은 자리에 딸린 것들. path 는 **그 앞 단계에 실어준다** — 읽기는
+   *  이동하지 않고 단계가 데려다 놓은 화면에서 읽으므로, 화면을 아는 쪽은
+   *  단계다. sels·anchor 는 읽기 자신의 것이다. */
+  extra: { path?: string; sels?: string[]; anchor?: string } = {},
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
@@ -601,13 +616,19 @@ export async function repointProcedureRead(
   const reads = (row.reads ?? []) as Record<string, unknown>[];
   if (!reads[readIndex]) return { ok: false, error: "그 자리가 없어." };
   // after 는 그대로 둔다. 어느 단계 뒤에 읽는지는 안 바뀌고, 무엇을 읽는지만 바뀐다.
-  reads[readIndex] = { ...reads[readIndex], sel, label: label || reads[readIndex].label };
+  reads[readIndex] = {
+    ...reads[readIndex],
+    sel,
+    sels: extra.sels ?? [],
+    anchor: extra.anchor ?? '',
+    label: label || reads[readIndex].label,
+  };
 
   // 경로는 그 앞 단계에 실어준다. 읽기는 스스로 이동하지 않고 단계가
   // 데려다 놓은 화면에서 읽으므로, 화면을 아는 쪽은 단계여야 한다.
   const steps = (row.steps ?? []) as Record<string, unknown>[];
   const after = Number(reads[readIndex].after ?? -1);
-  if (path && steps[after]) steps[after] = { ...steps[after], path };
+  if (extra.path && steps[after]) steps[after] = { ...steps[after], path: extra.path };
 
   await db
     .update(procedures)
