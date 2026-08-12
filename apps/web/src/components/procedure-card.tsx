@@ -167,6 +167,12 @@ export function ProcedureCard({
   /** 집은 값이 API 에 있나. 집는 그 자리에서 갈린다. */
   const [matching, setMatching] = useState<number | null>(null);
   const [matchNote, setMatchNote] = useState<Record<number, string>>({});
+  /** 「아니야」 한 것을 펼쳐 볼지. 목록은 아직 정하지 않은 것을 보는 자리라,
+   *  이미 답이 난 것이 자리를 차지하면 정작 볼 것이 화면 밖으로 밀린다.
+   *  지우지는 않는다 — 마음이 바뀌면 되돌릴 자리가 있어야 한다. */
+  const [open, setOpen] = useState(false);
+  const rejected = answer?.status === "rejected";
+  const collapsed = rejected && !open;
 
   /**
    * 모르는 사이트의 API 를 물어보고 **두드려본다.**
@@ -568,15 +574,37 @@ export function ProcedureCard({
 
   return (
     <div className="border-l border-[rgba(160,185,220,0.14)] pl-4">
-      <div className="tick mb-2">
-        {c.runs}번 · 매번 {dur(c.medianSec)} · {c.steps.length}단계
-        {c.mutates && " · 바꿈"}
-        {answer?.status === "approved" && (
-          <span className="ml-2 text-[#63e6d2]">절차 — {answer.name}</span>
-        )}
-        {answer?.status === "rejected" && <span className="ml-2 text-lum-4">안 만듦</span>}
-      </div>
+      {/* 아니야 한 것은 접어둔다. 한 줄만 남기고, 무엇이었는지는 도메인으로
+          알아본다 — 되돌리려면 눌러서 펼치면 된다. */}
+      {rejected ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={`tick flex w-full items-baseline gap-2 text-left text-lum-4 transition-colors hover:text-lum-2 ${
+            open ? "mb-2" : ""
+          }`}
+        >
+          <span className="shrink-0">안 만듦</span>
+          <span className="min-w-0 flex-1 truncate normal-case tracking-normal">
+            {[...new Set(c.steps.map((s) => s.domain))].join(" · ")}
+          </span>
+          <span className="shrink-0">
+            {c.runs}번 · 매번 {dur(c.medianSec)} · {c.steps.length}단계
+          </span>
+          <span className="shrink-0">{open ? "접기" : "펴기"}</span>
+        </button>
+      ) : (
+        <div className="tick mb-2">
+          {c.runs}번 · 매번 {dur(c.medianSec)} · {c.steps.length}단계
+          {c.mutates && " · 바꿈"}
+          {answer?.status === "approved" && (
+            <span className="ml-2 text-[#63e6d2]">절차 — {answer.name}</span>
+          )}
+        </div>
+      )}
 
+      {collapsed ? null : (
+        <>
       <ol className="flex flex-col gap-1">
         {c.steps.map((s, i) => (
           <li
@@ -960,6 +988,8 @@ export function ProcedureCard({
       )}
 
       {error && <p className="readout mt-2 text-[12px] text-[#e0a0a0]">{error}</p>}
+        </>
+      )}
     </div>
   );
 }

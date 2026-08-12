@@ -98,6 +98,10 @@ export default async function ProceduresPage() {
     return a?.status === "approved" ? 0 : a?.status === "rejected" ? 2 : 1;
   };
   const ordered = [...found].sort((x, y) => rank(x.signature) - rank(y.signature));
+  // 아니야 한 것은 접혀서 한 줄이다. 그대로 같은 간격으로 두면 한 줄짜리
+  // 사이에 빈 곳이 여덟 칸씩 생기므로, 따로 모아 촘촘히 쌓는다.
+  const open = ordered.filter((c) => answered.get(c.signature)?.status !== "rejected");
+  const dropped = ordered.filter((c) => answered.get(c.signature)?.status === "rejected");
 
   return (
     <Shell>
@@ -127,23 +131,44 @@ export default async function ProceduresPage() {
               같은 일을 한 번 더 하면 잡혀.
             </Empty>
           ) : (
-            <div className="flex flex-col gap-8">
-              {ordered.map((c) => (
-                <ProcedureCard
-                  key={c.signature}
-                  candidate={c}
-                  answer={answered.get(c.signature) ?? null}
-                  ymd={{ first: formatKstYmd(c.firstAt), last: formatKstYmd(c.lastAt) }}
-                  onApprove={approveProcedure}
-                  onReject={rejectProcedure}
-                  onForget={forgetProcedureAnswer}
-                  onRepoint={repointProcedureStep}
-                  onDropStep={dropProcedureStep}
-                  onRepointRead={repointProcedureRead}
-                  onGuessApi={guessApiForDomain}
-                />
-              ))}
-            </div>
+            <>
+              <div className="flex flex-col gap-8">
+                {open.map((c) => (
+                  <ProcedureCard
+                    key={c.signature}
+                    candidate={c}
+                    answer={answered.get(c.signature) ?? null}
+                    ymd={{ first: formatKstYmd(c.firstAt), last: formatKstYmd(c.lastAt) }}
+                    onApprove={approveProcedure}
+                    onReject={rejectProcedure}
+                    onForget={forgetProcedureAnswer}
+                    onRepoint={repointProcedureStep}
+                    onDropStep={dropProcedureStep}
+                    onRepointRead={repointProcedureRead}
+                    onGuessApi={guessApiForDomain}
+                  />
+                ))}
+              </div>
+              {dropped.length > 0 && (
+                <div className={`flex flex-col gap-2 ${open.length > 0 ? "mt-8" : ""}`}>
+                  {dropped.map((c) => (
+                    <ProcedureCard
+                      key={c.signature}
+                      candidate={c}
+                      answer={answered.get(c.signature) ?? null}
+                      ymd={{ first: formatKstYmd(c.firstAt), last: formatKstYmd(c.lastAt) }}
+                      onApprove={approveProcedure}
+                      onReject={rejectProcedure}
+                      onForget={forgetProcedureAnswer}
+                      onRepoint={repointProcedureStep}
+                      onDropStep={dropProcedureStep}
+                      onRepointRead={repointProcedureRead}
+                      onGuessApi={guessApiForDomain}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </>
       )}
