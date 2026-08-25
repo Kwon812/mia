@@ -1,0 +1,58 @@
+# 푸시할 때마다 깨끗한 환경에서 검사를 돌린다.
+#
+# 여기 있는 명령은 전부 사람이 손으로 치던 것들이다. 문제는 명령이 아니라
+# **기억**이었다 — 급하면 건너뛰고, 건너뛴 사실은 아무 데도 남지 않는다.
+# 초록/빨강이 커밋에 붙는 것 자체가 이 파일의 목적이다.
+#
+# lint 는 일부러 빠져 있다. 지금 main 에 이미 163건이 밀려 있어서 넣으면
+# 첫날부터 빨강이고, 늘 빨간 신호는 없는 신호와 같다. 빚을 갚은 뒤에 넣는다.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 같은 브랜치에 연달아 밀면 앞 실행은 볼 이유가 없다. 취소하고 마지막 것만 본다.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # 개발 기계와 같은 메이저를 쓴다. 여기서 갈리면 "내 맥에서는 됐는데"가
+          # CI 안으로 따라 들어온다.
+          node-version: '24'
+          cache: npm
+
+      # npm install 이 아니라 ci — package-lock.json 을 그대로 재현한다.
+      # 잠금파일과 어긋난 의존성은 이 줄에서 걸린다.
+      - run: npm ci
+
+      - name: 타입 검사 (전 워크스페이스)
+        run: npm run typecheck --workspaces --if-present
+
+      - name: 테스트 (확장)
+        run: npm test -w @na/extension
+
+      - name: 빌드 (확장 · 웹)
+        run: npm run build --workspaces --if-present
+
+      # apps/extension/dist 는 저장소에 커밋돼 있다. src 만 고치고 빌드를
+      # 깜빡하면 크롬에 로드되는 것은 옛 코드인데, 타입 에러도 테스트 실패도
+      # 아니라서 아무도 모른다 — "왜 안 고쳐졌지"를 한참 헤맨 뒤에 발견된다.
+      # 바로 위에서 방금 빌드했으니, 커밋된 것과 다르면 그게 곧 깜빡한 증거다.
+      - name: dist 가 src 와 맞는가
+        run: |
+          if ! git diff --exit-code -- apps/extension/dist; then
+            echo "::error::apps/extension/dist 가 src 와 다릅니다. 'npm run build -w @na/extension' 을 돌리고 결과를 커밋하세요."
+            exit 1
+          fi
