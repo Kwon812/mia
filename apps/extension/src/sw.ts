@@ -537,6 +537,50 @@ async function registerExtensionKey(): Promise<void> {
   }
 }
 
+/**
+ * 사람이 옛 키를 되돌리는 길.
+ *
+ * 브라우저를 지웠거나 프로필이 날아가면 확장 스토리지도 함께 사라지고,
+ * registerExtensionKey 는 그것을 첫 설치와 구분하지 못해 **새 키를 발급한다**
+ * (그래야 하는 게 맞다 — 진짜 첫 설치일 수도 있으니까). 그때 옛 캐릭터로
+ * 돌아가는 방법이 코드에 하나도 없었다. 팝업의 "기존 캐릭터에 연결"은 사이트
+ * 쿠키만 지금 키로 다시 물릴 뿐이라, 화면은 새 캐릭터를 계속 보여준다.
+ *
+ * 저장 전에 서버에 한 번 물어본다. 오타난 키를 그대로 받아두면 그 뒤 전송이
+ * 전부 401 로 버려지는데 팝업에는 "연결됨"으로 보인다 — 조용히 잃는 쪽이
+ * 거절보다 나쁘다.
+ */
+async function applyExtensionKey(raw: string): Promise<{ ok: boolean; error?: string }> {
+  const key = raw.trim();
+  // /api/register 가 만드는 모양: 'na_' + base64url(24바이트) = na_ + 32자.
+  // 길이를 딱 32 로 박지 않는 것은 발급 규칙이 바뀌어도 복구가 막히지 않게 하려는 것.
+  if (!/^na_[A-Za-z0-9_-]{16,}$/.test(key)) {
+    return { ok: false, error: 'na_ 로 시작하는 키가 아니야' };
+  }
+
+  const current = await getExtensionKey();
+  if (current === key) return { ok: true };
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/state`, { headers: { 'X-Extension-Key': key } });
+  } catch {
+    return { ok: false, error: '서버에 못 물어봤어 — 네트워크를 확인해줘' };
+  }
+  if (res.status === 401) return { ok: false, error: '그 키로 된 계정이 없어' };
+  if (!res.ok) return { ok: false, error: `서버가 ${res.status} 로 답했어` };
+
+  await db.meta.put({ key: 'extensionKey', value: key });
+  await chrome.storage.local.set({ extensionKey: key });
+  // 되돌렸으면 경고는 제 할 일을 다 했다.
+  await db.meta.delete(KEY_NOTICE);
+  await syncKeyNoticeBadge();
+  console.warn('[NA] 확장 키를 사람이 지정한 값으로 바꿨다');
+  // 밀려 있던 전송을 지금 다시 태운다 — 다음 retry 알람(최대 10분)까지 기다릴 이유가 없다.
+  void handleRetry().catch((err) => console.error('[NA] 키 교체 후 재전송 실패', err));
+  return { ok: true };
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   void registerExtensionKey();
   registerAlarms();
@@ -1644,6 +1688,18 @@ async function announce(run: RunState): Promise<void> {
       .catch((err) => {
         console.error('[NA] 키 경고 해제 실패', err);
         sendResponse({ ok: false });
+      });
+    return true;
+  }
+
+  // 팝업에서 옛 키를 붙여넣었다 — 확장이 들고 있는 키를 그걸로 바꾼다.
+  // 검증·저장은 applyExtensionKey 가 한다(그 주석에 이 경로가 왜 필요한지 있다).
+  if (message?.type === 'SET_EXTENSION_KEY') {
+    void applyExtensionKey(String(message.key ?? ''))
+      .then((r) => sendResponse(r))
+      .catch((err) => {
+        console.error('[NA] 키 교체 실패', err);
+        sendResponse({ ok: false, error: '저장하지 못했어' });
       });
     return true;
   }
