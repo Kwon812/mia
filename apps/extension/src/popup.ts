@@ -100,6 +100,18 @@ function row(label: string, value: string, valueClass = 'row-v'): HTMLElement {
 
 // ── 렌더 ──
 
+// ── 확장 키 복구칸의 상태 ──
+// 열려 있는 동안은 위 칸을 다시 그리지 않는다(render 참고) — 매 초 지워지면
+// 키를 한 글자도 못 붙여넣는다. 그래서 입력값도 여기 들고 있는다.
+let restoreOpen = false;
+let restoreDraft = '';
+let restoreBusy = false;
+let restoreMsg: { text: string; bad: boolean } | null = null;
+/** 지금 이 확장이 들고 있는 키. 패널을 열 때 SW 에게 물어 채운다. */
+let currentKey: string | null = null;
+/** 위 칸을 스냅샷 없이 혼자 다시 그리기 위한 마지막 값 */
+let lastSnap: SessionSnapshot | null = null;
+
 /**
  * 새 익명 키를 발급했다는 경고 배너 — **맨 위, 닫기 전까지 계속.**
  *
@@ -151,6 +163,140 @@ function renderKeyNotice(root: HTMLElement, snap: SessionSnapshot): void {
   actions.append(connect, dismiss);
   box.append(actions);
   root.append(box);
+}
+
+/**
+ * 확장 키를 보여주고, 옛 키로 되돌린다.
+ *
+ * 이 값이 곧 계정 전체다(비밀번호가 없다). 브라우저를 지우면 확장 스토리지도
+ * 같이 사라지고 새 키가 발급되는데, 그때까지 옛 키를 되돌릴 방법이 코드에
+ * 없었다 — 콘솔에서 IndexedDB 를 직접 여는 것 말고는. 여기가 그 자리다.
+ *
+ * 적어두는 쪽도 같이 둔다. 잃고 나서 찾는 것보다 잃기 전에 적는 게 싸다.
+ */
+function renderKeyRestore(root: HTMLElement): void {
+  const box = el('div', 'krest');
+
+  if (!restoreOpen) {
+    const open = el('button', 'krest-link', '확장 키 확인·변경');
+    open.addEventListener('click', () => {
+      restoreOpen = true;
+      restoreMsg = null;
+      askCurrentKey();
+      repaintNotice();
+    });
+    box.append(open);
+    root.append(box);
+    return;
+  }
+
+  box.append(
+    el('div', 'krest-t', '확장 키'),
+    el(
+      'div',
+      'krest-s',
+      '이 브라우저의 기록이 어느 캐릭터에 쌓이는지 정하는 값이에요. ' +
+        '브라우저를 지우면 함께 사라지니 어딘가에 적어두고, 새로 설치했다면 옛 키를 붙여넣어 되돌리세요.',
+    ),
+    el('div', 'krest-now', currentKey ?? '아직 발급되지 않았어요'),
+  );
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'keys-i';
+  input.placeholder = 'na_... (되돌릴 옛 키)';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.value = restoreDraft;
+  input.disabled = restoreBusy;
+  input.addEventListener('input', () => {
+    restoreDraft = input.value;
+  });
+  input.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') submitRestore();
+  });
+  box.append(input);
+
+  if (restoreMsg) {
+    box.append(el('div', restoreMsg.bad ? 'krest-m krest-bad' : 'krest-m krest-good', restoreMsg.text));
+  }
+
+  const actions = el('div', 'notice-actions');
+  const save = el('button', 'btn btn-main', restoreBusy ? '확인하는 중...' : '이 키로 바꾸기');
+  save.addEventListener('click', () => submitRestore());
+  const close = el('button', 'btn', '닫기');
+  close.addEventListener('click', () => {
+    restoreOpen = false;
+    restoreMsg = null;
+    repaintNotice();
+  });
+  actions.append(save, close);
+  box.append(actions);
+  root.append(box);
+
+  // 붙여넣기가 목적인 칸이다 — 열자마자 커서가 여기 있어야 한다.
+  if (!restoreBusy) input.focus();
+}
+
+/** 지금 키를 SW 에게 물어 온다. 실패하면 빈손으로 그린다(경고까지는 아니다). */
+function askCurrentKey(): void {
+  try {
+    chrome.runtime.sendMessage({ type: 'GET_EXTENSION_KEY' }, (res?: { key: string | null }) => {
+      void chrome.runtime.lastError;
+      currentKey = res?.key ?? null;
+      if (restoreOpen) repaintNotice();
+    });
+  } catch {
+    currentKey = null;
+  }
+}
+
+/** 검증과 저장은 서비스 워커가 한다(applyExtensionKey) — 여기는 결과만 그린다. */
+function submitRestore(): void {
+  if (restoreBusy) return;
+  const value = restoreDraft.trim();
+  if (!value) {
+    restoreMsg = { text: '키를 붙여넣어줘', bad: true };
+    repaintNotice();
+    return;
+  }
+
+  restoreBusy = true;
+  restoreMsg = null;
+  repaintNotice();
+
+  try {
+    chrome.runtime.sendMessage(
+      { type: 'SET_EXTENSION_KEY', key: value },
+      (res?: { ok: boolean; error?: string }) => {
+        restoreBusy = false;
+        if (chrome.runtime.lastError || !res) {
+          restoreMsg = { text: '확장이 응답하지 않아 — 잠시 뒤 다시 열어보세요', bad: true };
+        } else if (!res.ok) {
+          restoreMsg = { text: res.error ?? '바꾸지 못했어', bad: true };
+        } else {
+          // 패널을 닫지 않는다 — 바뀌었다는 말을 사람이 읽고 닫아야 한다.
+          currentKey = value;
+          restoreDraft = '';
+          restoreMsg = { text: '이 키로 바꿨어요. 지금부터의 기록은 이쪽에 쌓여요.', bad: false };
+        }
+        repaintNotice();
+      },
+    );
+  } catch {
+    restoreBusy = false;
+    restoreMsg = { text: '확장 컨텍스트가 끊겼어 — 팝업을 다시 열어주세요', bad: true };
+    repaintNotice();
+  }
+}
+
+/** 위 칸(경고 배너 + 키 칸)만 다시 그린다. 아래 세션 칸은 건드리지 않는다. */
+function repaintNotice(): void {
+  const parts = shell();
+  if (!parts) return;
+  parts.notice.replaceChildren();
+  if (lastSnap) renderKeyNotice(parts.notice, lastSnap);
+  renderKeyRestore(parts.notice);
 }
 
 function renderNoSession(root: HTMLElement, snap: SessionSnapshot): void {
@@ -596,11 +742,13 @@ function shell(): { notice: HTMLElement; session: HTMLElement } | null {
 function render(snap: SessionSnapshot): void {
   const parts = shell();
   if (!parts) return;
-  parts.notice.replaceChildren();
   parts.session.replaceChildren();
 
   // 세션보다 먼저다 — 신원이 갈렸으면 그 아래 숫자는 다 엉뚱한 계정 것이다.
-  renderKeyNotice(parts.notice, snap);
+  lastSnap = snap;
+  // 키 칸이 열려 있으면 위 칸은 손대지 않는다 — 매 초 지워지면 붙여넣던 키가
+  // 사라진다(오른쪽 API 키 칸을 keysOpen 으로 막는 것과 같은 이유).
+  if (!restoreOpen) repaintNotice();
 
   if (snap.draft) renderDraft(parts.session, snap);
   else renderNoSession(parts.session, snap);

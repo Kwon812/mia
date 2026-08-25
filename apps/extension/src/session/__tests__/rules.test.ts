@@ -16,10 +16,27 @@ import type { ActivityEvent, SessionDraft } from '../types';
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
 
+/**
+ * KST 벽시계 시각 → epoch ms. **로컬 타임존과 무관하다.**
+ *
+ * 예전에는 new Date(y, m, d, h) 로 만들었다. 그건 머신 로컬 시각이라 KST
+ * 머신에서만 통과했다. rules.ts 는 하루 경계를 KST 고정 오프셋으로 계산하는데
+ * (왜 그래야 하는지는 rules.ts 의 dayBucket 주석), 테스트는 그 고정을 검증하는
+ * 게 아니라 로컬 시각으로 우회하고 있었던 셈이다 — 정작 깨질 사람(KST 아닌
+ * 머신을 쓰는 사용자)의 경우를 테스트가 재현하지 못했다.
+ *
+ * CI(UTC)에서 처음 드러났다. 로컬에서는 130개가 다 통과했다.
+ */
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+function kst(year: number, month: number, day: number, hour: number, minute = 0): number {
+  return Date.UTC(year, month, day, hour, minute) - KST_OFFSET_MS;
+}
+
 // day 경계(새벽 4시) 테스트를 제외한 나머지는 이 시각을 기준으로 상대 오프셋만
-// 쓴다. 정오로 고정해 로컬 타임존이 무엇이든 "새벽 4시 - 4시간(다이제스트 이동)"
-// 경계 근처에 우연히 걸리는 일이 없게 한다.
-const ANCHOR = new Date(2026, 7, 4, 12, 0, 0).getTime();
+// 쓴다. KST 정오로 고정해 "새벽 4시 - 4시간(다이제스트 이동)" 경계 근처에
+// 우연히 걸리는 일이 없게 한다.
+const ANCHOR = kst(2026, 7, 4, 12);
 
 function ev(overrides: Partial<ActivityEvent> & { at: number; domain: string }): ActivityEvent {
   return {
@@ -113,15 +130,15 @@ describe('shouldClose — maxlen', () => {
 describe('shouldClose — day (새벽 4시 경계)', () => {
   it('새벽 4시를 넘어가면 day', () => {
     // 2026-08-04 오전 2시 시작 (KST 기준 로컬), 다음날 새벽 5시까지 활동 지속
-    const startedAt = new Date(2026, 7, 4, 2, 0, 0).getTime();
-    const now = new Date(2026, 7, 4, 5, 0, 0).getTime();
+    const startedAt = kst(2026, 7, 4, 2);
+    const now = kst(2026, 7, 4, 5);
     const d = draft({ startedAt, lastActivityAt: now });
     expect(shouldClose(d, now)).toBe('day');
   });
 
   it('같은 논리적 하루(새벽 4시 이전) 안에서는 day 아님', () => {
-    const startedAt = new Date(2026, 7, 4, 1, 0, 0).getTime();
-    const now = new Date(2026, 7, 4, 3, 30, 0).getTime();
+    const startedAt = kst(2026, 7, 4, 1);
+    const now = kst(2026, 7, 4, 3, 30);
     const d = draft({ startedAt, lastActivityAt: now });
     expect(dayBoundaryCrossed(d, now)).toBe(false);
     expect(shouldClose(d, now)).toBeNull();
@@ -373,20 +390,20 @@ describe('timeUntilClose — 팝업 남은 시간 표시', () => {
   });
 
   it('day 는 다음 새벽 4시까지 남은 시간이다', () => {
-    // 로컬 정오 기준 → 다음 경계는 다음날 04:00 = 16시간 뒤
+    // KST 정오 기준 → 다음 경계는 다음날 04:00 = 16시간 뒤
     const d = draft({ startedAt: ANCHOR, lastActivityAt: ANCHOR });
     expect(timeUntilClose(d, ANCHOR).day).toBe(16 * HOUR);
   });
 
-  it('새벽 2시(경계 전)의 다음 경계는 같은 날 04:00 이다', () => {
-    const at2am = new Date(2026, 7, 5, 2, 0, 0).getTime();
+  it('KST 새벽 2시(경계 전)의 다음 경계는 같은 날 04:00 이다', () => {
+    const at2am = kst(2026, 7, 5, 2);
     const d = draft({ startedAt: at2am, lastActivityAt: at2am });
     expect(timeUntilClose(d, at2am).day).toBe(2 * HOUR);
   });
 
   it('이미 경계를 넘긴 세션은 day 가 0 이다 (shouldClose 와 일치)', () => {
-    const startedAt = new Date(2026, 7, 4, 23, 0, 0).getTime(); // 전날 23시 시작
-    const now = new Date(2026, 7, 5, 5, 0, 0).getTime(); // 경계(05일 04시) 넘긴 뒤
+    const startedAt = kst(2026, 7, 4, 23); // 전날 KST 23시 시작
+    const now = kst(2026, 7, 5, 5); // 경계(KST 05일 04시) 넘긴 뒤
     const d = draft({ startedAt, lastActivityAt: now });
     expect(dayBoundaryCrossed(d, now)).toBe(true);
     expect(timeUntilClose(d, now).day).toBe(0);

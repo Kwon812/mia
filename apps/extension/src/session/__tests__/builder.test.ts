@@ -7,7 +7,9 @@ import type { SessionDraft } from '../types';
 
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
-const ANCHOR = new Date(2026, 7, 4, 12, 0, 0).getTime();
+// KST 정오. 로컬 시각(new Date(y, m, d, h))으로 두면 rules.test.ts 가 겪은 것과
+// 같은 함정에 빠진다 — 머신 타임존이 바뀌는 순간 기준이 같이 움직인다.
+const ANCHOR = Date.UTC(2026, 7, 4, 12) - 9 * 60 * 60 * 1000;
 
 function raw(overrides: Partial<RawEvent> & { at: number; domain: string }): RawEvent {
   return {
