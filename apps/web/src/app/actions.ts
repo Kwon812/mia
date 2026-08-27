@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { characters, experiences, memories, procedures, questions, threads } from "@na/db";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
+import { DEMO_BLOCKED, isDemoUser } from "@/lib/demo";
 import { recordCorrection, type CorrectionField } from "@/lib/corrections";
 import { memoryImportance } from "@/lib/memory-score";
 import { recheckMemoryAfterCorrection } from "@/lib/memory-recheck";
@@ -25,6 +26,7 @@ export async function setCharacterName(name: string): Promise<SetCharacterNameRe
   if (!user) {
     return { error: "연결이 끊겼어. 다시 연결해줘." };
   }
+  if (await isDemoUser(user.userId)) return { error: DEMO_BLOCKED };
 
   const trimmed = name.trim();
   if (trimmed.length < MIN_NAME_LENGTH || trimmed.length > MAX_NAME_LENGTH) {
@@ -60,6 +62,7 @@ export async function correctExperience(
 ): Promise<CorrectResult> {
   const user = await getCurrentUser();
   if (!user) return { error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { error: DEMO_BLOCKED };
 
   // 클라이언트가 보내는 값이라 열거값 화이트리스트로 막는다. DB CHECK 가
   // 최후 방어선이지만, 여기서 걸러야 500 이 아니라 사람이 읽는 메시지가 나간다.
@@ -114,6 +117,7 @@ export async function answerQuestion(
 ): Promise<CorrectResult> {
   const user = await getCurrentUser();
   if (!user) return { error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { error: DEMO_BLOCKED };
 
   const [q] = await db
     .select({ experienceId: questions.experienceId, field: questions.field })
@@ -166,6 +170,7 @@ export async function answerQuestion(
 export async function dismissQuestion(questionId: string): Promise<CorrectResult> {
   const user = await getCurrentUser();
   if (!user) return { error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { error: DEMO_BLOCKED };
 
   await db
     .update(questions)
@@ -194,6 +199,7 @@ export async function dismissQuestion(questionId: string): Promise<CorrectResult
 export async function completeThread(threadId: string): Promise<CorrectResult> {
   const user = await getCurrentUser();
   if (!user) return { error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { error: DEMO_BLOCKED };
 
   const [thread] = await db
     .select()
@@ -310,6 +316,7 @@ export async function moveExperienceToThread(
 ): Promise<ThreadFixResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { ok: false, error: DEMO_BLOCKED };
 
   const r = await moveExperience({ userId: user.userId, experienceId, target });
   if (!r.ok) return r;
@@ -324,6 +331,7 @@ export async function mergeThreadInto(
 ): Promise<ThreadFixResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { ok: false, error: DEMO_BLOCKED };
 
   const r = await mergeThreads({ userId: user.userId, fromThreadId, intoThreadId });
   if (!r.ok) return r;
@@ -338,6 +346,7 @@ export async function renameThreadTitle(
 ): Promise<ThreadFixResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { ok: false, error: DEMO_BLOCKED };
 
   const r = await renameThread({ userId: user.userId, threadId, title });
   if (!r.ok) return r;
@@ -377,8 +386,13 @@ async function answerProcedure(
     }[];
   },
 ): Promise<ProcedureResult> {
+  // **절차 계열 쓰기는 전부 이 함수를 지난다**(approve·reject 둘 다). 그래서
+  // 데모 가드도 여기 하나면 되고, 바깥 함수에 각각 두는 것보다 낫다 — 새 절차
+  // 액션이 생겨도 쓰려면 어차피 여기를 거친다. 다만 여기를 우회해 직접 쓰는
+  // 코드를 넣으면 그 순간 샌다.
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { ok: false, error: DEMO_BLOCKED };
   if (!signature) return { ok: false, error: "어떤 절차인지 모르겠어." };
 
   await db
@@ -489,6 +503,7 @@ export async function rejectProcedure(signature: string): Promise<ProcedureResul
 export async function forgetProcedureAnswer(signature: string): Promise<ProcedureResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { ok: false, error: DEMO_BLOCKED };
   await db
     .delete(procedures)
     .where(and(eq(procedures.userId, user.userId), eq(procedures.signature, signature)));
@@ -517,6 +532,7 @@ export async function repointProcedureStep(
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { ok: false, error: DEMO_BLOCKED };
 
   const [row] = await db
     .select({ steps: procedures.steps })
@@ -560,6 +576,7 @@ export async function dropProcedureStep(
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { ok: false, error: DEMO_BLOCKED };
 
   const [row] = await db
     .select({ steps: procedures.steps, reads: procedures.reads })
@@ -613,6 +630,7 @@ export async function repointProcedureRead(
 ): Promise<ProcedureResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "연결이 끊겼어. 다시 연결해줘." };
+  if (await isDemoUser(user.userId)) return { ok: false, error: DEMO_BLOCKED };
 
   const [row] = await db
     .select({ reads: procedures.reads })
