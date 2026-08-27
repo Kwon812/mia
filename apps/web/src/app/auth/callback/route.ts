@@ -27,6 +27,31 @@ import { db } from '@/lib/db';
 import { createServerSupabase } from '@/lib/supabase/server';
 import { NA_KEY_COOKIE } from '@/lib/current-user';
 
+/** 로그인을 시작한 화면으로 돌려보내기 위한 쿠키. GoogleConnect 가 심는다.
+ *
+ *  왜 쿼리(redirectTo=...?next=...)가 아닌가: Supabase 의 Redirect URLs 허용
+ *  목록과 맞물려 대시보드에 패턴을 하나 더 등록해야 한다. 돌아갈 경로 하나
+ *  때문에 사람이 콘솔을 또 만지게 하고 싶지 않았다. */
+export const NEXT_COOKIE = 'na_after_login';
+
+/** **열린 리다이렉트를 막는다.** 이 값은 브라우저가 보낸 것이라 공격자가 정할
+ *  수 있고, 그대로 믿으면 우리 도메인을 거쳐 남의 사이트로 보내는 발판이 된다.
+ *  '//evil.com' 과 '/\evil.com' 은 브라우저가 프로토콜 상대 URL 로 읽으므로
+ *  '/' 로 시작하는지만 보는 검사로는 부족하다. */
+function safeNext(raw: string | undefined): string {
+  if (!raw) return '/';
+  // 심을 때 encodeURIComponent 를 거치므로 '/' 가 %2F 로 온다. 안 풀면 아래
+  // '/' 검사에 전부 걸려 늘 홈으로 가버린다 — 조용히 안 되는 종류의 버그다.
+  let path: string;
+  try {
+    path = decodeURIComponent(raw);
+  } catch {
+    return '/';
+  }
+  if (!path.startsWith('/') || path.startsWith('//') || path.startsWith('/\\')) return '/';
+  return path;
+}
+
 /** 실패 이유는 그대로 사용자에게 보여줄 말이 된다(/connect 가 읽는다). */
 type AttachResult = 'ok' | 'no_device' | 'already_linked';
 
@@ -84,6 +109,7 @@ export async function GET(req: Request) {
     }
 
     const cookieStore = await cookies();
+    const next = safeNext(cookieStore.get(NEXT_COOKIE)?.value);
     const result = await attach(data.user.id, cookieStore.get(NA_KEY_COOKIE)?.value);
 
     if (result !== 'ok') {
@@ -93,7 +119,10 @@ export async function GET(req: Request) {
       return NextResponse.redirect(new URL(`/connect?auth=${result}`, url.origin));
     }
 
-    return NextResponse.redirect(new URL('/', url.origin));
+    const res = NextResponse.redirect(new URL(next, url.origin));
+    // 한 번 쓰고 버린다. 남겨두면 다음 로그인이 엉뚱한 곳으로 간다.
+    res.cookies.set(NEXT_COOKIE, '', { path: '/', maxAge: 0 });
+    return res;
   } catch (err) {
     // err 를 통째로 찍지 않는다 — drizzle 의 오류 메시지에는 바인딩 파라미터가
     // 들어 있고, 여기서 그건 기기 키다(api/connect 의 같은 주석 참고).

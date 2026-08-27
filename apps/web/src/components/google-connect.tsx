@@ -5,7 +5,7 @@ import { createBrowserSupabase } from "@/lib/supabase/client";
 
 // 구글로 넘어가는 버튼. 돌아오는 자리는 /auth/callback 이고, 계정을 잇는 판단은
 // 전부 거기서 한다 — 이 컴포넌트는 문을 열기만 한다.
-export function GoogleConnect({ label }: { label: string }) {
+export function GoogleConnect({ label, next }: { label: string; next?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -13,6 +13,11 @@ export function GoogleConnect({ label }: { label: string }) {
     setBusy(true);
     setError(null);
     try {
+      // 돌아올 화면을 쿠키로 남긴다. /auth/callback 이 읽고 지운다.
+      // SameSite=Lax 라 구글에서 돌아오는 최상위 이동에는 그대로 실려 온다.
+      if (next) {
+        document.cookie = `na_after_login=${encodeURIComponent(next)}; path=/; max-age=600; samesite=lax`;
+      }
       const supabase = createBrowserSupabase();
       const { error: authError } = await supabase.auth.signInWithOAuth({
         provider: "google",

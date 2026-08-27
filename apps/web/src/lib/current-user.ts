@@ -86,10 +86,18 @@ function toCurrentUser(row: Row): CurrentUser {
   };
 }
 
-/** 구글 세션의 주인. getSession 이 아니라 getClaims 인 것은 서명을 검증하기
- *  때문이다 — 쿠키는 신뢰할 수 없는 저장소라 거기 담긴 user 객체를 그대로
- *  믿으면 안 된다(auth-js 문서가 명시한다). */
-async function fromGoogleSession(): Promise<CurrentUser | null> {
+/**
+ * 구글 세션의 주인. **기기 쿠키는 보지 않는다.**
+ *
+ * export 된 이유가 여기 있다. 기기를 계정 사이에서 옮기는 조작(devices/claim)의
+ * 주체는 계정이어야지 브라우저여선 안 된다 — 기기 쿠키로도 그게 됐다면, 남의
+ * 브라우저에 남은 쿠키 하나로 그 사람의 기기를 자기 계정에 가져올 수 있다.
+ *
+ * getSession 이 아니라 getClaims 인 것은 서명을 검증하기 때문이다 — 쿠키는
+ * 신뢰할 수 없는 저장소라 거기 담긴 user 객체를 그대로 믿으면 안 된다
+ * (auth-js 문서가 명시한다).
+ */
+export async function getGoogleUser(): Promise<CurrentUser | null> {
   let authId: string | undefined;
   try {
     const supabase = await createServerSupabase();
@@ -133,5 +141,5 @@ async function fromDeviceCookie(): Promise<CurrentUser | null> {
 
 // 어느 문도 안 열리면 null — 호출부가 /connect 로 redirect() 한다.
 export async function getCurrentUser(): Promise<CurrentUser | null> {
-  return (await fromGoogleSession()) ?? (await fromDeviceCookie());
+  return (await getGoogleUser()) ?? (await fromDeviceCookie());
 }
