@@ -8,7 +8,7 @@
 
 import { NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
-import { users } from '@na/db';
+import { devices } from '@na/db';
 import { db } from '@/lib/db';
 import { NA_KEY_COOKIE, NA_KEY_MAX_AGE_SECONDS } from '@/lib/current-user';
 
@@ -53,10 +53,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
     }
 
+    // 등록된 기기인가. 여기서 보는 것은 계정이 아니라 기기다 — 쿠키에 심는
+    // 값이 기기 키이므로, 그 키가 실재하는지가 정확히 확인해야 할 것이다.
     const rows = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.extensionKey, extensionKey))
+      .select({ userId: devices.userId })
+      .from(devices)
+      .where(eq(devices.extensionKey, extensionKey))
       .limit(1);
 
     if (!rows[0]) {

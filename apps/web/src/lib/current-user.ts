@@ -2,12 +2,16 @@ import 'server-only';
 
 import { cookies } from 'next/headers';
 import { eq } from 'drizzle-orm';
-import { characters, users } from '@na/db';
+import { characters, devices, users } from '@na/db';
 import { db } from './db';
 
 // 사이트가 사용자를 알아보는 다리 — 확장이 발급한 extension_key 를
 // httpOnly 쿠키로 한 번 저장해두고, 서버 컴포넌트는 이 쿠키만으로
 // users+characters 를 조회한다(OAuth 붙기 전까지의 임시 식별 방식).
+//
+// 쿠키에 담기는 값은 이제 **기기 키**다. 담는 값 자체는 그대로지만 뜻이
+// 달라졌다 — 이 쿠키는 "나는 이 계정이다"가 아니라 "나는 이 기기다"이고,
+// 계정은 devices 를 한 번 거쳐 나온다.
 export const NA_KEY_COOKIE = 'na_key';
 export const NA_KEY_MAX_AGE_SECONDS = 60 * 60 * 24 * 400; // 400일
 
@@ -27,7 +31,7 @@ export type CurrentUser = {
   };
 };
 
-// cookies() 의 na_key → users+characters 조인 한 번으로 현재 사용자를 읽는다.
+// cookies() 의 na_key → devices+users+characters 조인 한 번으로 현재 사용자를 읽는다.
 // 쿠키가 없거나 등록되지 않은 키면 null — 호출부가 /connect 로 redirect() 한다.
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const cookieStore = await cookies();
@@ -48,9 +52,10 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       oldestMemoryAt: characters.oldestMemoryAt,
       lastComputedAt: characters.lastComputedAt,
     })
-    .from(users)
+    .from(devices)
+    .innerJoin(users, eq(users.id, devices.userId))
     .innerJoin(characters, eq(characters.userId, users.id))
-    .where(eq(users.extensionKey, key))
+    .where(eq(devices.extensionKey, key))
     .limit(1);
 
   const row = rows[0];
