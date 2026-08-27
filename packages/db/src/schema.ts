@@ -53,9 +53,40 @@ export type DialogueSlot = (typeof DIALOGUE_SLOTS)[number];
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
-  extensionKey: text('extension_key').notNull().unique(), // 확장이 발급받는 익명 키
+  /** @deprecated 진실은 devices.extension_key 다. 읽는 쪽은 전부 devices 를 본다.
+   *  되돌릴 곳으로 남겨둔 컬럼이라 register 가 아직 같이 채운다(이중 쓰기).
+   *  기기가 둘 이상이 되는 순간 이 컬럼은 "첫 기기의 키"라는 뜻조차 잃는다 —
+   *  그 전에 지운다. */
+  extensionKey: text('extension_key').notNull().unique(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * 확장 키의 새 집 — 키는 계정이 아니라 **기기**다.
+ *
+ * 키가 users 의 컬럼이던 동안은 키 하나가 유저 하나였고, 거기서 두 가지가
+ * 따라 나왔다. 기기를 못 합친다(노트북과 데스크톱이 서로 다른 캐릭터가 된다).
+ * 그리고 잃으면 끝이다 — 08-08 사고가 그것이다.
+ *
+ * 자세한 배경은 supabase/migrations/20260827000001_devices.sql 주석에 있다.
+ */
+export const devices = pgTable(
+  'devices',
+  {
+    // 키 자체가 열쇠다. users 에서 UNIQUE 였던 성질을 그대로 가져왔다.
+    extensionKey: text('extension_key').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** '회사 노트북' 처럼 사람이 붙이는 이름. 기기가 둘 이상이 되기 전에는 NULL. */
+    label: text('label'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** 매 요청마다 쓰면 읽기 경로가 쓰기 경로가 된다. 세션 마감 전송처럼 드문
+     *  지점이 붙기 전까지는 created_at 과 같은 값이다. */
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('devices_user_id_idx').on(table.userId)],
+);
 
 export const characters = pgTable('characters', {
   userId: uuid('user_id')

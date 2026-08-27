@@ -2,13 +2,13 @@
 // POST /api/register
 //
 // 확장이 설치 직후 호출한다. 바디 없음 — 익명 extension_key 를
-// 발급하고 users/characters 행을 트랜잭션으로 함께 만든다.
+// 발급하고 users/characters/devices 행을 트랜잭션으로 함께 만든다.
 // 회원가입 화면·비밀번호가 없는 게 v1 의 핵심 결정이다(계획서 08장).
 // ============================================================
 
 import { randomBytes } from 'node:crypto';
 import { NextResponse } from 'next/server';
-import { characters, users } from '@na/db';
+import { characters, devices, users } from '@na/db';
 import type { RegisterResponse } from '@na/shared';
 import { db } from '@/lib/db';
 
@@ -24,12 +24,19 @@ export async function POST() {
     const extensionKey = generateExtensionKey();
 
     const user = await db.transaction(async (tx) => {
+      // users.extension_key 는 이제 진실이 아니다. 읽는 쪽은 전부 devices 를
+      // 보는데도 여기서 같이 채우는 것은, 컬럼이 아직 NOT NULL 이고 되돌릴
+      // 곳으로 남겨뒀기 때문이다 — 이중 쓰기는 컬럼을 지울 때 같이 없어진다.
       const [insertedUser] = await tx
         .insert(users)
         .values({ extensionKey })
         .returning({ id: users.id });
 
       await tx.insert(characters).values({ userId: insertedUser.id });
+
+      // 발급한 키가 사는 곳. 지금은 유저당 하나지만, 같은 유저에 두 번째
+      // 기기가 붙는 순간부터 이 표가 유일한 진실이 된다.
+      await tx.insert(devices).values({ extensionKey, userId: insertedUser.id });
 
       return insertedUser;
     });
