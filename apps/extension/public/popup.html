@@ -211,6 +211,12 @@
         color: var(--fg);
       }
 
+      /* 패널 안에서 쓰일 때는 한 줄 띄운다 — 토글로 쓰일 때와 같은 클래스다. */
+      .krest-now + .krest-link {
+        display: block;
+        margin-bottom: 10px;
+      }
+
       .krest-t {
         font-weight: 700;
         margin-bottom: 4px;
