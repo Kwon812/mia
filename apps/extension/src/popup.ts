@@ -201,6 +201,17 @@ function renderKeyRestore(root: HTMLElement): void {
     el('div', 'krest-now', currentKey ?? '아직 발급되지 않았어요'),
   );
 
+  // 이 패널이 있는 이유 자체가 "키를 잃으면 캐릭터를 잃는다" 인데, 구글을
+  // 이어두면 그 전제가 사라진다. 키를 적어두라고 말하는 자리 바로 옆이
+  // 그 말을 안 해도 되게 만드는 방법을 놓기에 가장 정직한 자리다.
+  const link = el('button', 'krest-link', '구글 계정에 연결해두기 →');
+  link.addEventListener('click', () => {
+    // /connect 가 아니라 /connect/google 이다. /connect 는 connect-content.js 가
+    // 주입돼 키로 쿠키만 다시 심고 홈으로 튕기므로, 안내를 볼 새가 없다.
+    void chrome.tabs.create({ url: `${SITE_BASE}/connect/google` });
+  });
+  box.append(link);
+
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'keys-i';

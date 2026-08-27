@@ -59,6 +59,15 @@ export const users = pgTable('users', {
    *  그 전에 지운다. */
   extensionKey: text('extension_key').notNull().unique(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+
+  /** 구글 신원(auth.users.id). **NULL 이 정상 상태다** — Day 0 는 익명으로
+   *  시작하고, 연결은 사용자가 나중에 자발적으로 하는 것이다.
+   *
+   *  DDL 은 ON DELETE SET NULL 이다. cascade 였다면 구글 계정을 지우는 순간
+   *  캐릭터가 통째로 사라진다 — 신원은 문일 뿐 집이 아니다. */
+  authId: uuid('auth_id').unique(),
+  /** 연결한 시각. 캐릭터의 서사에 쓸 값이라 남긴다. */
+  linkedAt: timestamp('linked_at', { withTimezone: true }),
 });
 
 /**
