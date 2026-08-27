@@ -26,6 +26,9 @@ const BASE = opt('base', process.env.NA_BASE ?? 'https://mia-web-nine.vercel.app
 const KEY = opt('key', process.env.NA_DEMO_KEY ?? '');
 const DRY = args.includes('--dry');
 const LIMIT = Number(opt('limit', '0')) || 0;
+// 특정 날짜분만 보낸다. 두 번 돌려 중복을 만들지 않으려고 둔다 —
+// 이미 심어둔 계정에 오늘치만 더할 때 쓴다.
+const ONLY = args.includes('--only') ? Number(opt('only', 'NaN')) : null;
 
 if (!KEY) {
   console.error('키가 없다. --key na_... 또는 NA_DEMO_KEY 를 준다.');
@@ -93,6 +96,7 @@ function scenario() {
     const domains = {};
     for (const p of parts) domains[p.d] = (domains[p.d] ?? 0) + p.sec;
     s.push({
+      _day: dayAgo,
       id: uuid(),
       started_at: iso(start),
       ended_at: iso(start + minutes * 60_000),
@@ -185,6 +189,22 @@ function scenario() {
 
   s.push(watch(1, 22, 38));
 
+  // ── 오늘 ──
+  //
+  // 야간 배치는 "어제"를 **실행 시점** 기준으로 잡는다(daily-logs 에 날짜 인자가
+  // 없다). 그래서 과거로만 심어두면 오늘 밤 크론이 도는 시점의 어제에는 경험이
+  // 없어서 일기가 영영 안 생긴다. 오늘치를 넣어야 다음 배치가 일기를 만든다.
+  dev(0, 9, 67, [
+    { d: 'github.com', sec: 1800, title: 'mia · 데모 계정' },
+    { d: 'vercel.com', c: 'productivity', sec: 1100, title: 'mia-web – Deployments', acts: DEPLOY_CHECK },
+    { d: 'localhost', sec: 1000, title: 'Project NA · /demo' },
+  ]);
+
+  dev(0, 11, 39, [
+    { d: 'supabase.com', c: 'productivity', sec: 1200, title: 'mia · Table Editor', acts: DB_CHECK },
+    { d: 'claude.ai', c: 'ai', sec: 700, title: 'Claude' },
+  ]);
+
   return s;
 }
 
@@ -192,6 +212,7 @@ function scenario() {
 function watch(dayAgo, hour, minutes) {
   const start = at(dayAgo, hour);
   return {
+    _day: dayAgo,
     id: uuid(),
     started_at: iso(start),
     ended_at: iso(start + minutes * 60_000),
@@ -215,6 +236,7 @@ function study(dayAgo, hour, minutes) {
   const start = at(dayAgo, hour);
   const half = Math.floor((minutes * 60 - 180) / 2);
   return {
+    _day: dayAgo,
     id: uuid(),
     started_at: iso(start),
     ended_at: iso(start + minutes * 60_000),
@@ -239,7 +261,8 @@ function study(dayAgo, hour, minutes) {
 
 // ── 전송 ──────────────────────────────────────────────────
 const sessions = scenario().sort((a, b) => a.started_at.localeCompare(b.started_at));
-const targets = LIMIT ? sessions.slice(0, LIMIT) : sessions;
+const filtered = ONLY === null ? sessions : sessions.filter((x) => x._day === ONLY);
+const targets = LIMIT ? filtered.slice(0, LIMIT) : filtered;
 
 console.log(`대상 ${targets.length}세션 · ${BASE}${DRY ? ' · DRY RUN' : ''}`);
 
@@ -256,7 +279,8 @@ for (const [i, payload] of targets.entries()) {
     const res = await fetch(`${BASE}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Extension-Key': KEY },
-      body: JSON.stringify(payload),
+      // _day 는 어느 날짜분인지 고르기 위한 표시일 뿐이다. 서버 스키마에 없다.
+      body: JSON.stringify((({ _day, ...rest }) => rest)(payload)),
     });
     if (res.ok) {
       console.log(`  ok   ${tag}`);
